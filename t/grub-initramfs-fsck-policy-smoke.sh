@@ -212,11 +212,11 @@ else
   fail "initramfs hook skips only the root fsck call and preserves other checks"
 fi
 
-if grep -q 'install MOK LUKS aliases in target shell rc files' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
-   grep -q 'ensure_rc_file "\$bashrc_path" /etc/skel/.bashrc' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
-   grep -q 'append_alias_block "\$bashrc_path"' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
-   grep -q 'rewrite_without_marker "\$profile_path"' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh"; then
-  pass "secure boot late helper keeps managed MOK aliases out of the shared profile and installs them in shell rc files"
+if ! grep -q 'install_target_mok_profile_aliases' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
+   ! grep -q 'install_target_mok_profile_aliases' "$ROOT_DIR/d-i/debian/scripts/late/btrfs-family.sh" &&
+   ! grep -q 'install_target_mok_profile_aliases' "$ROOT_DIR/d-i/debian/scripts/late/f2fs-family.sh" &&
+   ! grep -q 'Managed installer MOK LUKS aliases' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh"; then
+  pass "secure boot late helpers no longer rewrite managed shell rc files with MOK aliases"
 else
-  fail "secure boot late helper keeps managed MOK aliases out of the shared profile and installs them in shell rc files"
+  fail "secure boot late helpers no longer rewrite managed shell rc files with MOK aliases"
 fi

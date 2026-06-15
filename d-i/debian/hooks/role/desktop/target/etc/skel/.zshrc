@@ -76,14 +76,6 @@ alias grep='grep --color=auto'
 alias ip='ip --color=auto'
 alias btop='btop --utf-force'
 
-if [ -x /usr/local/sbin/luks-mok-open ] &&
-   [ -x /usr/local/sbin/luks-mok-close ] &&
-   [ -x /usr/local/sbin/luks-mok-passwd ]; then
-  alias luks-mok-open='sudo /usr/local/sbin/luks-mok-open'
-  alias luks-mok-close='sudo /usr/local/sbin/luks-mok-close'
-  alias luks-mok-passwd='sudo /usr/local/sbin/luks-mok-passwd'
-fi
-
 if [ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]; then
   . /usr/share/doc/fzf/examples/key-bindings.zsh
 fi

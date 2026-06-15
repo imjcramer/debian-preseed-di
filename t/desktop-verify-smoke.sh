@@ -566,18 +566,23 @@ bashrc_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.bashrc"
 zprofile_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.zprofile"
 zshrc_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.zshrc"
 if ! grep -q '^alias ' "$profile_file" &&
+   sh -n "$profile_file" &&
+   bash -n "$bash_profile_file" &&
+   bash -n "$bashrc_file" &&
    ! grep -q '\. "\$HOME/\.bashrc"' "$profile_file" &&
    ! grep -q '\. "\$HOME/\.zshrc"' "$profile_file" &&
    grep -q '\. "\$HOME/\.profile"' "$bash_profile_file" &&
    grep -q '\. "\$HOME/\.bashrc"' "$bash_profile_file" &&
    grep -q '\. "\$HOME/\.profile"' "$bashrc_file" &&
+   ! grep -q 'luks-mok-' "$bashrc_file" &&
    grep -q 'starship init bash' "$bashrc_file" &&
    grep -q '\. "\$HOME/\.profile"' "$zprofile_file" &&
    grep -q '\. "\$HOME/\.profile"' "$zshrc_file" &&
+   ! grep -q 'luks-mok-' "$zshrc_file" &&
    grep -q 'starship init zsh' "$zshrc_file"; then
-  pass "desktop shell dotfiles keep shared login env in .profile and shell-specific rc logic in Bash and Zsh files"
+  pass "desktop shell dotfiles keep shared login env in .profile, stay syntax-valid, and avoid managed MOK aliases"
 else
-  fail "desktop shell dotfiles keep shared login env in .profile and shell-specific rc logic in Bash and Zsh files"
+  fail "desktop shell dotfiles keep shared login env in .profile, stay syntax-valid, and avoid managed MOK aliases"
 fi
 
 if grep -q '^TerminalEmulator=foot$' "$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/xfce4/helpers.rc" &&

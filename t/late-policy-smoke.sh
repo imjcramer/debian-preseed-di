@@ -90,14 +90,18 @@ shared_bashrc="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/skel/.bashrc"
 if [ -r "$shared_profile" ] &&
    [ -r "$shared_bash_profile" ] &&
    [ -r "$shared_bashrc" ] &&
+   sh -n "$shared_profile" &&
+   bash -n "$shared_bash_profile" &&
+   bash -n "$shared_bashrc" &&
    ! grep -q '^alias ' "$shared_profile" &&
    ! grep -q '\. "\$HOME/\.bashrc"' "$shared_profile" &&
    grep -q '\. "\$HOME/\.profile"' "$shared_bash_profile" &&
    grep -q '\. "\$HOME/\.bashrc"' "$shared_bash_profile" &&
-   grep -q '^alias ll=' "$shared_bashrc"; then
-  pass "shared shell assets keep login environment in .profile and interactive Bash logic in .bashrc"
+   grep -q '^alias ll=' "$shared_bashrc" &&
+   ! grep -q 'luks-mok-' "$shared_bashrc"; then
+  pass "shared shell assets are syntax-valid, keep login env in .profile, and do not inject MOK aliases"
 else
-  fail "shared shell assets keep login environment in .profile and interactive Bash logic in .bashrc"
+  fail "shared shell assets are syntax-valid, keep login env in .profile, and do not inject MOK aliases"
 fi
 
 if grep -q '^stage_target_account_shell_assets() {$' "$account_script" &&
