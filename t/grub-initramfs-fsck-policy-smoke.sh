@@ -3,7 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
-TEST_COUNT=14
+TEST_COUNT=15
 TEST_INDEX=0
 
 pass() {
@@ -139,6 +139,18 @@ EOF
   pass "cached GRUB late helpers avoid repeated target prepare and probe only the shared initramfs state"
 else
   fail "cached GRUB late helpers avoid repeated target prepare and probe only the shared initramfs state"
+fi
+
+secure_boot_tool="$ROOT_DIR/d-i/debian/hooks/shared/target/usr/libexec/install-tools/secure-boot-tool.tmpl"
+if grep -q '^queue_enrolled_mok_deletions() {$' "$secure_boot_tool" &&
+   grep -q 'queueing deletion of .* enrolled MOK certificate(s) before managed import' "$secure_boot_tool" &&
+   grep -q 'failed to revoke stale pending MOK delete request; continuing with managed import' "$secure_boot_tool" &&
+   grep -q 'matching managed MOK certificate is already enrolled and no delete request was queued; import is already satisfied' "$secure_boot_tool" &&
+   ! grep -q '^queue_duplicate_mok_deletions() {$' "$secure_boot_tool" &&
+   ! grep -q 'deferring stale duplicate cleanup until after managed MOK enrollment' "$secure_boot_tool"; then
+  pass "secure boot helper queues MOK deletions before import and no longer defers duplicate cleanup"
+else
+  fail "secure boot helper queues MOK deletions before import and no longer defers duplicate cleanup"
 fi
 
 boot_env="$ROOT_DIR/d-i/debian/hosts/shared/boot.env"

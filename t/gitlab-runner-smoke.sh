@@ -215,10 +215,15 @@ if grep -q '^Wants=podman.socket$' "$service_template" &&
    ! grep -q '^Environment=DOCKER_HOST=' "$service_template" &&
    ! grep -q '^Environment=CONTAINER_HOST=' "$service_template" &&
    grep -q '^ProtectSystem=strict$' "$service_template" &&
-   grep -q '^ReadWritePaths=__INSTALLER_GITLAB_RUNNER_READ_WRITE_PATHS__$' "$service_template"; then
-  pass "user service template targets the Podman socket through config.toml without exporting a recursive daemon socket into jobs"
+   grep -q '^ReadWritePaths=__INSTALLER_GITLAB_RUNNER_READ_WRITE_PATHS__$' "$service_template" &&
+   grep -Fq 'read_write_paths="${read_write_paths} ${buildah_tmpdir}"' "$gitlab_late" &&
+   grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"' "$gitlab_late" &&
+   ! grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME} ${GITLAB_RUNNER_PODMAN_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"' "$gitlab_late" &&
+   grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"' "$gitlab_late" &&
+   ! grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME} ${GITLAB_RUNNER_PODMAN_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"' "$gitlab_late"; then
+  pass "user service template keeps Podman control-plane access without making the managed Buildah tmpdir read-only inside ExecStartPre"
 else
-  fail "user service template targets the Podman socket through config.toml without exporting a recursive daemon socket into jobs"
+  fail "user service template keeps Podman control-plane access without making the managed Buildah tmpdir read-only inside ExecStartPre"
 fi
 
 if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&

@@ -542,6 +542,10 @@ gitlab_runner_render_unit() {
   rendered_tmp="${TMP_ENV_DIR}/gitlab-runner.${runner_user}.service"
 
   gitlab_runner_target_user_unit_paths "$runner_user" "$base_dir" "$runner_home"
+  # ExecStartPre preflight and ensure-images create and verify BUILDAH_TMPDIR
+  # inside the unit sandbox, so it must stay writable even though the broader
+  # Podman service configuration remains external to this unit.
+  read_write_paths="${read_write_paths} ${buildah_tmpdir}"
   installer_apply_scalar_placeholders "$template_src" "$rendered_tmp" \
     GITLAB_RUNNER_DESCRIPTION "$description" \
     GITLAB_RUNNER_USER "$runner_user" \
@@ -651,7 +655,7 @@ configure_target_gitlab_runner_if_selected() {
     "$GITLAB_RUNNER_APTLY_HOME" \
     "GitLab Runner aptly docker executor" \
     "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}/home ${GITLAB_RUNNER_APTLY_HOME} ${GITLAB_RUNNER_APTLY_BUILDS_DIR} ${GITLAB_RUNNER_APTLY_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_APTLY_CACHE_ROOT} /run/user/${GITLAB_RUNNER_APTLY_UID}/gitlab-runner %t" \
-    "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME} ${GITLAB_RUNNER_PODMAN_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"
+    "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"
 
   gitlab_runner_render_unit \
     "$GITLAB_RUNNER_BUILD_USERNAME" \
@@ -660,7 +664,7 @@ configure_target_gitlab_runner_if_selected() {
     "$GITLAB_RUNNER_SHARED_HOME" \
     "GitLab Runner build and task docker executor" \
     "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/home ${GITLAB_RUNNER_SHARED_HOME} ${GITLAB_RUNNER_BUILD_BUILDS_DIR} ${GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_BUILD_CACHE_ROOT} ${GITLAB_RUNNER_TASK_BUILDS_DIR} ${GITLAB_RUNNER_TASK_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_TASK_CACHE_ROOT} /run/user/${GITLAB_RUNNER_SHARED_UID}/gitlab-runner %t" \
-    "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME} ${GITLAB_RUNNER_PODMAN_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"
+    "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"
 
   gitlab_runner_verify_target_staging "$GITLAB_RUNNER_APTLY_USERNAME"
   gitlab_runner_verify_target_staging "$GITLAB_RUNNER_BUILD_USERNAME"

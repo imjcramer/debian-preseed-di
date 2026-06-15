@@ -476,13 +476,12 @@ wait_for_mok_delete_fingerprints() {
   done
 }
 
-queue_duplicate_mok_deletions() {
-  local hash_file delete_manifest delete_fp_manifest expected_cn delete_count missing_delete_fp delete_cert
+queue_enrolled_mok_deletions() {
+  local hash_file delete_manifest delete_fp_manifest delete_count missing_delete_fp delete_cert
 
   hash_file=$1
   delete_manifest=$2
   delete_fp_manifest=$3
-  expected_cn=$4
 
   set --
   while IFS= read -r delete_cert || [ -n "$delete_cert" ]; do
@@ -492,14 +491,14 @@ queue_duplicate_mok_deletions() {
   [ "$#" -gt 0 ] || return 0
 
   delete_count=$(fingerprint_manifest_count "$delete_fp_manifest")
-  log "info: queueing deletion of ${delete_count} enrolled MOK certificate(s) with matching common name ${expected_cn}"
+  log "info: queueing deletion of ${delete_count} enrolled MOK certificate(s) before managed import"
   if ! mokutil --delete "$@" --hash-file "$hash_file" >/dev/null 2>&1; then
-    log "warn: failed to queue deletion for enrolled MOK certificates matching ${expected_cn}"
+    log "warn: failed to queue deletion for enrolled MOK certificates; continuing with managed import"
     return 1
   fi
 
   if ! missing_delete_fp=$(wait_for_mok_delete_fingerprints "$delete_fp_manifest" 3); then
-    log "warn: MOK delete request did not remain queued for duplicate key fingerprint ${missing_delete_fp}"
+    log "warn: MOK delete request did not remain queued for enrolled key fingerprint ${missing_delete_fp}"
     mokutil --revoke-delete >/dev/null 2>&1 || log "warn: failed to revoke incomplete MOK delete request"
     return 1
   fi
@@ -514,10 +513,9 @@ ensure_mok_import() {
 
   expected_fp=$(managed_cert_fingerprint) || fatal "could not calculate managed MOK certificate fingerprint"
   [ -n "$expected_fp" ] || fatal "could not calculate managed MOK certificate fingerprint"
-  expected_cn=$(cert_common_name "$SECURE_BOOT_MOK_CERT_DER" DER || true)
-  [ -n "$expected_cn" ] || fatal "could not determine managed MOK certificate common name"
   pending_fps=$(mokutil --list-new 2>/dev/null | fingerprints_from_mokutil || true)
   pending_delete_fps=$(mokutil --list-delete 2>/dev/null | fingerprints_from_mokutil || true)
+  skip_delete_queue=false
 
   if [ -n "$pending_fps" ]; then
     log "info: revoking existing pending MOK import before queueing $SECURE_BOOT_MOK_CERT_DER"
@@ -525,7 +523,10 @@ ensure_mok_import() {
   fi
   if [ -n "$pending_delete_fps" ]; then
     log "info: revoking existing pending MOK delete request before queueing managed cleanup"
-    mokutil --revoke-delete >/dev/null 2>&1 || fatal "failed to revoke stale pending MOK delete request"
+    if ! mokutil --revoke-delete >/dev/null 2>&1; then
+      log "warn: failed to revoke stale pending MOK delete request; continuing with managed import"
+      skip_delete_queue=true
+    fi
   fi
 
   hash_file=$(mktemp)
@@ -555,36 +556,29 @@ ensure_mok_import() {
   fi
 
   exact_enrolled=false
-  same_name_match_count=0
+  delete_queued=false
   for enrolled_cert in "$export_dir"/*.der; do
     [ -e "$enrolled_cert" ] || continue
-    enrolled_cn=$(cert_common_name "$enrolled_cert" DER || true)
-    [ "$enrolled_cn" = "$expected_cn" ] || continue
-    same_name_match_count=$((same_name_match_count + 1))
     enrolled_fp=$(cert_sha1_fingerprint "$enrolled_cert" DER || true)
-    [ -n "$enrolled_fp" ] || continue
+    if [ -z "$enrolled_fp" ]; then
+      log "warn: skipping enrolled MOK certificate with unreadable fingerprint: ${enrolled_cert}"
+      continue
+    fi
     if [ "$enrolled_fp" = "$expected_fp" ]; then
       exact_enrolled=true
-      continue
     fi
     printf '%s\n' "$enrolled_cert" >>"$delete_manifest"
     printf '%s\n' "$enrolled_fp" >>"$delete_fp_manifest"
   done
 
-  if [ -s "$delete_manifest" ]; then
-    if [ "$exact_enrolled" = true ]; then
-      queue_duplicate_mok_deletions "$hash_file" "$delete_manifest" "$delete_fp_manifest" "$expected_cn" || true
-    else
-      delete_count=$(fingerprint_manifest_count "$delete_fp_manifest")
-      log "warn: found ${delete_count} enrolled MOK certificate(s) with common name ${expected_cn}; deferring stale duplicate cleanup until after managed MOK enrollment"
+  if [ -s "$delete_manifest" ] && [ "$skip_delete_queue" != true ]; then
+    if queue_enrolled_mok_deletions "$hash_file" "$delete_manifest" "$delete_fp_manifest"; then
+      delete_queued=true
     fi
   fi
 
-  if [ "$same_name_match_count" -ge 1 ] && [ ! -s "$delete_manifest" ] && [ "$exact_enrolled" = true ]; then
-    log "info: matching MOK certificate ${expected_cn} is already enrolled; no same-name stale keys require revocation"
-  fi
-
-  if [ "$exact_enrolled" = true ]; then
+  if [ "$exact_enrolled" = true ] && [ "$delete_queued" != true ]; then
+    log "info: matching managed MOK certificate is already enrolled and no delete request was queued; import is already satisfied"
     rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"
     rm -rf "$export_dir"
     trap - RETURN
