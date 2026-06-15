@@ -6,6 +6,69 @@ provision_target_identity() {
   render_target_asset "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/hosts.tmpl)" /etc/hosts 0644
 }
 
+stage_target_account_shell_assets() {
+  install -d -m 0755 /target/etc/skel
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/skel/.profile)" /etc/skel/.profile 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/skel/.bash_profile)" /etc/skel/.bash_profile 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/skel/.bashrc)" /etc/skel/.bashrc 0644
+  chown root:root /target/etc/skel/.profile /target/etc/skel/.bash_profile /target/etc/skel/.bashrc
+}
+
+install_target_account_shell_assets() {
+  : "${ACCOUNT_USERNAME:?ACCOUNT_USERNAME must be set}"
+  : "${ACCOUNT_HOME:?ACCOUNT_HOME must be set}"
+
+  case "$ACCOUNT_USERNAME" in
+    [abcdefghijklmnopqrstuvwxyz_]*)
+      ;;
+    *)
+      installer_fatal "ACCOUNT_USERNAME must start with a lowercase letter or underscore for shell assets"
+      ;;
+  esac
+  case "$ACCOUNT_USERNAME" in
+    *[!abcdefghijklmnopqrstuvwxyz0123456789_-]*)
+      installer_fatal "ACCOUNT_USERNAME contains unsupported characters for shell assets"
+      ;;
+  esac
+  case "$ACCOUNT_HOME" in
+    /*) ;;
+    *)
+      installer_fatal "ACCOUNT_HOME must be an absolute path for shell assets"
+      ;;
+  esac
+  case "$ACCOUNT_HOME" in
+    /|*..*|*//*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*)
+      installer_fatal "ACCOUNT_HOME contains unsupported path syntax for shell assets"
+      ;;
+  esac
+
+  # shellcheck disable=SC2016
+  run_in_target "install managed shell assets for primary account" /bin/sh -c '
+set -eu
+account_user=$1
+account_home=$2
+
+uid=$(id -u "$account_user")
+gid=$(id -g "$account_user")
+
+install -d -m 0755 "$account_home"
+for rel_file in .profile .bash_profile .bashrc; do
+  src="/etc/skel/${rel_file}"
+  dst="${account_home}/${rel_file}"
+  [ -r "$src" ] || {
+    printf "fatal: missing managed shell asset: %s\n" "$src" >&2
+    exit 1
+  }
+  [ ! -L "$dst" ] || {
+    printf "fatal: managed account shell file must not be a symlink: %s\n" "$dst" >&2
+    exit 1
+  }
+  install -m 0644 "$src" "$dst"
+  chown "$uid:$gid" "$dst"
+done
+' sh "$ACCOUNT_USERNAME" "$ACCOUNT_HOME"
+}
+
 ensure_target_account_home_ownership() {
   : "${ACCOUNT_USERNAME:?ACCOUNT_USERNAME must be set}"
   : "${ACCOUNT_HOME:?ACCOUNT_HOME must be set}"

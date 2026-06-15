@@ -41,11 +41,6 @@ export PAGER="${PAGER:-less}"
 export LESS="${LESS:--FRSX}"
 export LESSHISTFILE="${LESSHISTFILE:--}"
 
-if [ -r "$XDG_CONFIG_HOME/starship.toml" ]; then
-  export STARSHIP_CONFIG="$XDG_CONFIG_HOME/starship.toml"
-fi
-export STARSHIP_CACHE="${STARSHIP_CACHE:-$XDG_CACHE_HOME/starship}"
-
 export FZF_DEFAULT_OPTS_FILE="${FZF_DEFAULT_OPTS_FILE:-$XDG_CONFIG_HOME/fzf/default-opts}"
 if [ -r "$FZF_DEFAULT_OPTS_FILE" ]; then
   FZF_DEFAULT_OPTS=$(

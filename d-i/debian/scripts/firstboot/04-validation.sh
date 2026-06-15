@@ -134,6 +134,11 @@ validate_desktop_role() {
     /usr/local/bin/labwc-output-refresh \
     /usr/local/bin/labwc-output-watch \
     /usr/local/bin/labwc-run \
+    /etc/skel/.profile \
+    /etc/skel/.bash_profile \
+    /etc/skel/.bashrc \
+    /etc/skel/.zprofile \
+    /etc/skel/.zshrc \
     /etc/skel/.config/labwc/rc.xml \
     /etc/skel/.config/labwc/menu.xml \
     /etc/skel/.config/systemd/user/labwc-session.target \

@@ -667,6 +667,8 @@ desktop_stage_target_assets() {
   desktop_stage_role_asset etc/skel/.config/xfce4/helpers.rc /etc/skel/.config/xfce4/helpers.rc 0644
   desktop_stage_role_asset usr/share/xfce4/helpers/foot.desktop /usr/share/xfce4/helpers/foot.desktop 0644
   desktop_stage_role_asset etc/skel/.profile /etc/skel/.profile 0644
+  desktop_stage_role_asset etc/skel/.bash_profile /etc/skel/.bash_profile 0644
+  desktop_stage_role_asset etc/skel/.bashrc /etc/skel/.bashrc 0644
   desktop_stage_role_asset etc/skel/.zprofile /etc/skel/.zprofile 0644
   desktop_stage_role_asset etc/skel/.zshrc /etc/skel/.zshrc 0644
   desktop_stage_role_asset etc/skel/.config/starship.toml /etc/skel/.config/starship.toml 0644
@@ -751,7 +753,7 @@ gid=$(id -g "$account_user")
   copied_dirs=$((copied_dirs + 1))
 done
 rm -f "$account_home/.config/labwc/xinitrc"
-  for rel_file in .profile .zprofile .zshrc .config/kwalletrc .config/starship.toml .config/xdg-terminals.list .config/user-dirs.dirs; do
+  for rel_file in .profile .bash_profile .bashrc .zprofile .zshrc .config/kwalletrc .config/starship.toml .config/xdg-terminals.list .config/user-dirs.dirs; do
   src="/etc/skel/${rel_file}"
   dst="${account_home}/${rel_file}"
   [ -r "$src" ] || { printf "fatal: missing skel source: %s\n" "$src" >&2; exit 1; }

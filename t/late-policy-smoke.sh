@@ -5,7 +5,7 @@ ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/late-policy-smoke.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 
-TEST_COUNT=28
+TEST_COUNT=30
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -82,6 +82,33 @@ if grep -q 'account_polkit_managed_rule_files()' "$account_script" &&
   pass "account late hook stages the managed polkit tmpfiles policy"
 else
   fail "account late hook stages the managed polkit tmpfiles policy"
+fi
+
+shared_profile="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/skel/.profile"
+shared_bash_profile="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/skel/.bash_profile"
+shared_bashrc="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/skel/.bashrc"
+if [ -r "$shared_profile" ] &&
+   [ -r "$shared_bash_profile" ] &&
+   [ -r "$shared_bashrc" ] &&
+   ! grep -q '^alias ' "$shared_profile" &&
+   ! grep -q '\. "\$HOME/\.bashrc"' "$shared_profile" &&
+   grep -q '\. "\$HOME/\.profile"' "$shared_bash_profile" &&
+   grep -q '\. "\$HOME/\.bashrc"' "$shared_bash_profile" &&
+   grep -q '^alias ll=' "$shared_bashrc"; then
+  pass "shared shell assets keep login environment in .profile and interactive Bash logic in .bashrc"
+else
+  fail "shared shell assets keep login environment in .profile and interactive Bash logic in .bashrc"
+fi
+
+if grep -q '^stage_target_account_shell_assets() {$' "$account_script" &&
+   grep -q 'etc/skel/.profile' "$account_script" &&
+   grep -q 'etc/skel/.bash_profile' "$account_script" &&
+   grep -q 'etc/skel/.bashrc' "$account_script" &&
+   grep -q '^install_target_account_shell_assets() {$' "$account_script" &&
+   grep -q 'install managed shell assets for primary account' "$account_script"; then
+  pass "account late hook stages managed shell assets for all installs and installs them into the primary account home"
+else
+  fail "account late hook stages managed shell assets for all installs and installs them into the primary account home"
 fi
 
 if grep -q '"/target${DIR_POLKIT_LOCAL_RULES_D}"' "$account_script" &&

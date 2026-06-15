@@ -1,10 +1,21 @@
 # Interactive Zsh configuration for the managed desktop account.
 
-if [ -z "${__DEBIAN_PRESEED_PROFILE_LOADED:-}" ] && [ -r "$HOME/.profile" ]; then
-  . "$HOME/.profile"
+[[ -o interactive ]] || return 0
+
+if (( ${+__DEBIAN_PRESEED_ZSHRC_LOADED} )); then
+  return 0
+fi
+typeset -g __DEBIAN_PRESEED_ZSHRC_LOADED=1
+
+if [[ -z ${__DEBIAN_PRESEED_PROFILE_LOADED-} && -r $HOME/.profile ]]; then
+  () {
+    emulate -L sh
+    # shellcheck disable=SC1091
+    . "$HOME/.profile"
+  }
 fi
 
-HISTFILE="${ZDOTDIR:-$HOME}/.zsh_history"
+HISTFILE="${XDG_STATE_HOME:-$HOME/.local/state}/zsh/history"
 HISTSIZE=50000
 SAVEHIST=50000
 
@@ -24,9 +35,11 @@ setopt prompt_subst
 setopt share_history
 unsetopt nomatch
 
+zmodload zsh/complist
 autoload -Uz compinit
 zsh_cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/zsh"
 if mkdir -p "$zsh_cache_dir" 2>/dev/null; then
+  mkdir -p "${HISTFILE:h}" 2>/dev/null || true
   compinit -i -d "$zsh_cache_dir/zcompdump"
 else
   compinit -i
@@ -51,6 +64,25 @@ bindkey '^[[B' down-line-or-beginning-search
 bindkey '^[[1;5C' forward-word
 bindkey '^[[1;5D' backward-word
 bindkey '^[[3~' delete-char
+
+if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
+  alias fd='fdfind'
+fi
+
+alias ll='ls -lah --color=auto'
+alias la='ls -A --color=auto'
+alias l='ls -CF --color=auto'
+alias grep='grep --color=auto'
+alias ip='ip --color=auto'
+alias btop='btop --utf-force'
+
+if [ -x /usr/local/sbin/luks-mok-open ] &&
+   [ -x /usr/local/sbin/luks-mok-close ] &&
+   [ -x /usr/local/sbin/luks-mok-passwd ]; then
+  alias luks-mok-open='sudo /usr/local/sbin/luks-mok-open'
+  alias luks-mok-close='sudo /usr/local/sbin/luks-mok-close'
+  alias luks-mok-passwd='sudo /usr/local/sbin/luks-mok-passwd'
+fi
 
 if [ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]; then
   . /usr/share/doc/fzf/examples/key-bindings.zsh

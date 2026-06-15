@@ -3,7 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
-TEST_COUNT=15
+TEST_COUNT=16
 TEST_INDEX=0
 
 pass() {
@@ -210,4 +210,13 @@ if (
   pass "initramfs hook skips only the root fsck call and preserves other checks"
 else
   fail "initramfs hook skips only the root fsck call and preserves other checks"
+fi
+
+if grep -q 'install MOK LUKS aliases in target shell rc files' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
+   grep -q 'ensure_rc_file "\$bashrc_path" /etc/skel/.bashrc' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
+   grep -q 'append_alias_block "\$bashrc_path"' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
+   grep -q 'rewrite_without_marker "\$profile_path"' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh"; then
+  pass "secure boot late helper keeps managed MOK aliases out of the shared profile and installs them in shell rc files"
+else
+  fail "secure boot late helper keeps managed MOK aliases out of the shared profile and installs them in shell rc files"
 fi

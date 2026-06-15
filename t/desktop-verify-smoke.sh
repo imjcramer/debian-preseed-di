@@ -5,7 +5,7 @@ ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/desktop-verify-smoke.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 
-TEST_COUNT=43
+TEST_COUNT=44
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -558,6 +558,26 @@ if grep -q '^\[colors-dark\]$' "$ROOT_DIR/d-i/debian/hooks/role/desktop/target/e
   pass "Foot config uses the current colors-dark section"
 else
   fail "Foot config uses the current colors-dark section"
+fi
+
+profile_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.profile"
+bash_profile_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.bash_profile"
+bashrc_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.bashrc"
+zprofile_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.zprofile"
+zshrc_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.zshrc"
+if ! grep -q '^alias ' "$profile_file" &&
+   ! grep -q '\. "\$HOME/\.bashrc"' "$profile_file" &&
+   ! grep -q '\. "\$HOME/\.zshrc"' "$profile_file" &&
+   grep -q '\. "\$HOME/\.profile"' "$bash_profile_file" &&
+   grep -q '\. "\$HOME/\.bashrc"' "$bash_profile_file" &&
+   grep -q '\. "\$HOME/\.profile"' "$bashrc_file" &&
+   grep -q 'starship init bash' "$bashrc_file" &&
+   grep -q '\. "\$HOME/\.profile"' "$zprofile_file" &&
+   grep -q '\. "\$HOME/\.profile"' "$zshrc_file" &&
+   grep -q 'starship init zsh' "$zshrc_file"; then
+  pass "desktop shell dotfiles keep shared login env in .profile and shell-specific rc logic in Bash and Zsh files"
+else
+  fail "desktop shell dotfiles keep shared login env in .profile and shell-specific rc logic in Bash and Zsh files"
 fi
 
 if grep -q '^TerminalEmulator=foot$' "$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/xfce4/helpers.rc" &&

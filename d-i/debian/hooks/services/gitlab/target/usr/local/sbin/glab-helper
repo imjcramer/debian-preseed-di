@@ -99,7 +99,7 @@ load_user_context() {
 run_privileged() {
   if [[ "$(id -u)" -eq 0 ]]; then
     "$@"
-    return 0
+    return $?
   fi
   require_cmd sudo
   sudo -- "$@"
@@ -117,7 +117,7 @@ run_as_user() {
       DBUS_SESSION_BUS_ADDRESS="$context_bus" \
       PATH="$PATH" \
       "$@"
-    return 0
+    return $?
   fi
   if [[ "$(id -u)" -eq 0 ]]; then
     require_cmd runuser
@@ -131,7 +131,7 @@ run_as_user() {
       DBUS_SESSION_BUS_ADDRESS="$context_bus" \
       PATH="$PATH" \
       "$@"
-    return 0
+    return $?
   fi
   require_cmd sudo
   sudo -u "$context_user" -- env \

@@ -575,8 +575,7 @@ gitlab_runner_render_unit() {
   chown "root:${GITLAB_RUNNER_CONTROL_GID}" "/target${GITLAB_RUNNER_MANAGED_UNIT_FILE}"
 
   podman_install_symlink_with_backup "/target${GITLAB_RUNNER_HOME_UNIT_FILE}" "${GITLAB_RUNNER_MANAGED_UNIT_FILE}" "/target${GITLAB_RUNNER_BACKUP_UNIT_DIR}"
-  podman_install_symlink_with_backup "/target${GITLAB_RUNNER_HOME_WANTS_FILE}" "${GITLAB_RUNNER_MANAGED_UNIT_FILE}" "/target${GITLAB_RUNNER_BACKUP_UNIT_DIR}"
-  chown -h "$runner_uid:$runner_gid" "/target${GITLAB_RUNNER_HOME_UNIT_FILE}" "/target${GITLAB_RUNNER_HOME_WANTS_FILE}"
+  chown -h "$runner_uid:$runner_gid" "/target${GITLAB_RUNNER_HOME_UNIT_FILE}"
 }
 
 gitlab_runner_verify_target_staging() {
@@ -589,11 +588,10 @@ gitlab_runner_verify_target_staging() {
   [ -x /target/usr/local/sbin/gitlab-runner-managed ] || installer_fatal "managed GitLab runner helper is missing"
   [ -r "/target${GITLAB_RUNNER_MANAGED_UNIT_FILE}" ] || installer_fatal "managed GitLab runner user unit is missing: ${GITLAB_RUNNER_MANAGED_UNIT_FILE}"
   [ -L "/target${GITLAB_RUNNER_HOME_UNIT_FILE}" ] || installer_fatal "home GitLab runner unit symlink is missing: ${GITLAB_RUNNER_HOME_UNIT_FILE}"
-  [ -L "/target${GITLAB_RUNNER_HOME_WANTS_FILE}" ] || installer_fatal "GitLab runner default target symlink is missing: ${GITLAB_RUNNER_HOME_WANTS_FILE}"
   [ "$(readlink "/target${GITLAB_RUNNER_HOME_UNIT_FILE}")" = "${GITLAB_RUNNER_MANAGED_UNIT_FILE}" ] ||
     installer_fatal "home GitLab runner unit symlink drifted: ${GITLAB_RUNNER_HOME_UNIT_FILE}"
-  [ "$(readlink "/target${GITLAB_RUNNER_HOME_WANTS_FILE}")" = "${GITLAB_RUNNER_MANAGED_UNIT_FILE}" ] ||
-    installer_fatal "GitLab runner wants symlink drifted: ${GITLAB_RUNNER_HOME_WANTS_FILE}"
+  [ ! -e "/target${GITLAB_RUNNER_HOME_WANTS_FILE}" ] || installer_fatal "GitLab runner unit must not be enabled before first successful once: ${GITLAB_RUNNER_HOME_WANTS_FILE}"
+  [ ! -L "/target${GITLAB_RUNNER_HOME_WANTS_FILE}" ] || installer_fatal "GitLab runner unit must not be enabled before first successful once: ${GITLAB_RUNNER_HOME_WANTS_FILE}"
 }
 
 configure_target_gitlab_runner_if_selected() {

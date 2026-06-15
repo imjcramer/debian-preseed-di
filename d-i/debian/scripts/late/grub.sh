@@ -971,7 +971,7 @@ install_target_mok_profile_aliases() {
   validate_target_ssh_user
 
   # shellcheck disable=SC2016
-  run_in_target "install MOK LUKS aliases in target profile" /bin/sh -c '
+  run_in_target "install MOK LUKS aliases in target shell rc files" /bin/sh -c '
 set -eu
 account_user=$1
 account_home=$2
@@ -979,52 +979,143 @@ open_helper=$3
 close_helper=$4
 passwd_helper=$5
 profile_path="${account_home}/.profile"
+bash_profile_path="${account_home}/.bash_profile"
+bashrc_path="${account_home}/.bashrc"
+zprofile_path="${account_home}/.zprofile"
+zshrc_path="${account_home}/.zshrc"
 marker_begin="# Managed installer MOK LUKS aliases"
 marker_end="# End managed installer MOK LUKS aliases"
-tmp=$(mktemp)
-trap "rm -f \"$tmp\"" EXIT HUP INT TERM
+tmp_dir=$(mktemp -d)
+trap "rm -rf \"$tmp_dir\"" EXIT HUP INT TERM
 
 uid=$(id -u "$account_user")
 gid=$(id -g "$account_user")
 
-if [ ! -d "$account_home" ]; then
-  install -d -m 0755 "$account_home"
-fi
-if [ ! -f "$profile_path" ]; then
-  if [ -r /etc/skel/.profile ]; then
-    install -m 0644 /etc/skel/.profile "$profile_path"
+ensure_rc_file() {
+  target_path=$1
+  skel_path=$2
+
+  [ ! -L "$target_path" ] || {
+    printf "fatal: managed shell rc file must not be a symlink: %s\n" "$target_path" >&2
+    exit 1
+  }
+  [ -f "$target_path" ] && return 0
+
+  if [ -r "$skel_path" ]; then
+    install -m 0644 "$skel_path" "$target_path"
   else
-    : >"$profile_path"
-    chmod 0644 "$profile_path"
+    : >"$target_path"
+    chmod 0644 "$target_path"
   fi
+}
+
+ensure_bash_profile_loader() {
+  if [ -r /etc/skel/.bash_profile ] || [ -r "$bash_profile_path" ]; then
+    ensure_rc_file "$bash_profile_path" /etc/skel/.bash_profile
+    return 0
+  fi
+  [ ! -L "$bash_profile_path" ] || {
+    printf "fatal: managed shell rc file must not be a symlink: %s\n" "$bash_profile_path" >&2
+    exit 1
+  }
+  [ -e "$bash_profile_path" ] && return 0
+  cat >"$bash_profile_path" <<'"'"'EOF'"'"'
+if [ -z "${__DEBIAN_PRESEED_PROFILE_LOADED:-}" ] && [ -r "$HOME/.profile" ]; then
+  . "$HOME/.profile"
 fi
 
-skip=false
-: >"$tmp"
-while IFS= read -r line || [ -n "$line" ]; do
-  if [ "$line" = "$marker_begin" ]; then
-    skip=true
-    continue
-  fi
-  if [ "$line" = "$marker_end" ]; then
-    skip=false
-    continue
-  fi
-  [ "$skip" = true ] && continue
-  printf '%s\n' "$line" >>"$tmp"
-done <"$profile_path"
+case $- in
+  *i*)
+    if [ -r "$HOME/.bashrc" ]; then
+      . "$HOME/.bashrc"
+    fi
+    ;;
+esac
+EOF
+  chown "$uid:$gid" "$bash_profile_path"
+  chmod 0644 "$bash_profile_path"
+}
 
-{
-  cat "$tmp"
-  printf "\n%s\n" "$marker_begin"
-  printf "alias luks-mok-open='\''sudo %s'\''\n" "$open_helper"
-  printf "alias luks-mok-close='\''sudo %s'\''\n" "$close_helper"
-  printf "alias luks-mok-passwd='\''sudo %s'\''\n" "$passwd_helper"
-  printf "%s\n" "$marker_end"
-} >"$profile_path"
+ensure_zprofile_loader() {
+  if [ -r /etc/skel/.zprofile ] || [ -r "$zprofile_path" ]; then
+    ensure_rc_file "$zprofile_path" /etc/skel/.zprofile
+    return 0
+  fi
+  [ ! -L "$zprofile_path" ] || {
+    printf "fatal: managed shell rc file must not be a symlink: %s\n" "$zprofile_path" >&2
+    exit 1
+  }
+  [ -e "$zprofile_path" ] && return 0
+  cat >"$zprofile_path" <<'"'"'EOF'"'"'
+if [ -z "${__DEBIAN_PRESEED_PROFILE_LOADED:-}" ] && [ -r "$HOME/.profile" ]; then
+  () {
+    emulate -L sh
+    . "$HOME/.profile"
+  }
+fi
+EOF
+  chown "$uid:$gid" "$zprofile_path"
+  chmod 0644 "$zprofile_path"
+}
 
+rewrite_without_marker() {
+  source_path=$1
+  dest_path=$2
+  skip=false
+  : >"$dest_path"
+  if [ -r "$source_path" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [ "$line" = "$marker_begin" ]; then
+        skip=true
+        continue
+      fi
+      if [ "$line" = "$marker_end" ]; then
+        skip=false
+        continue
+      fi
+      [ "$skip" = true ] && continue
+      printf '%s\n' "$line" >>"$dest_path"
+    done <"$source_path"
+  fi
+}
+
+append_alias_block() {
+  target_path=$1
+  tmp_path="${tmp_dir}/$(basename "$target_path").managed"
+
+  rewrite_without_marker "$target_path" "$tmp_path"
+  {
+    cat "$tmp_path"
+    printf "\n%s\n" "$marker_begin"
+    printf "alias luks-mok-open='\''sudo %s'\''\n" "$open_helper"
+    printf "alias luks-mok-close='\''sudo %s'\''\n" "$close_helper"
+    printf "alias luks-mok-passwd='\''sudo %s'\''\n" "$passwd_helper"
+    printf "%s\n" "$marker_end"
+  } >"$target_path"
+  chown "$uid:$gid" "$target_path"
+  chmod 0644 "$target_path"
+}
+
+install -d -m 0755 "$account_home"
+ensure_rc_file "$profile_path" /etc/skel/.profile
+ensure_bash_profile_loader
+ensure_rc_file "$bashrc_path" /etc/skel/.bashrc
+
+profile_tmp="${tmp_dir}/profile.clean"
+rewrite_without_marker "$profile_path" "$profile_tmp"
+cat "$profile_tmp" >"$profile_path"
 chown "$uid:$gid" "$profile_path"
 chmod 0644 "$profile_path"
+
+append_alias_block "$bashrc_path"
+
+if [ -r /etc/skel/.zprofile ] || [ -r "$zprofile_path" ] || command -v zsh >/dev/null 2>&1; then
+  ensure_zprofile_loader
+fi
+if [ -r /etc/skel/.zshrc ] || [ -r "$zshrc_path" ] || command -v zsh >/dev/null 2>&1; then
+  ensure_rc_file "$zshrc_path" /etc/skel/.zshrc
+  append_alias_block "$zshrc_path"
+fi
 ' sh \
     "$ACCOUNT_USERNAME" \
     "$ACCOUNT_HOME" \

@@ -3,6 +3,8 @@ Description=__INSTALLER_GITLAB_RUNNER_DESCRIPTION__
 Documentation=https://docs.gitlab.com/runner/executors/docker/
 Wants=podman.socket
 After=podman.socket
+StartLimitIntervalSec=5min
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -12,8 +14,8 @@ ExecStartPre=/usr/bin/install -d -m 0700 __INSTALLER_GITLAB_RUNNER_TMP_DIR__
 ExecStartPre=/usr/local/sbin/gitlab-runner-managed --user __INSTALLER_GITLAB_RUNNER_USER__ preflight
 ExecStartPre=/usr/local/sbin/gitlab-runner-managed --user __INSTALLER_GITLAB_RUNNER_USER__ ensure-images
 ExecStart=/usr/bin/gitlab-runner run --working-directory __INSTALLER_GITLAB_RUNNER_WORK_DIR__ --config __INSTALLER_GITLAB_RUNNER_CONFIG_PATH__
-Restart=always
-RestartSec=5s
+Restart=on-failure
+RestartSec=15s
 TimeoutStartSec=__INSTALLER_GITLAB_RUNNER_START_TIMEOUT__
 TimeoutStopSec=60s
 KillMode=mixed

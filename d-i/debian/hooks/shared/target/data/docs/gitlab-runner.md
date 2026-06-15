@@ -103,6 +103,12 @@ user with `sudo -iu`.
 6. Check service status and logs.
 7. Verify `aptly-bridge.path` is active before using `aptly publish ...` from CI.
 
+The installer stages `gitlab-runner.service` into each managed service home but
+does not enable it until `once` succeeds. That keeps fresh installs from
+spinning in a restart loop before tokens and `config.toml` exist. After that,
+the unit restarts only on failure and uses bounded systemd start limits instead
+of retrying forever.
+
 ## Failure note
 
 If GitLab Runner reports `unable to upgrade to tcp`, that message comes from the

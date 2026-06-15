@@ -339,7 +339,7 @@ run_as_context_user() {
       DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${context_uid}/bus" \
       PATH="$PATH" \
       "$@"
-    return 0
+    return $?
   fi
   if [[ "$(id -u)" -eq 0 ]]; then
     require_cmd runuser
@@ -353,7 +353,7 @@ run_as_context_user() {
       DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${context_uid}/bus" \
       PATH="$PATH" \
       "$@"
-    return 0
+    return $?
   fi
   require_cmd sudo
   sudo -u "$context_user" -- env \
@@ -1034,10 +1034,18 @@ reconcile_runner_service() {
   run_as_context_user systemctl --user show-environment >/dev/null 2>&1 ||
     die "user manager is not reachable for ${context_user}; rerun through glab-helper or from an active login session"
   run_as_context_user systemctl --user daemon-reload >/dev/null
+  run_as_context_user systemctl --user enable gitlab-runner.service >/dev/null
   if run_as_context_user systemctl --user is-active --quiet gitlab-runner.service; then
-    run_as_context_user systemctl --user kill --signal=HUP --kill-whom=main gitlab-runner.service
-    info "requested config reload for gitlab-runner.service as ${context_user}"
-    return 0
+    if run_as_context_user systemctl --user kill --signal=HUP --kill-whom=main gitlab-runner.service; then
+      info "requested config reload for gitlab-runner.service as ${context_user}"
+    else
+      info "gitlab-runner.service had no reloadable main process for ${context_user}; falling back to start"
+    fi
+    if wait_for_runner_service_active true; then
+      info "verified gitlab-runner.service remained active for ${context_user}"
+      return 0
+    fi
+    info "gitlab-runner.service was not stably active after reload for ${context_user}; falling back to start"
   fi
   run_as_context_user systemctl --user reset-failed gitlab-runner.service >/dev/null 2>&1 || true
   run_as_context_user systemctl --user start gitlab-runner.service
@@ -1046,6 +1054,7 @@ reconcile_runner_service() {
 }
 
 wait_for_runner_service_active() {
+  local return_only="${1:-false}"
   local tries="${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-10}"
   local verify_active stable_required stable_seen=0
   [[ "$tries" =~ ^[0-9]+$ ]] || die "GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS must be numeric, got: ${tries:-unset}"
@@ -1058,7 +1067,13 @@ wait_for_runner_service_active() {
   while (( tries > 0 )); do
     if run_as_context_user systemctl --user is-failed --quiet gitlab-runner.service; then
       if (( stable_seen > 0 )); then
+        if [[ "$return_only" == "true" ]]; then
+          return 1
+        fi
         die "gitlab-runner.service did not remain active for ${context_user} during the ${GITLAB_RUNNER_SERVICE_STABLE_SECONDS:-3}s verification window; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
+      fi
+      if [[ "$return_only" == "true" ]]; then
+        return 1
       fi
       die "gitlab-runner.service failed to reach active for ${context_user}; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
     fi
@@ -1078,7 +1093,13 @@ wait_for_runner_service_active() {
   done
 
   if (( stable_seen > 0 )); then
+    if [[ "$return_only" == "true" ]]; then
+      return 1
+    fi
     die "gitlab-runner.service did not remain active for ${context_user} during the ${GITLAB_RUNNER_SERVICE_STABLE_SECONDS:-3}s verification window; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
+  fi
+  if [[ "$return_only" == "true" ]]; then
+    return 1
   fi
   die "gitlab-runner.service did not become active for ${context_user} within ${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-10}s; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
 }

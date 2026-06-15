@@ -225,6 +225,13 @@ The runner systemd user unit name is always:
 
 - `gitlab-runner.service`
 
+The installer stages that unit into the managed service home, but intentionally
+does not enable it until `gitlab-runner-managed once` has rendered a valid
+config and verified at least one active token. That avoids a boot-time restart
+loop on fresh installs before the runner credentials exist. After enablement,
+the unit only restarts on failure and systemd stops retrying after the bounded
+start-limit window instead of looping forever.
+
 ## First bootstrap checklist
 
 1. Populate the token fields in the env files.

@@ -333,6 +333,8 @@ for path in \
   /etc/skel/.config/xfce4/helpers.rc \
   /usr/share/xfce4/helpers/foot.desktop \
   /etc/skel/.profile \
+  /etc/skel/.bash_profile \
+  /etc/skel/.bashrc \
   /etc/skel/.zprofile \
   /etc/skel/.zshrc \
   /etc/skel/.config/starship.toml \
@@ -506,6 +508,8 @@ for path in \
   "$account_home/.config/kanshi/config" \
   "$account_home/.config/swaylock/config" \
   "$account_home/.profile" \
+  "$account_home/.bash_profile" \
+  "$account_home/.bashrc" \
   "$account_home/.zprofile" \
   "$account_home/.zshrc" \
   "$account_home/.config/starship.toml" \

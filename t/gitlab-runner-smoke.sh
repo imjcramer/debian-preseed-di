@@ -33,6 +33,7 @@ gitlab_late="$ROOT_DIR/d-i/debian/scripts/late/gitlab-runner.sh"
 podman_late="$ROOT_DIR/d-i/debian/scripts/late/podman.sh"
 security_script="$ROOT_DIR/d-i/debian/scripts/late/security.sh"
 shared_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-shared.env"
+runtime_storage_tmpfiles="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/tmpfiles.d/10-runtime-storage-roots.conf"
 aptly_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-aptly.env"
 build_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-build.env"
 task_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-task.env"
@@ -165,7 +166,8 @@ else
   fail "runner docs keep the nologin service-account contract explicit and explain why shell-profile loading does not apply to the Docker executor path"
 fi
 
-if grep -q '^d /pool/aptly 0755 root root -$' "$aptly_tmpfiles" &&
+if ! grep -q '__INSTALLER_DIR_POOL_APTLY__' "$runtime_storage_tmpfiles" &&
+   grep -q '^d /pool/aptly 0755 root root -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/.aptly 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/secrets 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/requests 03770 root devops -$' "$aptly_tmpfiles" &&
@@ -182,9 +184,9 @@ if grep -q '^d /pool/aptly 0755 root root -$' "$aptly_tmpfiles" &&
    grep -Fq 'chown "${context_aptly_owner_user}:${context_aptly_owner_user}" "$config_path"' "$managed_helper" &&
    ! grep -q 'APTLY_CONFIG=/pool/aptly/.aptly.conf' "$managed_helper" &&
    ! grep -q 'R2_ACCESS_KEY_ID=$(runner_var' "$managed_helper"; then
-  pass "aptly state is owned by the dedicated aptly account and publish/signing is forced through the controlled host helper"
+  pass "aptly state is owned by the dedicated aptly account, its tmpfiles root no longer duplicates the shared roots file, and publish/signing is forced through the controlled host helper"
 else
-  fail "aptly state is owned by the dedicated aptly account and publish/signing is forced through the controlled host helper"
+  fail "aptly state is owned by the dedicated aptly account, its tmpfiles root no longer duplicates the shared roots file, and publish/signing is forced through the controlled host helper"
 fi
 
 if grep -Fq 'configure_target_rootless_podman_without_podbin' "$gitlab_late" &&
@@ -211,9 +213,13 @@ fi
 
 if grep -q '^Wants=podman.socket$' "$service_template" &&
    grep -q '^After=podman.socket$' "$service_template" &&
+   grep -q '^StartLimitIntervalSec=5min$' "$service_template" &&
+   grep -q '^StartLimitBurst=3$' "$service_template" &&
    grep -q '^ExecStartPre=/usr/local/sbin/gitlab-runner-managed --user __INSTALLER_GITLAB_RUNNER_USER__ preflight$' "$service_template" &&
    ! grep -q '^Environment=DOCKER_HOST=' "$service_template" &&
    ! grep -q '^Environment=CONTAINER_HOST=' "$service_template" &&
+   grep -q '^Restart=on-failure$' "$service_template" &&
+   grep -q '^RestartSec=15s$' "$service_template" &&
    grep -q '^ProtectSystem=strict$' "$service_template" &&
    grep -q '^ReadWritePaths=__INSTALLER_GITLAB_RUNNER_READ_WRITE_PATHS__$' "$service_template" &&
    grep -Fq 'read_write_paths="${read_write_paths} ${buildah_tmpdir}"' "$gitlab_late" &&
@@ -284,12 +290,19 @@ else
 fi
 
 if grep -q '^reconcile_runner_service() {$' "$managed_helper" &&
+   grep -Fq 'systemctl --user enable gitlab-runner.service' "$managed_helper" &&
    grep -Fq 'systemctl --user start gitlab-runner.service' "$managed_helper" &&
    grep -Fq 'systemctl --user kill --signal=HUP --kill-whom=main gitlab-runner.service' "$managed_helper" &&
-   grep -Fq 'requested config reload for gitlab-runner.service as ${context_user}' "$managed_helper"; then
-  pass "managed helper starts inactive services and signals active services so once does not require a reboot"
+   grep -Fq 'requested config reload for gitlab-runner.service as ${context_user}' "$managed_helper" &&
+   ! grep -Fq 'podman_install_symlink_with_backup "/target${GITLAB_RUNNER_HOME_WANTS_FILE}"' "$gitlab_late" &&
+   grep -Fq 'GitLab runner unit must not be enabled before first successful once' "$gitlab_late" &&
+   grep -q 'does not enable it until `gitlab-runner-managed once` has rendered a valid' "$service_readme" &&
+   grep -q 'does not enable it until `once` succeeds' "$gitlab_runner_doc" &&
+   grep -q 'unit only restarts on failure and systemd stops retrying after the bounded' "$service_readme" &&
+   grep -q 'unit restarts only on failure and uses bounded systemd start limits' "$gitlab_runner_doc"; then
+  pass "managed helper enables services on first successful once and the unit no longer retries forever after enablement"
 else
-  fail "managed helper starts inactive services and signals active services so once does not require a reboot"
+  fail "managed helper enables services on first successful once and the unit no longer retries forever after enablement"
 fi
 
 if grep -q 'secret file path does not exist' "$managed_helper" &&

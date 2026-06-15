@@ -5,7 +5,7 @@ IFS=$'\n\t'
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/gitlab-runner-managed"
 
-TEST_COUNT=7
+TEST_COUNT=8
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -175,6 +175,10 @@ case "$*" in
   "--user daemon-reload")
     exit 0
     ;;
+  "--user enable gitlab-runner.service")
+    printf 'enabled\n' >>"$TEST_SYSTEMCTL_EVENTS"
+    exit 0
+    ;;
   "--user is-failed --quiet gitlab-runner.service")
     if [[ -f "$TEST_SYSTEMCTL_STATE" ]] && [[ "$(cat "$TEST_SYSTEMCTL_STATE")" == "failed" ]]; then
       exit 0
@@ -213,6 +217,10 @@ case "$*" in
     exit 3
     ;;
   "--user kill --signal=HUP --kill-whom=main gitlab-runner.service")
+    if [[ "${TEST_SYSTEMCTL_KILL_FAIL:-false}" == "true" ]]; then
+      printf 'failed\n' >"$TEST_SYSTEMCTL_STATE"
+      exit 1
+    fi
     printf 'hup\n' >>"$TEST_SYSTEMCTL_EVENTS"
     exit 0
     ;;
@@ -342,6 +350,16 @@ if assert_contains "$SYSTEMCTL_LOG" '--user kill --signal=HUP --kill-whom=main g
   pass "rerunning once signals the active service to reload instead of forcing another start"
 else
   fail "rerunning once signals the active service to reload instead of forcing another start"
+fi
+
+: >"$SYSTEMCTL_LOG"
+printf 'active\n' >"$SYSTEMCTL_STATE"
+TEST_SYSTEMCTL_KILL_FAIL=true bash "$PATCHED_HELPER" --user glab-user once >"$TMP_ROOT/fourth.stdout" 2>"$TMP_ROOT/fourth.stderr"
+if assert_contains "$SYSTEMCTL_LOG" '--user kill --signal=HUP --kill-whom=main gitlab-runner.service' &&
+   assert_contains "$SYSTEMCTL_LOG" '--user start gitlab-runner.service'; then
+  pass "once falls back to a real start when the active-unit reload path has no main process"
+else
+  fail "once falls back to a real start when the active-unit reload path has no main process"
 fi
 
 [ "$FAIL_COUNT" -eq 0 ]
