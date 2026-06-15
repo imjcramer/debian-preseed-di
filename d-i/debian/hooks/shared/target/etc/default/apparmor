@@ -1,0 +1,3 @@
+# Managed by installer late_command.
+APPARMOR=enforce
+SECURITYFS=yes

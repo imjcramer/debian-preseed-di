@@ -1,0 +1,186 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use FindBin;
+use lib "$FindBin::Bin/../lib", '/usr/share/perl5';
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use Time::HiRes qw(sleep);
+
+use Zram::Writeback;
+use Zram::Writeback::Budget;
+use Zram::Writeback::Config;
+use Zram::Writeback::Device;
+use Zram::Writeback::Policy;
+use Zram::Writeback::Pressure;
+use Zram::Writeback::Sysfs;
+use Zram::Writeback::Util qw(log_msg);
+
+exit main(@ARGV);
+
+sub main {
+    my @argv = @_;
+    my $cmd = shift(@argv) || 'help';
+
+    my $config = $ENV{ZRAM_WRITEBACK_CONFIG} || '/etc/zram-writeback.conf';
+    my $dry_run = $ENV{ZRAM_WRITEBACK_DRY_RUN} ? 1 : 0;
+    my $verbose = $ENV{ZRAM_WRITEBACK_VERBOSE} ? 1 : 0;
+    my $force_reset = 0;
+    my $state_override = '';
+    my $interval;
+    my $help = 0;
+
+    GetOptionsFromArray(
+        \@argv,
+        'config=s'      => \$config,
+        'dry-run!'      => \$dry_run,
+        'verbose!'      => \$verbose,
+        'force-reset!'  => \$force_reset,
+        'state=s'       => \$state_override,
+        'interval=i'    => \$interval,
+        'help|h'        => \$help,
+    ) or return usage(2);
+
+    return usage(0) if $help || $cmd eq 'help';
+    return version() if $cmd eq 'version';
+
+    my $cfg = Zram::Writeback::Config->new(file => $config);
+    my $sysfs = Zram::Writeback::Sysfs->new(
+        dry_run       => $dry_run,
+        verbose       => $verbose,
+        retry_eagain  => $cfg->get_bool('lock', 'retry_eagain', 1),
+        retry_sleep_s => ($cfg->get_int('lock', 'retry_eagain_sleep_ms', 250) / 1000.0),
+        retry_max     => $cfg->get_int('lock', 'retry_eagain_max', 8),
+    );
+    my $device = Zram::Writeback::Device->new(cfg => $cfg, sysfs => $sysfs, dry_run => $dry_run, verbose => $verbose);
+
+    if ($cmd eq 'validate') {
+        my @errors = $cfg->validate;
+        if (@errors) {
+            print STDERR join("\n", @errors), "\n";
+            return 1;
+        }
+        if (-d $device->sysfs_base) {
+            my @missing = $device->validate_kernel_surface;
+            if (@missing) {
+                print STDERR 'warning: missing zram sysfs attributes: ', join(', ', @missing), "\n";
+            }
+        } else {
+            print STDERR 'warning: ', $device->sysfs_base, " is not present; runtime kernel surface was not checked\n";
+        }
+        print "configuration OK\n";
+        return 0;
+    }
+
+    if ($cmd eq 'setup') {
+        $device->setup(force_reset => $force_reset);
+        return 0;
+    }
+
+    if ($cmd eq 'reset') {
+        $device->ensure_device;
+        $device->reset(force => $force_reset);
+        return 0;
+    }
+
+    if ($cmd eq 'run-pass') {
+        my $policy = Zram::Writeback::Policy->new(cfg => $cfg, device => $device);
+        my %opt;
+        $opt{state_override} = $state_override if $state_override ne '';
+        my $r = $policy->run_once(%opt);
+        print JSON::PP->new->canonical->pretty->encode($r);
+        return 0;
+    }
+
+    if ($cmd eq 'daemon') {
+        $interval = $ENV{ZRAM_WRITEBACK_DAEMON_INTERVAL} if !defined($interval) && defined($ENV{ZRAM_WRITEBACK_DAEMON_INTERVAL});
+        $interval = $cfg->get_int('runtime', 'default_interval_sec', 60) if !defined $interval;
+        die '--interval must be > 0' unless $interval > 0;
+        my $stop = 0;
+        local $SIG{TERM} = sub { $stop = 1; };
+        local $SIG{INT}  = sub { $stop = 1; };
+        my $policy = Zram::Writeback::Policy->new(cfg => $cfg, device => $device);
+        log_msg('INFO', "daemon started interval=${interval}s");
+        while (!$stop) {
+            eval { $policy->run_once; 1 } or do {
+                my $err = $@ || 'unknown error';
+                chomp $err;
+                log_msg('ERROR', $err);
+            };
+            my $slept = 0;
+            while (!$stop && $slept < $interval) {
+                sleep(1);
+                ++$slept;
+            }
+        }
+        log_msg('INFO', 'daemon stopped');
+        return 0;
+    }
+
+    if ($cmd eq 'budget-reset') {
+        my $budget = Zram::Writeback::Budget->new(cfg => $cfg, device => $device);
+        $budget->reset_daily;
+        return 0;
+    }
+
+    if ($cmd eq 'status') {
+        my $pressure = Zram::Writeback::Pressure->new(cfg => $cfg);
+        my ($state, $reasons, $sample) = $pressure->determine_state;
+        my $budget = Zram::Writeback::Budget->new(cfg => $cfg, device => $device);
+        my $out = {
+            version => $Zram::Writeback::VERSION,
+            device => {
+                name        => $device->name,
+                dev         => $device->dev_path,
+                sysfs       => $device->sysfs_base,
+                initialized => (-d $device->sysfs_base ? $device->initialized : 0),
+                active_swap => $device->active_swap,
+            },
+            pressure => {
+                state   => $state,
+                reasons => $reasons,
+                psi     => $sample->{psi} || {},
+            },
+            metrics => (-d $device->sysfs_base ? $device->read_metrics : {}),
+            writeback_budget_units_4k => (-d $device->sysfs_base ? $budget->remaining_units : undef),
+        };
+        print JSON::PP->new->canonical->pretty->encode($out);
+        return 0;
+    }
+
+    print STDERR "unknown command: $cmd\n";
+    return usage(2);
+}
+
+sub version {
+    print "zram-writeback $Zram::Writeback::VERSION\n";
+    return 0;
+}
+
+sub usage {
+    my ($rc) = @_;
+    print <<'USAGE';
+Usage:
+  zram-writeback <command> [options]
+
+Commands:
+  validate       Validate configuration and, if present, zram sysfs attributes.
+  setup          Configure zram, writeback, recompression, mkswap and swapon.
+  run-pass       Run one pressure-aware recompress/writeback policy pass.
+  daemon         Run policy passes in a systemd-managed foreground loop.
+  budget-reset   Reset the kernel writeback_limit daily budget.
+  status         Print JSON status, pressure state and zram metrics.
+  reset          swapoff/reset the zram device; requires --force-reset if active.
+  version        Print version.
+  help           Print this help.
+
+Options:
+  --config PATH       Configuration file. Default: /etc/zram-writeback.conf
+  --dry-run           Log sysfs writes and commands without executing them.
+  --verbose           Log additional sysfs write detail.
+  --force-reset       Allow setup/reset to swapoff and reset an initialized device.
+  --state STATE       Override run-pass state: normal, pressure, emergency.
+  --interval SEC      Daemon loop interval.
+USAGE
+    return $rc;
+}

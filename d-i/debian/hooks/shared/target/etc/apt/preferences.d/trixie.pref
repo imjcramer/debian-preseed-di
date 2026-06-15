@@ -1,0 +1,4 @@
+# Trixie Stable
+Package: *
+Pin: release n=trixie
+Pin-Priority: -1

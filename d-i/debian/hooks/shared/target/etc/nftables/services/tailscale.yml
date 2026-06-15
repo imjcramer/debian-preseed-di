@@ -1,0 +1,40 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: tailscale
+  description: Tailscale overlay.
+  merge_priority: 50
+services:
+  tailscale_udp:
+    enabled: true
+    direction: inbound
+    protocols:
+    - udp
+    ports:
+    - 41641
+    allow:
+      ipv4:
+      - 0.0.0.0/0
+      ipv6:
+      - ::/0
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+egress:
+  rules:
+    tailscale_control:
+      enabled: true
+      protocols:
+      - tcp
+      - udp
+      ports:
+      - 443
+      - 3478
+      - 41641
+      allow_to:
+        ipv4:
+        - 0.0.0.0/0
+        ipv6:
+        - ::/0

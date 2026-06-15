@@ -1,0 +1,153 @@
+<?xml version="1.0"?>
+<labwc_config>
+  <core>
+    <decoration>server</decoration>
+    <gap>6</gap>
+    <autoEnableOutputs>yes</autoEnableOutputs>
+    <reuseOutputMode>yes</reuseOutputMode>
+    <xwaylandPersistence>no</xwaylandPersistence>
+    <primarySelection>yes</primarySelection>
+  </core>
+
+  <placement>
+    <policy>automatic</policy>
+  </placement>
+
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+    <raiseOnFocus>no</raiseOnFocus>
+  </focus>
+
+  <theme>
+    <name>Adwaita</name>
+    <icon>__INSTALLER_LABWC_ICON_THEME__</icon>
+    <dropShadows>yes</dropShadows>
+    <cornerRadius>10</cornerRadius>
+  </theme>
+
+  <menu>
+    <showIcons>yes</showIcons>
+  </menu>
+
+  <desktops>
+    <number>__INSTALLER_LABWC_WORKSPACE_COUNT__</number>
+    <popupTime>600</popupTime>
+    <names>
+__INSTALLER_LABWC_WORKSPACE_NAME_LINES__
+    </names>
+  </desktops>
+
+  <keyboard>
+    <default />
+    <keybind key="A-Tab">
+      <action name="NextWindow" workspace="all" />
+    </keybind>
+    <keybind key="A-S-Tab">
+      <action name="PreviousWindow" workspace="all" />
+    </keybind>
+    <keybind key="W-Return">
+      <action name="Execute" command="labwc-terminal" />
+    </keybind>
+    <keybind key="W-d">
+      <action name="Execute" command="labwc-run" />
+    </keybind>
+    <keybind key="W-space">
+      <action name="Execute" command="labwc-run" />
+    </keybind>
+    <keybind key="Super_L" onRelease="yes">
+      <action name="Execute" command="labwc-run" />
+    </keybind>
+    <keybind key="Menu">
+      <action name="ShowMenu" menu="root-menu" />
+    </keybind>
+    <keybind key="W-l">
+      <action name="Execute" command="labwc-lock" />
+    </keybind>
+    <keybind key="W-S-d">
+      <action name="Execute" command="labwc-dock --restart" />
+    </keybind>
+    <keybind key="W-p">
+      <action name="Execute" command="labwc-power-menu" />
+    </keybind>
+    <keybind key="W-o">
+      <action name="Execute" command="labwc-output-refresh" />
+    </keybind>
+    <keybind key="W-f">
+      <action name="Execute" command="__INSTALLER_LABWC_FILE_MANAGER_COMMAND__" />
+    </keybind>
+    <keybind key="W-a">
+      <action name="Execute" command="__INSTALLER_LABWC_AUDIO_CONTROL_COMMAND__" />
+    </keybind>
+    <keybind key="W-r">
+      <action name="Reconfigure" />
+    </keybind>
+    <keybind key="W-q">
+      <action name="Close" />
+    </keybind>
+    <keybind key="W-S-q">
+      <action name="Execute" command="labwc-logout" />
+    </keybind>
+__INSTALLER_LABWC_WORKSPACE_KEYBIND_LINES__
+    <keybind key="W-Left">
+      <action name="SnapToEdge" direction="left" combine="yes" />
+    </keybind>
+    <keybind key="W-Right">
+      <action name="SnapToEdge" direction="right" combine="yes" />
+    </keybind>
+    <keybind key="W-Up">
+      <action name="ToggleMaximize" />
+    </keybind>
+    <keybind key="W-Down">
+      <action name="UnMaximize" />
+    </keybind>
+    <keybind key="W-S-f">
+      <action name="ToggleFullscreen" />
+    </keybind>
+    <keybind key="Print">
+      <action name="Execute">
+        <command>sh -c 'install -d "$HOME/Pictures"; grim "$HOME/Pictures/Screenshot-$(date +%Y%m%d-%H%M%S).png"'</command>
+      </action>
+    </keybind>
+    <keybind key="S-Print">
+      <action name="Execute">
+        <command>sh -c 'install -d "$HOME/Pictures"; grim -g "$(slurp)" "$HOME/Pictures/Screenshot-$(date +%Y%m%d-%H%M%S).png"'</command>
+      </action>
+    </keybind>
+    <keybind key="XF86AudioRaiseVolume">
+      <action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+" />
+    </keybind>
+    <keybind key="XF86AudioLowerVolume">
+      <action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" />
+    </keybind>
+    <keybind key="XF86AudioMute">
+      <action name="Execute" command="wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" />
+    </keybind>
+    <keybind key="XF86MonBrightnessUp">
+      <action name="Execute" command="brightnessctl set +10%" />
+    </keybind>
+    <keybind key="XF86MonBrightnessDown">
+      <action name="Execute" command="brightnessctl set 10%-" />
+    </keybind>
+  </keyboard>
+
+  <mouse>
+    <default />
+    <context name="Root">
+      <mousebind button="Left" action="Press">
+        <action name="Unfocus" />
+      </mousebind>
+      <mousebind button="Right" action="Press">
+        <action name="ShowMenu" menu="root-menu" />
+      </mousebind>
+    </context>
+    <context name="All">
+      <mousebind direction="W-Up" action="Scroll">
+        <action name="GoToDesktop" to="left" />
+      </mousebind>
+      <mousebind direction="W-Down" action="Scroll">
+        <action name="GoToDesktop" to="right" />
+      </mousebind>
+    </context>
+  </mouse>
+</labwc_config>

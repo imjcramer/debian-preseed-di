@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+snapshot_kind=${1:-}
+case "$snapshot_kind" in
+  daily)
+    snapshot_tag=D
+    snapshot_comment="Scheduled four-times-daily snapshot"
+    ;;
+  weekly)
+    snapshot_tag=W
+    snapshot_comment="Scheduled twice-weekly snapshot"
+    ;;
+  monthly)
+    snapshot_tag=M
+    snapshot_comment="Scheduled monthly snapshot"
+    ;;
+  *)
+    printf 'fatal: unsupported managed Timeshift snapshot kind: %s\n' "${snapshot_kind:-unset}" >&2
+    exit 1
+    ;;
+esac
+
+exec /usr/bin/timeshift --create --scripted --yes --quiet --btrfs --tags "$snapshot_tag" --comments "$snapshot_comment"

@@ -1,0 +1,1085 @@
+#!/bin/bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CONF=/etc/default/secure-boot.conf
+
+[ -r "$CONF" ] || {
+  printf 'fatal: missing Secure Boot config %s\n' "$CONF" >&2
+  exit 1
+}
+
+# shellcheck disable=SC1090
+. "$CONF"
+
+SECURE_BOOT_STATE_MODE=${SECURE_BOOT_STATE_MODE:-luks}
+
+log() {
+  printf '%s\n' "$*" >&2
+}
+
+log_file_with_prefix() {
+  local prefix file_path
+
+  prefix=$1
+  file_path=$2
+  [ -s "$file_path" ] || return 0
+  sed "s/^/[${prefix}] /" "$file_path" >&2 || true
+}
+
+fatal() {
+  log "fatal: $*"
+  exit 1
+}
+
+secure_boot_state_uses_luks() {
+  [ "$SECURE_BOOT_STATE_MODE" = "luks" ]
+}
+
+secure_boot_state_uses_direct() {
+  [ "$SECURE_BOOT_STATE_MODE" = "direct" ]
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fatal "missing command: $1"
+}
+
+require_root() {
+  [ "$(id -u)" -eq 0 ] || fatal "run this command as root or through sudo"
+}
+
+command_with_tty() {
+  [ -c /dev/tty ] || fatal "interactive command requires /dev/tty"
+  "$@" </dev/tty >/dev/tty 2>&1
+}
+
+mounted_source_for_target() {
+  mountpoint=$1
+  while IFS=' ' read -r mount_source mount_path _mount_type _mount_options _mount_rest || [ -n "${mount_source:-}" ]; do
+    [ "$mount_path" = "$mountpoint" ] || continue
+    printf '%s\n' "$mount_source"
+    return 0
+  done </proc/self/mounts
+  return 0
+}
+
+mounted_fstype_for_target() {
+  mountpoint=$1
+  while IFS=' ' read -r _mount_source mount_path mount_type _mount_options _mount_rest || [ -n "${mount_path:-}" ]; do
+    [ "$mount_path" = "$mountpoint" ] || continue
+    printf '%s\n' "$mount_type"
+    return 0
+  done </proc/self/mounts
+  return 0
+}
+
+canonical_device_path() {
+  readlink -f "$1" 2>/dev/null || printf '%s\n' "$1"
+}
+
+same_device_path() {
+  local left right
+  left=$(canonical_device_path "$1")
+  right=$(canonical_device_path "$2")
+  [ "$left" = "$right" ]
+}
+
+find_open_luks_mapping_for_device() {
+  local dev mapper_path mapper_name real_dev
+
+  dev=$1
+  command -v cryptsetup >/dev/null 2>&1 || return 1
+
+  for mapper_path in /dev/mapper/*; do
+    [ -b "$mapper_path" ] || continue
+    mapper_name=${mapper_path##*/}
+    real_dev=$(cryptsetup status "$mapper_name" 2>/dev/null |
+      sed -n 's/^[[:space:]]*device:[[:space:]]*//p' | sed -n '1p')
+    [ -n "$real_dev" ] || continue
+    if same_device_path "$dev" "$real_dev"; then
+      printf '%s\n' "$mapper_path"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+active_secure_boot_luks_mapper() {
+  secure_boot_state_uses_luks || return 1
+  if [ -b "$SECURE_BOOT_LUKS_MAPPER" ]; then
+    printf '%s\n' "$SECURE_BOOT_LUKS_MAPPER"
+    return 0
+  fi
+
+  find_open_luks_mapping_for_device "$SECURE_BOOT_LUKS_DEVICE"
+}
+
+mount_options_for_live_use() {
+  printf '%s\n' "${SECURE_BOOT_STATE_MOUNT_OPTS:-}" | sed \
+    -e 's/\(^\|,\)x-systemd[^,]*//g' \
+    -e 's/,,*/,/g' \
+    -e 's/^,//' \
+    -e 's/,$//'
+}
+
+secure_boot_state_is_mounted() {
+  local mounted_src
+
+  if secure_boot_state_uses_direct; then
+    [ -d "$SECURE_BOOT_STATE_MOUNTPOINT" ]
+    return
+  fi
+
+  mounted_src=$(mounted_source_for_target "$SECURE_BOOT_STATE_MOUNTPOINT")
+  [ -n "$mounted_src" ] || return 1
+  same_device_path "$mounted_src" "$SECURE_BOOT_LUKS_MAPPER"
+}
+
+require_secure_boot_state_mount() {
+  local mounted_fstype
+
+  if secure_boot_state_uses_direct; then
+    [ -d "$SECURE_BOOT_STATE_MOUNTPOINT" ] || fatal "Secure Boot state directory is missing at ${SECURE_BOOT_STATE_MOUNTPOINT}"
+    return 0
+  fi
+
+  secure_boot_state_is_mounted || fatal "Secure Boot state is not mounted at ${SECURE_BOOT_STATE_MOUNTPOINT}; run luks-mok-open first"
+  mounted_fstype=$(mounted_fstype_for_target "$SECURE_BOOT_STATE_MOUNTPOINT")
+  [ "$mounted_fstype" = "ext4" ] || fatal "Secure Boot state must be mounted as ext4 at ${SECURE_BOOT_STATE_MOUNTPOINT}, got ${mounted_fstype:-unknown}"
+}
+
+open_secure_boot_state() {
+  local mounted_src mount_opts
+
+  require_root
+  if secure_boot_state_uses_direct; then
+    install -d -m 0700 "$SECURE_BOOT_STATE_MOUNTPOINT"
+    install -d -m 0700 "$SECURE_BOOT_STATE_DIR"
+    return 0
+  fi
+  require_command cryptsetup
+  require_command mount
+  [ -b "$SECURE_BOOT_LUKS_DEVICE" ] || fatal "Secure Boot LUKS device is missing: $SECURE_BOOT_LUKS_DEVICE"
+  if command -v modprobe >/dev/null 2>&1; then
+    modprobe dm_mod >/dev/null 2>&1 || true
+    modprobe dm_crypt >/dev/null 2>&1 || true
+  fi
+
+  install -d -m 0700 "$SECURE_BOOT_STATE_MOUNTPOINT"
+  if secure_boot_state_is_mounted; then
+    chmod 0700 "$SECURE_BOOT_STATE_MOUNTPOINT"
+    return 0
+  fi
+
+  mounted_src=$(mounted_source_for_target "$SECURE_BOOT_STATE_MOUNTPOINT")
+  if [ -n "$mounted_src" ]; then
+    fatal "${SECURE_BOOT_STATE_MOUNTPOINT} is already mounted from ${mounted_src}"
+  fi
+
+  if [ ! -b "$SECURE_BOOT_LUKS_MAPPER" ]; then
+    command_with_tty cryptsetup open "$SECURE_BOOT_LUKS_DEVICE" "$SECURE_BOOT_LUKS_NAME"
+  fi
+
+  mount_opts=$(mount_options_for_live_use)
+  if [ -n "$mount_opts" ]; then
+    mount -t ext4 -o "$mount_opts" "$SECURE_BOOT_LUKS_MAPPER" "$SECURE_BOOT_STATE_MOUNTPOINT"
+  else
+    mount -t ext4 "$SECURE_BOOT_LUKS_MAPPER" "$SECURE_BOOT_STATE_MOUNTPOINT"
+  fi
+  chmod 0700 "$SECURE_BOOT_STATE_MOUNTPOINT"
+}
+
+close_secure_boot_state() {
+  local mounted_src
+
+  require_root
+  if secure_boot_state_uses_direct; then
+    install -d -m 0700 "$SECURE_BOOT_STATE_MOUNTPOINT"
+    return 0
+  fi
+  require_command cryptsetup
+  require_command umount
+
+  mounted_src=$(mounted_source_for_target "$SECURE_BOOT_STATE_MOUNTPOINT")
+  if [ -n "$mounted_src" ]; then
+    same_device_path "$mounted_src" "$SECURE_BOOT_LUKS_MAPPER" || \
+      fatal "${SECURE_BOOT_STATE_MOUNTPOINT} is mounted from ${mounted_src}, expected ${SECURE_BOOT_LUKS_MAPPER}"
+    umount "$SECURE_BOOT_STATE_MOUNTPOINT"
+    install -d -m 0700 "$SECURE_BOOT_STATE_MOUNTPOINT"
+  fi
+
+  if [ -b "$SECURE_BOOT_LUKS_MAPPER" ]; then
+    cryptsetup close "$SECURE_BOOT_LUKS_NAME"
+  fi
+}
+
+change_secure_boot_state_passphrase() {
+  require_root
+  secure_boot_state_uses_luks || fatal "state-passwd is only supported when SECURE_BOOT_STATE_MODE=luks"
+  require_command cryptsetup
+  [ -b "$SECURE_BOOT_LUKS_DEVICE" ] || fatal "Secure Boot LUKS device is missing: $SECURE_BOOT_LUKS_DEVICE"
+
+  if secure_boot_state_is_mounted || [ -b "$SECURE_BOOT_LUKS_MAPPER" ]; then
+    fatal "close the Secure Boot state partition before changing its passphrase"
+  fi
+
+  command_with_tty cryptsetup luksChangeKey "$SECURE_BOOT_LUKS_DEVICE"
+}
+
+normalize_fingerprint() {
+  tr '[:upper:]' '[:lower:]' | tr -d '[:space:]:'
+}
+
+module_signing_only_oid() {
+  printf '%s\n' '1.3.6.1.4.1.2312.16.1.2'
+}
+
+managed_cert_supports_boot_images() {
+  cert_path=${1:-$SECURE_BOOT_MOK_CERT_PEM}
+  cert_text=$(openssl x509 -in "$cert_path" -text -noout 2>/dev/null) || return 1
+  printf '%s\n' "$cert_text" | grep -F "Code Signing" >/dev/null 2>&1 || return 1
+  if printf '%s\n' "$cert_text" | grep -F "$(module_signing_only_oid)" >/dev/null 2>&1; then
+    return 1
+  fi
+}
+
+cert_sha256_fingerprint() {
+  cert_path=$1
+  cert_format=${2:-PEM}
+  openssl x509 -inform "$cert_format" -in "$cert_path" -noout -fingerprint -sha256 2>/dev/null |
+    sed 's/^.*=//' | normalize_fingerprint
+}
+
+cert_sha1_fingerprint() {
+  cert_path=$1
+  cert_format=${2:-PEM}
+  openssl x509 -inform "$cert_format" -in "$cert_path" -noout -fingerprint -sha1 2>/dev/null |
+    sed 's/^.*=//' | normalize_fingerprint
+}
+
+cert_common_name() {
+  cert_path=$1
+  cert_format=${2:-PEM}
+  openssl x509 -inform "$cert_format" -in "$cert_path" -noout -subject -nameopt multiline 2>/dev/null |
+    sed -n 's/^[[:space:]]*commonName[[:space:]]*=[[:space:]]*//p' | sed -n '1p'
+}
+
+cert_public_key_fingerprint() {
+  cert_path=$1
+  openssl x509 -in "$cert_path" -pubkey -noout 2>/dev/null |
+    openssl pkey -pubin -outform DER 2>/dev/null |
+    openssl dgst -sha256 2>/dev/null |
+    sed -n 's/^.*= //p' | sed -n '1p' |
+    normalize_fingerprint
+}
+
+key_public_key_fingerprint() {
+  key_path=$1
+  openssl pkey -in "$key_path" -pubout -outform DER 2>/dev/null |
+    openssl dgst -sha256 2>/dev/null |
+    sed -n 's/^.*= //p' | sed -n '1p' |
+    normalize_fingerprint
+}
+
+managed_keypair_is_valid() {
+  [ -s "$SECURE_BOOT_MOK_KEY" ] || return 1
+  [ -s "$SECURE_BOOT_MOK_CERT_PEM" ] || return 1
+  [ -s "$SECURE_BOOT_MOK_CERT_DER" ] || return 1
+  managed_cert_supports_boot_images "$SECURE_BOOT_MOK_CERT_PEM" || return 1
+
+  pem_fp=$(cert_sha256_fingerprint "$SECURE_BOOT_MOK_CERT_PEM" PEM) || return 1
+  der_fp=$(cert_sha256_fingerprint "$SECURE_BOOT_MOK_CERT_DER" DER) || return 1
+  [ -n "$pem_fp" ] || return 1
+  [ "$pem_fp" = "$der_fp" ] || return 1
+
+  cert_pub_fp=$(cert_public_key_fingerprint "$SECURE_BOOT_MOK_CERT_PEM") || return 1
+  key_pub_fp=$(key_public_key_fingerprint "$SECURE_BOOT_MOK_KEY") || return 1
+  [ -n "$cert_pub_fp" ] || return 1
+  [ "$cert_pub_fp" = "$key_pub_fp" ] || return 1
+}
+
+ensure_directory_layout() {
+  if secure_boot_state_uses_direct; then
+    install -d -m 0700 "$SECURE_BOOT_STATE_MOUNTPOINT"
+  else
+    require_secure_boot_state_mount
+    chmod 0700 "$SECURE_BOOT_STATE_MOUNTPOINT"
+  fi
+  install -d -m 0700 "$SECURE_BOOT_STATE_DIR"
+  install -d -m 0755 "$(dirname "$SECURE_BOOT_DKMS_CONF")"
+  install -d -m 0755 "$(dirname "$SECURE_BOOT_SIGN_MODULE_HELPER")"
+}
+
+sync_mok_enrollment_copy() {
+  [ -r "$SECURE_BOOT_MOK_CERT_DER" ] || fatal "generated MOK DER certificate is missing at $SECURE_BOOT_MOK_CERT_DER"
+  [ -n "$(mounted_source_for_target /boot/efi)" ] || fatal "/boot/efi must be mounted before syncing the MOK enrollment certificate"
+  install -d -m 0755 "$SECURE_BOOT_MOK_ENROLLMENT_DIR"
+  install -m 0644 "$SECURE_BOOT_MOK_CERT_DER" "$SECURE_BOOT_MOK_ENROLLMENT_CERT"
+}
+
+write_openssl_config() {
+  cat >"$SECURE_BOOT_OPENSSL_CONFIG" <<OPENSSL_EOF
+[ req ]
+default_bits = ${SECURE_BOOT_MOK_RSA_BITS}
+default_md = sha256
+prompt = no
+distinguished_name = dn
+x509_extensions = v3_secure_boot
+
+[ dn ]
+C = ${SECURE_BOOT_MOK_COUNTRY}
+ST = ${SECURE_BOOT_MOK_STATE}
+L = ${SECURE_BOOT_MOK_LOCALITY}
+O = ${SECURE_BOOT_MOK_ORGANIZATION}
+OU = ${SECURE_BOOT_MOK_ORG_UNIT}
+CN = ${SECURE_BOOT_MOK_COMMON_NAME}
+emailAddress = ${SECURE_BOOT_MOK_EMAIL}
+
+[ v3_secure_boot ]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+# Do not include shim's module-signing-only EKU OID here. GRUB/shim will refuse
+# boot images signed by keys carrying that restriction.
+extendedKeyUsage = codeSigning
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+OPENSSL_EOF
+  chmod 0600 "$SECURE_BOOT_OPENSSL_CONFIG"
+}
+
+ensure_keypair() {
+  require_command openssl
+  if [ -e "$SECURE_BOOT_MOK_KEY" ] || [ -e "$SECURE_BOOT_MOK_CERT_PEM" ] || [ -e "$SECURE_BOOT_MOK_CERT_DER" ]; then
+    if managed_keypair_is_valid; then
+      sync_mok_enrollment_copy
+      return 0
+    fi
+    log "warn: rotating incomplete or invalid managed Secure Boot signing material"
+    rm -f -- "$SECURE_BOOT_MOK_KEY" "$SECURE_BOOT_MOK_CERT_PEM" "$SECURE_BOOT_MOK_CERT_DER"
+  fi
+
+  ensure_directory_layout
+  write_openssl_config
+  tmpdir=$(mktemp -d) || fatal "failed to create temporary Secure Boot keypair directory"
+  trap 'rm -rf "$tmpdir"' RETURN
+  if ! openssl req \
+      -new \
+      -x509 \
+      -batch \
+      -noenc \
+      -sha256 \
+      -days "$SECURE_BOOT_MOK_VALID_DAYS" \
+      -newkey "rsa:${SECURE_BOOT_MOK_RSA_BITS}" \
+      -config "$SECURE_BOOT_OPENSSL_CONFIG" \
+      -keyout "$tmpdir/MOK.priv" \
+      -out "$tmpdir/MOK.pem"; then
+    log "warn: openssl req -noenc failed; retrying with -nodes"
+    openssl req \
+      -new \
+      -x509 \
+      -batch \
+      -nodes \
+      -sha256 \
+      -days "$SECURE_BOOT_MOK_VALID_DAYS" \
+      -newkey "rsa:${SECURE_BOOT_MOK_RSA_BITS}" \
+      -config "$SECURE_BOOT_OPENSSL_CONFIG" \
+      -keyout "$tmpdir/MOK.priv" \
+      -out "$tmpdir/MOK.pem" || fatal "failed to generate Secure Boot MOK keypair"
+  fi
+  openssl x509 -in "$tmpdir/MOK.pem" -outform DER -out "$tmpdir/MOK.der" || fatal "failed to convert Secure Boot MOK certificate to DER"
+  install -m 0600 "$tmpdir/MOK.priv" "$SECURE_BOOT_MOK_KEY"
+  install -m 0644 "$tmpdir/MOK.pem" "$SECURE_BOOT_MOK_CERT_PEM"
+  install -m 0644 "$tmpdir/MOK.der" "$SECURE_BOOT_MOK_CERT_DER"
+  managed_keypair_is_valid || fatal "generated Secure Boot MOK keypair failed validation"
+  sync_mok_enrollment_copy
+  rm -rf "$tmpdir"
+  trap - RETURN
+}
+
+ensure_dkms_framework_config() {
+  require_secure_boot_state_mount
+  ensure_directory_layout
+  cat >"$SECURE_BOOT_DKMS_CONF" <<DKMS_EOF
+# Managed by installer automation. Do not edit manually.
+mok_signing_key="${SECURE_BOOT_MOK_KEY}"
+mok_certificate="${SECURE_BOOT_MOK_CERT_DER}"
+sign_file="/lib/modules/\${kernelver}/build/scripts/sign-file"
+DKMS_EOF
+  chmod 0644 "$SECURE_BOOT_DKMS_CONF"
+}
+
+managed_cert_fingerprint() {
+  cert_sha1_fingerprint "$SECURE_BOOT_MOK_CERT_DER" DER
+}
+
+fingerprints_from_mokutil() {
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *Fingerprint:*)
+        fingerprint=${line##*Fingerprint: }
+        printf '%s\n' "$fingerprint" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]'
+        ;;
+    esac
+  done
+}
+
+fingerprint_present() {
+  expected=$1
+  stream=$2
+  printf '%s\n' "$stream" | grep -F -x "$expected" >/dev/null 2>&1
+}
+
+fingerprint_manifest_count() {
+  local manifest count
+
+  manifest=$1
+  count=$(grep -c -v '^[[:space:]]*$' "$manifest" 2>/dev/null || true)
+  printf '%s\n' "$count"
+}
+
+first_missing_fingerprint() {
+  local manifest listed_fps fp
+
+  manifest=$1
+  listed_fps=$2
+
+  while IFS= read -r fp || [ -n "$fp" ]; do
+    [ -n "$fp" ] || continue
+    if ! fingerprint_present "$fp" "$listed_fps"; then
+      printf '%s\n' "$fp"
+      return 0
+    fi
+  done < "$manifest"
+
+  return 1
+}
+
+wait_for_mok_delete_fingerprints() {
+  local manifest attempts attempt listed_delete_fps missing_fp
+
+  manifest=$1
+  attempts=${2:-3}
+  attempt=1
+
+  while [ "$attempt" -le "$attempts" ]; do
+    listed_delete_fps=$(mokutil --list-delete 2>/dev/null | fingerprints_from_mokutil || true)
+    missing_fp=$(first_missing_fingerprint "$manifest" "$listed_delete_fps" || true)
+    [ -z "$missing_fp" ] && return 0
+    [ "$attempt" -ge "$attempts" ] && {
+      printf '%s\n' "$missing_fp"
+      return 1
+    }
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+}
+
+queue_duplicate_mok_deletions() {
+  local hash_file delete_manifest delete_fp_manifest expected_cn delete_count missing_delete_fp delete_cert
+
+  hash_file=$1
+  delete_manifest=$2
+  delete_fp_manifest=$3
+  expected_cn=$4
+
+  set --
+  while IFS= read -r delete_cert || [ -n "$delete_cert" ]; do
+    [ -n "$delete_cert" ] || continue
+    set -- "$@" "$delete_cert"
+  done < "$delete_manifest"
+  [ "$#" -gt 0 ] || return 0
+
+  delete_count=$(fingerprint_manifest_count "$delete_fp_manifest")
+  log "info: queueing deletion of ${delete_count} enrolled MOK certificate(s) with matching common name ${expected_cn}"
+  if ! mokutil --delete "$@" --hash-file "$hash_file" >/dev/null 2>&1; then
+    log "warn: failed to queue deletion for enrolled MOK certificates matching ${expected_cn}"
+    return 1
+  fi
+
+  if ! missing_delete_fp=$(wait_for_mok_delete_fingerprints "$delete_fp_manifest" 3); then
+    log "warn: MOK delete request did not remain queued for duplicate key fingerprint ${missing_delete_fp}"
+    mokutil --revoke-delete >/dev/null 2>&1 || log "warn: failed to revoke incomplete MOK delete request"
+    return 1
+  fi
+
+  mokutil --timeout -1 >/dev/null 2>&1 || fatal "failed to disable MokManager prompt timeout"
+}
+
+ensure_mok_import() {
+  require_command mokutil
+  [ -d /sys/firmware/efi/efivars ] || fatal "EFI variable access is unavailable; cannot queue MOK import"
+  [ -n "${SECURE_BOOT_MOK_ENROLL_PASSWORD:-}" ] || fatal "SECURE_BOOT_MOK_ENROLL_PASSWORD must be set for non-interactive MOK import"
+
+  expected_fp=$(managed_cert_fingerprint) || fatal "could not calculate managed MOK certificate fingerprint"
+  [ -n "$expected_fp" ] || fatal "could not calculate managed MOK certificate fingerprint"
+  expected_cn=$(cert_common_name "$SECURE_BOOT_MOK_CERT_DER" DER || true)
+  [ -n "$expected_cn" ] || fatal "could not determine managed MOK certificate common name"
+  pending_fps=$(mokutil --list-new 2>/dev/null | fingerprints_from_mokutil || true)
+  pending_delete_fps=$(mokutil --list-delete 2>/dev/null | fingerprints_from_mokutil || true)
+
+  if [ -n "$pending_fps" ]; then
+    log "info: revoking existing pending MOK import before queueing $SECURE_BOOT_MOK_CERT_DER"
+    mokutil --revoke-import >/dev/null 2>&1 || fatal "failed to revoke stale pending MOK import"
+  fi
+  if [ -n "$pending_delete_fps" ]; then
+    log "info: revoking existing pending MOK delete request before queueing managed cleanup"
+    mokutil --revoke-delete >/dev/null 2>&1 || fatal "failed to revoke stale pending MOK delete request"
+  fi
+
+  hash_file=$(mktemp)
+  chmod 0600 "$hash_file"
+  if ! mokutil --generate-hash="$SECURE_BOOT_MOK_ENROLL_PASSWORD" >"$hash_file"; then
+    rm -f "$hash_file"
+    fatal "failed to generate MokManager password hash"
+  fi
+  [ -s "$hash_file" ] || {
+    rm -f "$hash_file"
+    fatal "failed to stage MOK password hash"
+  }
+  mokutil --set-fallback-noreboot true >/dev/null 2>&1 || log "warn: failed to set shim fallback no-reboot flag"
+
+  export_dir=$(mktemp -d)
+  delete_manifest=$(mktemp)
+  delete_fp_manifest=$(mktemp)
+  trap 'rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"; rm -rf "$export_dir"' RETURN
+
+  if ! (
+    cd "$export_dir" &&
+    mokutil --export >/dev/null 2>&1
+  ); then
+    rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"
+    rm -rf "$export_dir"
+    fatal "failed to export enrolled MOK certificates"
+  fi
+
+  exact_enrolled=false
+  same_name_match_count=0
+  for enrolled_cert in "$export_dir"/*.der; do
+    [ -e "$enrolled_cert" ] || continue
+    enrolled_cn=$(cert_common_name "$enrolled_cert" DER || true)
+    [ "$enrolled_cn" = "$expected_cn" ] || continue
+    same_name_match_count=$((same_name_match_count + 1))
+    enrolled_fp=$(cert_sha1_fingerprint "$enrolled_cert" DER || true)
+    [ -n "$enrolled_fp" ] || continue
+    if [ "$enrolled_fp" = "$expected_fp" ]; then
+      exact_enrolled=true
+      continue
+    fi
+    printf '%s\n' "$enrolled_cert" >>"$delete_manifest"
+    printf '%s\n' "$enrolled_fp" >>"$delete_fp_manifest"
+  done
+
+  if [ -s "$delete_manifest" ]; then
+    if [ "$exact_enrolled" = true ]; then
+      queue_duplicate_mok_deletions "$hash_file" "$delete_manifest" "$delete_fp_manifest" "$expected_cn" || true
+    else
+      delete_count=$(fingerprint_manifest_count "$delete_fp_manifest")
+      log "warn: found ${delete_count} enrolled MOK certificate(s) with common name ${expected_cn}; deferring stale duplicate cleanup until after managed MOK enrollment"
+    fi
+  fi
+
+  if [ "$same_name_match_count" -ge 1 ] && [ ! -s "$delete_manifest" ] && [ "$exact_enrolled" = true ]; then
+    log "info: matching MOK certificate ${expected_cn} is already enrolled; no same-name stale keys require revocation"
+  fi
+
+  if [ "$exact_enrolled" = true ]; then
+    rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"
+    rm -rf "$export_dir"
+    trap - RETURN
+    return 0
+  fi
+
+  log "info: queueing MOK import for $SECURE_BOOT_MOK_CERT_DER"
+  if ! mokutil --import "$SECURE_BOOT_MOK_CERT_DER" --hash-file "$hash_file" >/dev/null 2>&1; then
+    rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"
+    rm -rf "$export_dir"
+    fatal "failed to queue MOK import for $SECURE_BOOT_MOK_CERT_DER"
+  fi
+  rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"
+  rm -rf "$export_dir"
+  trap - RETURN
+  mokutil --timeout -1 >/dev/null 2>&1 || fatal "failed to disable MokManager prompt timeout"
+
+  pending_fps=$(mokutil --list-new 2>/dev/null | fingerprints_from_mokutil || true)
+  fingerprint_present "$expected_fp" "$pending_fps" || fatal "MOK import did not remain queued for $SECURE_BOOT_MOK_CERT_DER"
+}
+
+module_compression_kind() {
+  case "$1" in
+    *.ko) printf '%s\n' none ;;
+    *.ko.gz) printf '%s\n' gzip ;;
+    *.ko.xz) printf '%s\n' xz ;;
+    *.ko.zst) printf '%s\n' zstd ;;
+    *) fatal "unsupported module path suffix: $1" ;;
+  esac
+}
+
+decompress_module_copy() {
+  module_path=$1
+  output_path=$2
+
+  case "$(module_compression_kind "$module_path")" in
+    none) cp -f -- "$module_path" "$output_path" ;;
+    gzip) gzip -d -c -- "$module_path" >"$output_path" ;;
+    xz) xz -d -c -- "$module_path" >"$output_path" ;;
+    zstd) zstd -d -q -c -- "$module_path" >"$output_path" ;;
+  esac
+}
+
+recompress_module_copy() {
+  kind=$1
+  input_path=$2
+  output_path=$3
+
+  case "$kind" in
+    none) cp -f -- "$input_path" "$output_path" ;;
+    gzip) gzip -n -9 -c -- "$input_path" >"$output_path" ;;
+    xz) xz -z -c -- "$input_path" >"$output_path" ;;
+    zstd) zstd -q -f -c -- "$input_path" >"$output_path" ;;
+    *) fatal "unsupported module compression kind: $kind" ;;
+  esac
+}
+
+resolve_module_kernelver() {
+  module_path=$1
+  vermagic=$(modinfo -F vermagic "$module_path" 2>/dev/null || true)
+  [ -n "$vermagic" ] || fatal "could not determine kernel version from module vermagic: $module_path"
+  printf '%s\n' "${vermagic%% *}"
+}
+
+resolve_module_sig_hash() {
+  kernelver=$1
+  for config_path in \
+    "/lib/modules/$kernelver/build/include/config/auto.conf" \
+    "/lib/modules/$kernelver/build/.config" \
+    "/boot/config-$kernelver"; do
+    [ -f "$config_path" ] || continue
+    hash=$(sed -n 's/^CONFIG_MODULE_SIG_HASH=//p' "$config_path" | sed 's/"//g' | sed -n '1p')
+    [ -n "$hash" ] && {
+      printf '%s\n' "$hash"
+      return 0
+    }
+  done
+  fatal "could not determine CONFIG_MODULE_SIG_HASH for kernel $kernelver"
+}
+
+resolve_sign_file() {
+  kernelver=$1
+  short_kernelver=${kernelver%.*}
+
+  for candidate in \
+    "/lib/modules/$kernelver/build/scripts/sign-file" \
+    "/usr/lib/linux-kbuild-$short_kernelver/scripts/sign-file"; do
+    [ -x "$candidate" ] || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+
+  fatal "could not locate sign-file for kernel $kernelver"
+}
+
+module_sig_key() {
+  modinfo -F sig_key "$1" 2>/dev/null | normalize_fingerprint || true
+}
+
+module_signer() {
+  modinfo -F signer "$1" 2>/dev/null || true
+}
+
+string_has_debian_marker() {
+  value=${1:-}
+  lowered=$(printf '%s\n' "$value" | tr '[:upper:]' '[:lower:]')
+  case "$lowered" in
+    *debian*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+module_sig_id() {
+  modinfo -F sig_id "$1" 2>/dev/null || true
+}
+
+module_has_any_signature() {
+  [ -n "$(module_signer "$1")" ] || \
+    [ -n "$(module_sig_key "$1")" ] || \
+    [ -n "$(module_sig_id "$1")" ]
+}
+
+module_has_managed_signature() {
+  [ "$(module_signer "$1")" = "$SECURE_BOOT_MOK_COMMON_NAME" ] || return 1
+  [ "$(module_sig_key "$1")" = "$(managed_cert_fingerprint)" ]
+}
+
+module_has_debian_signature() {
+  string_has_debian_marker "$(module_signer "$1")"
+}
+
+sign_module_in_place() {
+  module_path=$1
+  kernelver=${2:-$(resolve_module_kernelver "$module_path")}
+
+  SIGN_MODULE_CHANGED=0
+
+  # Leave Debian-signed modules and modules already signed by our managed MOK
+  # alone; re-sign everything else.
+  module_has_debian_signature "$module_path" && return 0
+  module_has_managed_signature "$module_path" && return 0
+
+  tmpdir=$(mktemp -d) || fatal "failed to create temporary module-signing directory"
+  raw_module="$tmpdir/module.ko"
+  signed_module="$tmpdir/module.signed"
+  kind=$(module_compression_kind "$module_path")
+  sign_file=$(resolve_sign_file "$kernelver")
+  sig_hash=$(resolve_module_sig_hash "$kernelver")
+
+  decompress_module_copy "$module_path" "$raw_module" || {
+    rm -rf "$tmpdir"
+    fatal "failed to decompress module before signing: $module_path"
+  }
+  if ! "$sign_file" "$sig_hash" "$SECURE_BOOT_MOK_KEY" "$SECURE_BOOT_MOK_CERT_PEM" "$raw_module"; then
+    rm -rf "$tmpdir"
+    fatal "failed to sign module $module_path for kernel $kernelver using $sign_file"
+  fi
+  recompress_module_copy "$kind" "$raw_module" "$signed_module" || {
+    rm -rf "$tmpdir"
+    fatal "failed to recompress signed module: $module_path"
+  }
+  install -m 0644 "$signed_module" "$module_path" || {
+    rm -rf "$tmpdir"
+    fatal "failed to install signed module over original: $module_path"
+  }
+  SIGN_MODULE_CHANGED=1
+  rm -rf "$tmpdir"
+}
+
+all_installed_kernel_versions() {
+  for module_dir in /lib/modules/*; do
+    [ -d "$module_dir" ] || continue
+    printf '%s\n' "${module_dir##*/}"
+  done | LC_ALL=C sort -u
+}
+
+bootable_kernel_versions() {
+  for kernel_image in /boot/vmlinuz-*; do
+    [ -f "$kernel_image" ] || continue
+    printf '%s\n' "${kernel_image##*/vmlinuz-}"
+  done | LC_ALL=C sort -u
+}
+
+external_module_paths_for_kernel() {
+  kernelver=$1
+
+  for modules_dir in \
+    "/lib/modules/$kernelver/updates" \
+    "/lib/modules/$kernelver/extra"; do
+    [ -d "$modules_dir" ] || continue
+    find "$modules_dir" -type f \( -name '*.ko' -o -name '*.ko.gz' -o -name '*.ko.xz' -o -name '*.ko.zst' \)
+  done | LC_ALL=C sort -u
+}
+
+sign_modules_for_kernel() {
+  kernelver=$1
+  changed=0
+  SIGN_MODULES_CHANGED=0
+
+  if [ ! -d "/lib/modules/$kernelver" ]; then
+    log "warn: skipping external module signing for $kernelver because /lib/modules/$kernelver is missing"
+    return 0
+  fi
+
+  log "info: scanning external modules for kernel $kernelver"
+
+  while IFS= read -r module_path; do
+    [ -n "$module_path" ] || continue
+    if ! sign_module_in_place "$module_path" "$kernelver"; then
+      fatal "failed to sign external module $module_path for kernel $kernelver"
+    fi
+    [ "${SIGN_MODULE_CHANGED:-0}" -eq 1 ] && changed=1
+  done <<EOF_MODULES
+$(external_module_paths_for_kernel "$kernelver")
+EOF_MODULES
+
+  if [ "$changed" -eq 1 ]; then
+    require_command depmod
+    depmod "$kernelver" || fatal "depmod failed after signing external modules for kernel $kernelver"
+  fi
+  SIGN_MODULES_CHANGED=$changed
+}
+
+kernel_image_has_managed_signature() {
+  kernel_image=$1
+  sbverify --cert "$SECURE_BOOT_MOK_CERT_PEM" "$kernel_image" >/dev/null 2>&1
+}
+
+kernel_image_has_debian_signature() {
+  kernel_image=$1
+  sbverify --list "$kernel_image" 2>/dev/null |
+    tr '[:upper:]' '[:lower:]' |
+    grep -E -q 'subject:.*debian|issuer:.*debian'
+}
+
+kernel_image_has_any_signature() {
+  kernel_image=$1
+  sbverify --list "$kernel_image" 2>/dev/null | grep -E -q '^signature[[:space:]]+[0-9]+'
+}
+
+write_file_from_copy() {
+  src_path=$1
+  dest_path=$2
+  dest_mode=$3
+  label=$4
+  err_file=
+
+  [ -r "$src_path" ] || fatal "${label} source is unreadable: $src_path"
+  err_file=$(mktemp) || fatal "failed to create temporary error log while writing ${label}"
+
+  if ! cat "$src_path" > "$dest_path" 2>"$err_file"; then
+    log_file_with_prefix "$label" "$err_file"
+    rm -f "$err_file"
+    fatal "failed to write ${label}: $dest_path"
+  fi
+  if ! chmod "$dest_mode" "$dest_path" 2>"$err_file"; then
+    log_file_with_prefix "$label" "$err_file"
+    rm -f "$err_file"
+    fatal "failed to set mode ${dest_mode} on ${label}: $dest_path"
+  fi
+
+  rm -f "$err_file"
+}
+
+sign_kernel_image() {
+  kernelver=$1
+  kernel_image="/boot/vmlinuz-$kernelver"
+  [ -f "$kernel_image" ] || return 0
+  require_command sbsign
+  require_command sbverify
+  kernel_image_has_debian_signature "$kernel_image" && return 0
+  kernel_image_has_managed_signature "$kernel_image" && return 0
+
+  tmpdir=$(mktemp -d) || fatal "failed to create temporary kernel-signing directory for $kernelver"
+  unsigned_image="$tmpdir/vmlinuz.unsigned"
+  sbsign_err="$tmpdir/sbsign.stderr"
+
+  cp -f -- "$kernel_image" "$unsigned_image" || {
+    rm -rf "$tmpdir"
+    fatal "failed to preserve unsigned kernel image before signing: $kernel_image"
+  }
+  if ! sbsign --key "$SECURE_BOOT_MOK_KEY" --cert "$SECURE_BOOT_MOK_CERT_PEM" --output "$kernel_image" "$unsigned_image" 2>"$sbsign_err"; then
+    log_file_with_prefix sbsign "$sbsign_err"
+    if [ -f "$unsigned_image" ]; then
+      write_file_from_copy "$unsigned_image" "$kernel_image" 0644 "kernel image restore"
+    fi
+    rm -rf "$tmpdir"
+    fatal "failed to sign Secure Boot kernel image in place: $kernel_image"
+  fi
+  if ! kernel_image_has_managed_signature "$kernel_image"; then
+    if [ -f "$unsigned_image" ]; then
+      write_file_from_copy "$unsigned_image" "$kernel_image" 0644 "kernel image restore"
+    fi
+    rm -rf "$tmpdir"
+    fatal "signed kernel image failed managed MOK verification after in-place signing: $kernel_image"
+  fi
+  chmod 0644 "$kernel_image" || {
+    rm -rf "$tmpdir"
+    fatal "failed to normalize mode on signed kernel image: $kernel_image"
+  }
+  rm -rf "$tmpdir"
+}
+
+sign_initrd_sidecar() {
+  kernelver=$1
+  initrd="/boot/initrd.img-$kernelver"
+  sig_path="${initrd}.sig"
+
+  [ -f "$initrd" ] || return 0
+  tmp_sig=$(mktemp) || fatal "failed to create temporary initrd signature path for $kernelver"
+  if ! openssl dgst -sha256 -sign "$SECURE_BOOT_MOK_KEY" -out "$tmp_sig" "$initrd"; then
+    rm -f "$tmp_sig"
+    fatal "failed to sign initramfs sidecar for kernel $kernelver"
+  fi
+  write_file_from_copy "$tmp_sig" "$sig_path" 0644 "initramfs sidecar signature"
+  rm -f "$tmp_sig"
+}
+
+refresh_initramfs_for_kernel() {
+  kernelver=$1
+
+  if command -v update-initramfs >/dev/null 2>&1; then
+    update-initramfs -u -k "$kernelver" || fatal "failed to refresh initramfs for kernel $kernelver after Secure Boot module signing"
+  fi
+}
+
+repair_kernel() {
+  kernelver=$1
+  kernel_image="/boot/vmlinuz-$kernelver"
+  [ -f "$kernel_image" ] || {
+    log "warn: skipping kernel repair for $kernelver because $kernel_image is missing"
+    return 0
+  }
+
+  sign_modules_for_kernel "$kernelver"
+  modules_changed=${SIGN_MODULES_CHANGED:-0}
+
+  [ -f "$kernel_image" ] || return 0
+  if kernel_image_has_debian_signature "$kernel_image"; then
+    if [ "$modules_changed" -eq 1 ]; then
+      refresh_initramfs_for_kernel "$kernelver"
+    fi
+    log "info: leaving Debian-signed kernel image untouched for $kernelver"
+    cleanup_kernel_artifacts "$kernelver"
+    return 0
+  fi
+  refresh_initramfs_for_kernel "$kernelver"
+  sign_kernel_image "$kernelver" || fatal "failed to sign Secure Boot kernel image for $kernelver"
+  sign_initrd_sidecar "$kernelver" || fatal "failed to sign initramfs sidecar for $kernelver"
+}
+
+cleanup_kernel_artifacts() {
+  kernelver=$1
+  rm -f -- "/boot/initrd.img-$kernelver.sig"
+}
+
+verify_bootable_kernel_images() {
+  found_kernel=0
+  require_command sbverify
+
+  while IFS= read -r kernelver; do
+    [ -n "$kernelver" ] || continue
+    kernel_image="/boot/vmlinuz-$kernelver"
+    [ -f "$kernel_image" ] || continue
+    found_kernel=1
+    if kernel_image_has_debian_signature "$kernel_image"; then
+      continue
+    fi
+    kernel_image_has_managed_signature "$kernel_image" || \
+      fatal "bootable non-Debian kernel image is not signed with the managed MOK: $kernel_image"
+  done <<EOF_KERNELS
+$(bootable_kernel_versions)
+EOF_KERNELS
+
+  [ "$found_kernel" -eq 1 ] || fatal "no bootable kernel images found under /boot"
+}
+
+cmd_sign_installed_modules() {
+  require_root
+  ensure_keypair
+  ensure_dkms_framework_config
+  while IFS= read -r kernelver; do
+    [ -n "$kernelver" ] || continue
+    sign_modules_for_kernel "$kernelver"
+  done <<EOF_KERNELS
+$(all_installed_kernel_versions)
+EOF_KERNELS
+}
+
+cmd_repair_installed_kernels() {
+  require_root
+  ensure_keypair
+  ensure_dkms_framework_config
+  while IFS= read -r kernelver; do
+    [ -n "$kernelver" ] || continue
+    repair_kernel "$kernelver"
+  done <<EOF_KERNELS
+$(bootable_kernel_versions)
+EOF_KERNELS
+  verify_bootable_kernel_images
+}
+
+cmd_kernel_postinst() {
+  kernelver=${1:-}
+  [ -n "$kernelver" ] || fatal "kernel-postinst requires a kernel version"
+  require_root
+  ensure_keypair
+  ensure_dkms_framework_config
+  repair_kernel "$kernelver"
+}
+
+cmd_kernel_header_postinst() {
+  kernelver=${1:-}
+  [ -n "$kernelver" ] || fatal "kernel-header-postinst requires a kernel version"
+  require_root
+  ensure_keypair
+  ensure_dkms_framework_config
+  if [ -d "/lib/modules/$kernelver" ] && [ -f "/boot/vmlinuz-$kernelver" ]; then
+    repair_kernel "$kernelver"
+  fi
+}
+
+cmd_kernel_postrm() {
+  kernelver=${1:-}
+  [ -n "$kernelver" ] || fatal "kernel-postrm requires a kernel version"
+  require_root
+  cleanup_kernel_artifacts "$kernelver"
+}
+
+cmd_install_mok() {
+  require_root
+  ensure_keypair
+  ensure_dkms_framework_config
+  ensure_mok_import
+}
+
+cmd_prepare() {
+  require_root
+  ensure_keypair
+  ensure_dkms_framework_config
+}
+
+case "${1:-}" in
+  prepare)
+    shift
+    cmd_prepare "$@"
+    ;;
+  sign-installed-modules)
+    shift
+    cmd_sign_installed_modules "$@"
+    ;;
+  repair-installed-kernels)
+    shift
+    cmd_repair_installed_kernels "$@"
+    ;;
+  kernel-postinst)
+    shift
+    cmd_kernel_postinst "$@"
+    ;;
+  kernel-header-postinst)
+    shift
+    cmd_kernel_header_postinst "$@"
+    ;;
+  kernel-postrm)
+    shift
+    cmd_kernel_postrm "$@"
+    ;;
+  install-mok)
+    shift
+    cmd_install_mok "$@"
+    ;;
+  state-open)
+    shift
+    open_secure_boot_state
+    ;;
+  state-close)
+    shift
+    close_secure_boot_state
+    ;;
+  state-passwd)
+    shift
+    change_secure_boot_state_passphrase
+    ;;
+  sign-module)
+    shift
+    require_root
+    ensure_keypair
+    ensure_dkms_framework_config
+    [ "$#" -ge 1 ] || fatal "sign-module requires at least one module path"
+    for module_path in "$@"; do
+      sign_module_in_place "$module_path"
+    done
+    ;;
+  *)
+    echo "usage: ${0##*/} {prepare|sign-installed-modules|repair-installed-kernels|kernel-postinst <version>|kernel-header-postinst <version>|kernel-postrm <version>|install-mok|state-open|state-close|state-passwd|sign-module <module...>}" >&2
+    exit 1
+    ;;
+esac

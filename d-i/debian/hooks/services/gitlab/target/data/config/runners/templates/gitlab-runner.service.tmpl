@@ -1,0 +1,56 @@
+[Unit]
+Description=__INSTALLER_GITLAB_RUNNER_DESCRIPTION__
+Documentation=https://docs.gitlab.com/runner/executors/docker/
+Wants=podman.socket
+After=podman.socket
+
+[Service]
+Type=simple
+WorkingDirectory=__INSTALLER_GITLAB_RUNNER_WORK_DIR__
+ExecStartPre=/usr/bin/test -r __INSTALLER_GITLAB_RUNNER_CONFIG_PATH__
+ExecStartPre=/usr/bin/install -d -m 0700 __INSTALLER_GITLAB_RUNNER_TMP_DIR__
+ExecStartPre=/usr/local/sbin/gitlab-runner-managed --user __INSTALLER_GITLAB_RUNNER_USER__ preflight
+ExecStartPre=/usr/local/sbin/gitlab-runner-managed --user __INSTALLER_GITLAB_RUNNER_USER__ ensure-images
+ExecStart=/usr/bin/gitlab-runner run --working-directory __INSTALLER_GITLAB_RUNNER_WORK_DIR__ --config __INSTALLER_GITLAB_RUNNER_CONFIG_PATH__
+Restart=always
+RestartSec=5s
+TimeoutStartSec=__INSTALLER_GITLAB_RUNNER_START_TIMEOUT__
+TimeoutStopSec=60s
+KillMode=mixed
+UMask=__INSTALLER_GITLAB_RUNNER_SERVICE_UMASK__
+Environment=HOME=__INSTALLER_GITLAB_RUNNER_HOME_DIR__
+Environment=XDG_CONFIG_HOME=__INSTALLER_GITLAB_RUNNER_XDG_CONFIG_HOME__
+Environment=XDG_DATA_HOME=__INSTALLER_GITLAB_RUNNER_XDG_DATA_HOME__
+Environment=XDG_CACHE_HOME=__INSTALLER_GITLAB_RUNNER_XDG_CACHE_HOME__
+Environment=XDG_STATE_HOME=__INSTALLER_GITLAB_RUNNER_XDG_STATE_HOME__
+Environment=TMPDIR=__INSTALLER_GITLAB_RUNNER_TMP_DIR__
+Environment=XDG_RUNTIME_DIR=/run/user/__INSTALLER_GITLAB_RUNNER_UID__
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/__INSTALLER_GITLAB_RUNNER_UID__/bus
+Environment=BUILDAH_ISOLATION=__INSTALLER_GITLAB_RUNNER_BUILDAH_ISOLATION__
+Environment=BUILDAH_TMPDIR=__INSTALLER_GITLAB_RUNNER_BUILDAH_TMPDIR__
+MemoryAccounting=yes
+MemoryHigh=__INSTALLER_GITLAB_RUNNER_MEMORY_HIGH__
+MemoryMax=__INSTALLER_GITLAB_RUNNER_MEMORY_MAX__
+CPUAccounting=yes
+CPUQuota=__INSTALLER_GITLAB_RUNNER_CPU_QUOTA__
+CPUWeight=__INSTALLER_GITLAB_RUNNER_CPU_WEIGHT__
+TasksAccounting=yes
+TasksMax=__INSTALLER_GITLAB_RUNNER_TASKS_MAX__
+IOAccounting=yes
+NoNewPrivileges=true
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__INSTALLER_GITLAB_RUNNER_READ_WRITE_PATHS__
+ReadOnlyPaths=__INSTALLER_GITLAB_RUNNER_READ_ONLY_PATHS__
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

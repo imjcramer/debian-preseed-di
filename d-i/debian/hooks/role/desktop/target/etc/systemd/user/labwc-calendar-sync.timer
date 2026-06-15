@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic Fruux calendar synchronization
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+Unit=labwc-calendar-sync.service
+
+[Install]
+WantedBy=timers.target

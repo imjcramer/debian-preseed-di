@@ -1,0 +1,368 @@
+#!/bin/sh
+set -u
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+export PATH
+umask 077
+
+PREREQ=""
+
+prereqs() {
+  printf '%s\n' "$PREREQ"
+}
+
+case "${1:-}" in
+  prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+
+TARGET_LOG_DIR=/var/lib/preseed/logs/initramfs
+ROOTMNT=${rootmnt:-/root}
+SPOOL_DIR=${INITRAMFS_HEALTH_SPOOL_DIR:-/run/preseed-initramfs-health}
+LOG_FILE=
+
+case "$ROOTMNT" in
+  /*) ;;
+  *) ROOTMNT=/root ;;
+esac
+case "$SPOOL_DIR" in
+  /|''|*[!A-Za-z0-9_./-]*)
+    SPOOL_DIR=/run/preseed-initramfs-health
+    ;;
+  /*) ;;
+  *)
+    SPOOL_DIR=/run/preseed-initramfs-health
+    ;;
+esac
+
+stage_from_path() {
+  case "${0##*/}" in
+    health-init-top) printf '%s\n' init-top ;;
+    health-local-top) printf '%s\n' local-top ;;
+    health-local-premount) printf '%s\n' local-premount ;;
+    health-local-bottom) printf '%s\n' local-bottom ;;
+    health-init-bottom) printf '%s\n' init-bottom ;;
+    *) printf '%s\n' "${INITRAMFS_HEALTH_STAGE:-unknown}" ;;
+  esac
+}
+
+log_name_for_stage() {
+  case "$1" in
+    init-top) printf '%s\n' 01-init-top.log ;;
+    local-top) printf '%s\n' 02-local-top.log ;;
+    local-premount) printf '%s\n' 03-local-premount.log ;;
+    local-bottom) printf '%s\n' 04-local-bottom.log ;;
+    init-bottom) printf '%s\n' 05-init-bottom.log ;;
+    *) printf '%s\n' 99-unknown.log ;;
+  esac
+}
+
+STAGE=$(stage_from_path)
+LOG_NAME=$(log_name_for_stage "$STAGE")
+
+timestamp() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf '%s\n' unknown-time
+}
+
+prepare_log() {
+  mkdir -p "$SPOOL_DIR" 2>/dev/null || exit 0
+  LOG_FILE="${SPOOL_DIR}/${LOG_NAME}"
+  : >>"$LOG_FILE" 2>/dev/null || exit 0
+  chmod 0600 "$LOG_FILE" 2>/dev/null || true
+}
+
+section() {
+  printf '\n## %s\n' "$1"
+}
+
+capture() {
+  label=$1
+  shift
+  section "$label"
+  "$@" 2>&1 || printf 'status=%s\n' "$?"
+}
+
+capture_file() {
+  label=$1
+  path=$2
+  limit=${3:-120}
+
+  case "$limit" in
+    ''|*[!0-9]*) limit=120 ;;
+  esac
+  if [ "$limit" -gt 500 ] 2>/dev/null; then
+    limit=500
+  fi
+  [ -r "$path" ] || return 0
+  section "$label"
+  sed -n "1,${limit}p" "$path" 2>&1 || printf 'status=%s\n' "$?"
+}
+
+redacted_cmdline() {
+  redacted=
+  if [ -r /proc/cmdline ]; then
+    IFS= read -r cmdline </proc/cmdline || cmdline=
+    for arg in $cmdline; do
+      case "$arg" in
+        fruux_username=*|fruux_password=*|netcfg/wireless_wpa=*|wireless_wpa=*|wifi_wpa=*|*[Pp][Aa][Ss][Ss]*=*|*[Ss][Ee][Cc][Rr][Ee][Tt]*=*|*[Tt][Oo][Kk][Ee][Nn]*=*|*[Kk][Ee][Yy]*=*)
+          arg=${arg%%=*}=REDACTED
+          ;;
+      esac
+      redacted="${redacted:+$redacted }$arg"
+    done
+  fi
+  printf '%s\n' "$redacted"
+}
+
+cmdline_value() {
+  key=$1
+  if [ -r /proc/cmdline ]; then
+    IFS= read -r cmdline </proc/cmdline || cmdline=
+    for arg in $cmdline; do
+      case "$arg" in
+        "$key"=*)
+          printf '%s\n' "${arg#*=}"
+          return 0
+          ;;
+      esac
+    done
+  fi
+  return 1
+}
+
+target_root_mount_options() {
+  [ -r /proc/mounts ] || return 1
+  while IFS=' ' read -r _source mount_path _type mount_options _rest || [ -n "${mount_path:-}" ]; do
+    if [ "$mount_path" = "$ROOTMNT" ]; then
+      printf '%s\n' "$mount_options"
+      return 0
+    fi
+  done </proc/mounts
+  return 1
+}
+
+target_root_mounted() {
+  target_root_mount_options >/dev/null 2>&1
+}
+
+target_root_writable_by_mount_options() {
+  mount_options=$(target_root_mount_options 2>/dev/null || true)
+  case ",${mount_options}," in
+    *,rw,*) return 0 ;;
+  esac
+  return 1
+}
+
+list_existing_paths() {
+  label=$1
+  shift
+  section "$label"
+  for path in "$@"; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    ls -ld "$path" 2>&1 || true
+  done
+}
+
+list_dir() {
+  label=$1
+  path=$2
+  [ -d "$path" ] || return 0
+  capture "$label" ls -la "$path"
+}
+
+check_target_path() {
+  label=$1
+  path=$2
+  full_path="${ROOTMNT}${path}"
+  if [ -e "$full_path" ]; then
+    printf 'PASS %s path=%s\n' "$label" "$full_path"
+    ls -ld "$full_path" 2>&1 || true
+  else
+    printf 'WARN %s missing=%s\n' "$label" "$full_path"
+  fi
+}
+
+capture_common_metadata() {
+  section metadata
+  printf 'timestamp=%s\n' "$(timestamp)"
+  printf 'stage=%s\n' "$STAGE"
+  printf 'kernel=%s\n' "$(uname -r 2>/dev/null || printf unknown)"
+  printf 'machine=%s\n' "$(uname -m 2>/dev/null || printf unknown)"
+  printf 'cmdline=%s\n' "$(redacted_cmdline)"
+  printf 'rootmnt=%s\n' "$ROOTMNT"
+  printf 'spool_dir=%s\n' "$SPOOL_DIR"
+  printf 'target_log_dir=%s\n' "$TARGET_LOG_DIR"
+  if target_root_mounted; then
+    printf 'rootmnt_mounted=true\n'
+    printf 'rootmnt_mount_options=%s\n' "$(target_root_mount_options 2>/dev/null || printf unknown)"
+  else
+    printf 'rootmnt_mounted=false\n'
+  fi
+  if target_root_writable_by_mount_options; then
+    printf 'rootmnt_mount_rw=true\n'
+  else
+    printf 'rootmnt_mount_rw=false\n'
+  fi
+}
+
+capture_boot_mode() {
+  section boot-mode
+  if [ -d /sys/firmware/efi ]; then
+    printf 'firmware=uefi\n'
+    list_dir efi-vars /sys/firmware/efi/efivars
+  else
+    printf 'firmware=bios-or-unknown\n'
+  fi
+}
+
+capture_block_overview() {
+  capture_file proc-mounts /proc/mounts 200
+  capture_file proc-filesystems /proc/filesystems 160
+  capture_file proc-partitions /proc/partitions 160
+  capture_file proc-mdstat /proc/mdstat 160
+  if command -v lsblk >/dev/null 2>&1; then
+    capture block-devices lsblk -a -o NAME,KNAME,TYPE,SIZE,MAJ:MIN,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINTS
+  fi
+  if command -v blkid >/dev/null 2>&1; then
+    capture blkid blkid
+  fi
+}
+
+capture_device_dirs() {
+  list_existing_paths device-nodes /dev/mmcblk* /dev/nvme* /dev/sd* /dev/vd* /dev/dm-* /dev/md*
+  list_dir disk-by-id /dev/disk/by-id
+  list_dir disk-by-uuid /dev/disk/by-uuid
+  list_dir disk-by-label /dev/disk/by-label
+  list_dir disk-by-partuuid /dev/disk/by-partuuid
+  list_dir mapper /dev/mapper
+}
+
+capture_mapper_state() {
+  if command -v dmsetup >/dev/null 2>&1; then
+    capture dmsetup-info dmsetup info -c
+    case "$STAGE" in
+      local-premount) capture dmsetup-table dmsetup table ;;
+    esac
+  fi
+  if command -v cryptsetup >/dev/null 2>&1; then
+    case "$STAGE" in
+      local-top)
+        # shellcheck disable=SC2016
+        capture luks-hints sh -c 'for dev in /dev/mmcblk*p* /dev/nvme*n*p* /dev/sd* /dev/vd* /dev/dm-*; do [ -b "$dev" ] || continue; cryptsetup isLuks "$dev" >/dev/null 2>&1 && printf "%s is_luks=true\n" "$dev"; done'
+        ;;
+      local-premount|init-bottom)
+        section cryptsetup-status
+        for mapper in /dev/mapper/*; do
+          [ -e "$mapper" ] || [ -L "$mapper" ] || continue
+          mapper_name=${mapper##*/}
+          [ "$mapper_name" = control ] && continue
+          printf '# cryptsetup status %s\n' "$mapper_name"
+          cryptsetup status "$mapper_name" 2>&1 || printf 'status=%s\n' "$?"
+        done
+        ;;
+    esac
+  fi
+  if command -v lvm >/dev/null 2>&1; then
+    capture lvm-pvs lvm pvs
+    capture lvm-vgs lvm vgs
+    capture lvm-lvs lvm lvs
+  fi
+  if command -v mdadm >/dev/null 2>&1; then
+    capture mdadm-scan mdadm --detail --scan
+  fi
+}
+
+capture_target_sanity() {
+  section target-root-sanity
+  check_target_path root /
+  check_target_path root-etc /etc
+  check_target_path root-boot /boot
+  check_target_path root-var /var
+  check_target_path systemd /lib/systemd/systemd
+  check_target_path usr-systemd /usr/lib/systemd/systemd
+  check_target_path sbin-init /sbin/init
+  check_target_path usr-sbin-init /usr/sbin/init
+  check_target_path etc-fstab /etc/fstab
+  check_target_path boot-grub /boot/grub
+  check_target_path initramfs-log-dir "$TARGET_LOG_DIR"
+}
+
+prepare_log
+{
+  capture_common_metadata
+
+  case "$STAGE" in
+    init-top)
+      capture_boot_mode
+      section proc-cmdline
+      redacted_cmdline
+      capture_file proc-mounts /proc/mounts 80
+      capture_file proc-filesystems /proc/filesystems 80
+      capture_file proc-partitions /proc/partitions 80
+      ;;
+    local-top)
+      capture_boot_mode
+      capture kernel-version uname -a
+      capture_file proc-cmdline /proc/cmdline 20
+      capture_block_overview
+      capture_file proc-modules /proc/modules 240
+      capture sys-block sh -c 'find /sys/block -maxdepth 2 \( -type l -o -type d \) 2>/dev/null | sort | sed -n "1,200p"'
+      capture sys-module sh -c 'find /sys/module -maxdepth 1 -type d 2>/dev/null | sort | sed -n "1,200p"'
+      capture_device_dirs
+      capture_mapper_state
+      ;;
+    local-premount)
+      section root-argument
+      printf 'root_arg=%s\n' "$(cmdline_value root 2>/dev/null || printf unset)"
+      capture_block_overview
+      capture_device_dirs
+      capture_mapper_state
+      section final-pre-root-mount-state
+      printf 'root_exists=%s\n' "$([ -d "$ROOTMNT" ] && printf true || printf false)"
+      printf 'root_mounted=%s\n' "$(target_root_mounted && printf true || printf false)"
+      printf 'spool_dir=%s\n' "$SPOOL_DIR"
+      printf 'target_log_dir=%s\n' "$TARGET_LOG_DIR"
+      ;;
+    local-bottom)
+      capture_target_sanity
+      capture_file proc-mounts /proc/mounts 240
+      capture_file proc-filesystems /proc/filesystems 160
+      capture_file proc-partitions /proc/partitions 160
+      list_dir target-boot "${ROOTMNT}/boot"
+      list_dir target-etc "${ROOTMNT}/etc"
+      list_dir target-preseed-logs "${ROOTMNT}/var/lib/preseed/logs"
+      if command -v findmnt >/dev/null 2>&1; then
+        capture findmnt findmnt -R "$ROOTMNT"
+      fi
+      capture_block_overview
+      capture_mapper_state
+      ;;
+    init-bottom)
+      capture_target_sanity
+      capture_file proc-mounts /proc/mounts 240
+      capture_file proc-filesystems /proc/filesystems 160
+      capture_file proc-modules /proc/modules 240
+      capture_file proc-mdstat /proc/mdstat 160
+      capture_file target-fstab "${ROOTMNT}/etc/fstab" 160
+      capture_device_dirs
+      list_dir target-boot "${ROOTMNT}/boot"
+      list_dir target-preseed-log-root "${ROOTMNT}/var/lib/preseed/logs"
+      if command -v findmnt >/dev/null 2>&1; then
+        capture findmnt-root findmnt -R "$ROOTMNT"
+      fi
+      capture_block_overview
+      capture_mapper_state
+      if command -v dmesg >/dev/null 2>&1; then
+        capture dmesg-tail sh -c 'dmesg 2>/dev/null | tail -n 240'
+      fi
+      ;;
+    *)
+      capture_boot_mode
+      capture_block_overview
+      ;;
+  esac
+} >>"$LOG_FILE" 2>&1 || true
+
+exit 0

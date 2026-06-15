@@ -1,0 +1,26 @@
+[Unit]
+Description=Pressure-aware zram recompression and writeback daemon
+Documentation=man:zram-writeback(8)
+After=zram-writeback-setup.service
+Requires=zram-writeback-setup.service
+ConditionPathExists=/etc/zram-writeback.conf
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/zram-writeback
+ExecStart=/usr/sbin/zram-writeback daemon --config ${ZRAM_WRITEBACK_CONFIG} --interval ${ZRAM_WRITEBACK_DAEMON_INTERVAL} ${ZRAM_WRITEBACK_DAEMON_OPTS}
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/sys/block /run/lock /run/zram-writeback /var/lib/zram-writeback
+
+[Install]
+WantedBy=multi-user.target

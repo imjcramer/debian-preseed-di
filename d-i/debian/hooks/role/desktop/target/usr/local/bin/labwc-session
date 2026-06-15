@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+if [ -r /etc/profile.d/70-devops-storage.sh ]; then
+  # shellcheck disable=SC1091
+  . /etc/profile.d/70-devops-storage.sh
+fi
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=labwc:wlroots
+export XDG_SESSION_DESKTOP=labwc
+export DESKTOP_SESSION=labwc
+export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="${LABWC_QT_QPA_PLATFORM:-wayland}"
+export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-${LABWC_QT_PLATFORMTHEME:-qt6ct}}"
+export QT_STYLE_OVERRIDE="${QT_STYLE_OVERRIDE:-${LABWC_QT_STYLE_OVERRIDE:-adwaita-dark}}"
+export GDK_BACKEND="${LABWC_GDK_BACKEND:-wayland}"
+export SDL_VIDEODRIVER="${LABWC_SDL_VIDEODRIVER:-wayland}"
+export CLUTTER_BACKEND="${LABWC_CLUTTER_BACKEND:-wayland}"
+export XCURSOR_THEME="${XCURSOR_THEME:-${LABWC_CURSOR_THEME:-Adwaita}}"
+export XCURSOR_SIZE="${XCURSOR_SIZE:-${LABWC_CURSOR_SIZE:-24}}"
+export GTK_THEME="${GTK_THEME:-${LABWC_GTK_THEME:-Adwaita}}"
+export GTK_A11Y="${GTK_A11Y:-none}"
+export NO_AT_BRIDGE="${NO_AT_BRIDGE:-1}"
+
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+  export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
+fi
+
+exec labwc

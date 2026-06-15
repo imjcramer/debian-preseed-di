@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+shopt -s inherit_errexit 2>/dev/null || true
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+has_flag() {
+  local flag="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == "$flag" || "$arg" == "${flag}="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+bool_value() {
+  case "${1,,}" in
+    1|true|yes|y|on) printf 'true' ;;
+    0|false|no|n|off|"") printf 'false' ;;
+    *) die "invalid boolean value: $1" ;;
+  esac
+}
+
+uses_r2_endpoint() {
+  local endpoint="${APTLY_PUBLISH_ENDPOINT:-s3:${APTLY_R2_ENDPOINT_NAME:-r2}:}"
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == "$endpoint" || "$arg" == "${endpoint}"* || "$arg" == *"=${endpoint}"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+require_r2_publish_env() {
+  [[ -n "${APTLY_R2_BUCKET_NAME:-}" ]] || die "R2 publish requested but R2_BUCKET_NAME is missing"
+  [[ -n "${APTLY_R2_ENDPOINT_HOST:-}" ]] || die "R2 publish requested but R2_ENDPOINT_URL or R2_ACCOUNT_ID is missing"
+  [[ -n "${AWS_ACCESS_KEY_ID:-}" ]] || die "R2 publish requested but AWS_ACCESS_KEY_ID or R2_ACCESS_KEY_ID is missing"
+  [[ -n "${AWS_SECRET_ACCESS_KEY:-}" ]] || die "R2 publish requested but AWS_SECRET_ACCESS_KEY or R2_SECRET_ACCESS_KEY is missing"
+}
+
+real_bin="${APTLY_REAL_BIN:-/usr/bin/aptly}"
+if [[ ! -x "$real_bin" ]]; then
+  real_bin="$(command -v /usr/bin/aptly || true)"
+fi
+[[ -n "$real_bin" && -x "$real_bin" ]] || die "real aptly binary not found"
+
+if [[ $# -ge 2 && "$1" == "publish" ]]; then
+  extra_args=()
+  acquire_by_hash="$(bool_value "${APTLY_PUBLISH_ACQUIRE_BY_HASH:-false}")"
+  skip_contents="$(bool_value "${APTLY_SKIP_CONTENTS:-false}")"
+
+  if [[ "$(bool_value "${APTLY_ALLOW_PUBLISH:-false}")" != "true" ]]; then
+    bridge_bin="${APTLY_BRIDGE_BIN:-/pool/aptly/bin/aptly-bridge}"
+    [[ -x "$bridge_bin" ]] || die "publish bridge is unavailable: ${bridge_bin}"
+    exec "$bridge_bin" submit "$@"
+  fi
+
+  if uses_r2_endpoint "$@"; then
+    require_r2_publish_env
+  fi
+  if ! has_flag "-batch" "$@"; then
+    extra_args+=("-batch")
+  fi
+  if [[ -n "${APTLY_GPG_KEY:-}" ]] && ! has_flag "-gpg-key" "$@"; then
+    extra_args+=("-gpg-key=${APTLY_GPG_KEY}")
+  fi
+  if [[ -n "${APTLY_GPG_PASSPHRASE_FILE:-}" ]] && ! has_flag "-passphrase-file" "$@"; then
+    extra_args+=("-passphrase-file=${APTLY_GPG_PASSPHRASE_FILE}")
+  fi
+
+  case "$2" in
+    snapshot|repo)
+      if [[ "$acquire_by_hash" == "true" ]] && ! has_flag "-acquire-by-hash" "$@"; then
+        extra_args+=("-acquire-by-hash")
+      fi
+      if [[ "$skip_contents" == "true" ]] && ! has_flag "-skip-contents" "$@"; then
+        extra_args+=("-skip-contents")
+      fi
+      if [[ -n "${APTLY_PUBLISH_COMPONENT:-}" ]] && ! has_flag "-component" "$@"; then
+        extra_args+=("-component=${APTLY_PUBLISH_COMPONENT}")
+      fi
+      if [[ -n "${APTLY_PUBLISH_DISTRIBUTION:-}" ]] && ! has_flag "-distribution" "$@"; then
+        extra_args+=("-distribution=${APTLY_PUBLISH_DISTRIBUTION}")
+      fi
+      if [[ -n "${APTLY_PUBLISH_ORIGIN:-}" ]] && ! has_flag "-origin" "$@"; then
+        extra_args+=("-origin=${APTLY_PUBLISH_ORIGIN}")
+      fi
+      if [[ -n "${APTLY_PUBLISH_LABEL:-}" ]] && ! has_flag "-label" "$@"; then
+        extra_args+=("-label=${APTLY_PUBLISH_LABEL}")
+      fi
+      ;;
+  esac
+
+  exec "$real_bin" "$1" "$2" "${extra_args[@]}" "${@:3}"
+fi
+
+exec "$real_bin" "$@"

@@ -1,0 +1,22 @@
+[calendars]
+[[personal]]
+path = ~/.local/share/calendars/personal
+type = calendar
+color = "#ecb860"
+readonly = False
+priority = 10
+
+[locale]
+timeformat = %H:%M
+dateformat = %Y-%m-%d
+datetimeformat = %Y-%m-%d %H:%M
+longdateformat = %Y-%m-%d
+longdatetimeformat = %Y-%m-%d %H:%M
+firstweekday = 0
+unicode_symbols = True
+
+[default]
+default_calendar = personal
+timedelta = 30d
+show_all_days = False
+enable_mouse = True

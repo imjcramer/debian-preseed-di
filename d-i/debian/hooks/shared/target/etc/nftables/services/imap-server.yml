@@ -1,0 +1,26 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: imap-server
+  description: Inbound IMAP/IMAPS server overlay.
+  merge_priority: 50
+services:
+  imap_server:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 143
+    - 993
+    allow:
+      ipv4:
+      - 0.0.0.0/0
+      ipv6:
+      - ::/0
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: false

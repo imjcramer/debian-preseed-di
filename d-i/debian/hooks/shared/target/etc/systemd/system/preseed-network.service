@@ -1,0 +1,38 @@
+[Unit]
+Description=Validate preseeded static networking for installed adapters
+Documentation=man:interfaces(5) man:systemd.service(5)
+DefaultDependencies=no
+
+Requires=local-fs.target
+After=local-fs.target systemd-udev-trigger.service systemd-udev-settle.service
+Wants=systemd-udev-settle.service network-pre.target
+Before=network-pre.target networking.service NetworkManager.service systemd-networkd.service
+
+ConditionPathExists=/usr/local/sbin/preseed-network
+ConditionPathExists=/etc/default/preseed-network
+ConditionPathExists=/etc/network/interfaces.d/50-preseed-network
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/preseed-network validate
+RemainAfterExit=yes
+TimeoutStartSec=20s
+TimeoutStopSec=10s
+
+StandardOutput=journal+console
+StandardError=journal+console
+
+User=root
+Group=root
+UMask=0022
+
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=sysinit.target

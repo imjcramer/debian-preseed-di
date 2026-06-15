@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+profile_config=/etc/default/grub-profiles.conf
+grub_btrfs_config=/etc/default/grub-btrfs/config
+output_file=/boot/grub/grub-btrfs.cfg
+lock_file=/run/lock/grub-btrfs-refresh.lock
+lock_dir=${lock_file%/*}
+declare -a temp_files=()
+export SKIP_MOK_SIGNING=${SKIP_MOK_SIGNING:-1}
+
+fatal() {
+  printf 'fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+grub_single_quote() {
+  printf '%s\n' "$1" | sed "s/'/'\\\\''/g"
+}
+
+grub_id_fragment() {
+  printf '%s\n' "$1" | sed 's/[^A-Za-z0-9_]/_/g'
+}
+
+list_bootable_kernel_images() {
+  local img ver
+
+  shopt -s nullglob
+  for img in /boot/vmlinuz-*; do
+    ver=${img#/boot/vmlinuz-}
+    [[ -e "/boot/initrd.img-${ver}" ]] || continue
+    printf '%s\n' "$img"
+  done | sort -Vr
+}
+
+remember_temp_file() {
+  temp_files+=("$1")
+}
+
+forget_temp_file() {
+  local remove_path=$1
+  local temp_path
+  local kept=()
+
+  for temp_path in "${temp_files[@]}"; do
+    [[ "$temp_path" == "$remove_path" ]] && continue
+    kept+=("$temp_path")
+  done
+  temp_files=("${kept[@]}")
+}
+
+new_temp_file() {
+  local template=$1
+  local temp_path
+
+  temp_path=$(mktemp "$template") || fatal "failed to create temporary file from template: $template"
+  remember_temp_file "$temp_path"
+  printf '%s\n' "$temp_path"
+}
+
+remove_temp_file() {
+  local temp_path=${1:-}
+
+  [[ -n "$temp_path" ]] || return 0
+  rm -f -- "$temp_path"
+  forget_temp_file "$temp_path"
+}
+
+acquire_refresh_lock() {
+  command -v flock >/dev/null 2>&1 || fatal "flock is required for serialized snapshot refreshes"
+  install -d -m 0755 "$lock_dir"
+  exec 9>"$lock_file" || fatal "failed to open refresh lock: $lock_file"
+  if ! flock -n 9; then
+    printf 'info: another grub-btrfs-refresh run is active; skipping this event\n' >&2
+    exit 0
+  fi
+}
+
+wait_for_timeshift_exit() {
+  local timeout_seconds=300
+  local elapsed=0
+
+  while pgrep -x timeshift >/dev/null 2>&1; do
+    if (( elapsed >= timeout_seconds )); then
+      fatal "timeshift did not exit within ${timeout_seconds}s"
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}
+
+format_snapshot_timestamp() {
+  printf '%s\n' "$1" | sed 's/_/ /; s/\([0-9][0-9]\)-\([0-9][0-9]\)-\([0-9][0-9]\)$/\1:\2:\3/'
+}
+
+format_snapshot_tag() {
+  case "$1" in
+    B) printf 'boot\n' ;;
+    D) printf 'daily\n' ;;
+    H) printf 'hourly\n' ;;
+    M) printf 'monthly\n' ;;
+    O) printf 'ondemand\n' ;;
+    W) printf 'weekly\n' ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+read_snapshot_metadata() {
+  local snapshot_dir=$1
+  local info_file="${snapshot_dir}/info.json"
+  local tag_value=
+  local comment_value=
+
+  SNAPSHOT_TAG_LABEL=
+  SNAPSHOT_COMMENT=
+  [[ -r "$info_file" ]] || return 0
+
+  tag_value=$(sed -n 's/^[[:space:]]*"tags"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$info_file" | head -n 1 || true)
+  comment_value=$(sed -n 's/^[[:space:]]*"comments"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$info_file" | head -n 1 || true)
+
+  if [[ -n "$tag_value" ]]; then
+    SNAPSHOT_TAG_LABEL=$(format_snapshot_tag "$tag_value")
+  fi
+  SNAPSHOT_COMMENT=$comment_value
+}
+
+snapshot_root_flags() {
+  local snapshot_name=$1
+  local snapshot_subvolume="${snapshot_dir_rel%/}/${snapshot_name}/${snapshot_root_subvolume#/}"
+
+  case "$grub_root_flags" in
+    *"rootflags=subvol=@,"*)
+      printf '%s\n' "${grub_root_flags/rootflags=subvol=@,/rootflags=subvol=${snapshot_subvolume},}"
+      ;;
+    *"rootflags=subvol=@"*)
+      printf '%s\n' "${grub_root_flags/rootflags=subvol=@/rootflags=subvol=${snapshot_subvolume}}"
+      ;;
+    *)
+      printf '%s rootflags=subvol=%s\n' "$grub_root_flags" "$snapshot_subvolume"
+      ;;
+  esac
+}
+
+write_fallback_menu() {
+  local target_path=$1
+
+  cat >"$target_path" <<'EOF'
+# Managed by installer automation.
+set timeout=-1
+
+menuentry 'No BTRFS snapshots available' {
+    echo 'No BTRFS snapshots are available.'
+}
+
+menuentry 'Return to main menu' {
+    configfile $prefix/grub.cfg
+}
+EOF
+}
+
+install_snapshot_menu() {
+  local target_path=$1
+
+  if command -v grub-script-check >/dev/null 2>&1; then
+    grub-script-check "$target_path" >/dev/null 2>&1 || fatal "generated grub-btrfs.cfg failed grub-script-check"
+  fi
+  install -d -m 0755 "$(dirname "$output_file")"
+  install -m 0644 "$target_path" "$output_file"
+}
+
+load_profile_config() {
+  [[ -r "$profile_config" ]] || exit 0
+  # shellcheck disable=SC1090
+  . "$profile_config"
+  [[ -r "$grub_btrfs_config" ]] || exit 0
+  # shellcheck disable=SC1090
+  . "$grub_btrfs_config"
+}
+
+main() {
+  local mode=${1:-}
+  local mount_root=
+  local tmp_output=
+  local snapshot_root=
+  local snapshot_name=
+  local snapshot_title=
+  local snapshot_title_escaped=
+  local snapshot_entry_id=
+  local snapshot_rootfs_flags=
+  local profile_spec=
+  local profile_name=
+  local profile_label=
+  local profile_flags=
+  local kernel_image=
+  local kernel_ver=
+  local kernel_title_escaped=
+  local kernel_images=
+  local default_img=
+  local default_ver=
+  local root_uuid=
+  local boot_uuid=
+  local boot_search=
+  local root_arg=
+  local base_cmdline=
+  local snapshot_count=0
+  local rendered_snapshot=false
+
+  case "$mode" in
+    ''|--wait) ;;
+    *)
+      fatal "unsupported grub-btrfs-refresh mode: $mode"
+      ;;
+  esac
+
+  acquire_refresh_lock
+
+  if [[ "$mode" == "--wait" ]]; then
+    wait_for_timeshift_exit
+  fi
+
+  load_profile_config
+
+  [[ -n "${dev_part_root:-}" ]] || exit 0
+  [[ -n "${dev_part_boot:-}" ]] || exit 0
+
+  snapshot_dir_rel=${GRUB_BTRFS_SNAPSHOT_DIR:-timeshift-btrfs/snapshots}
+  snapshot_root_subvolume=${GRUB_BTRFS_ROOT_SUBVOLUME:-@}
+  snapshot_limit=${GRUB_BTRFS_LIMIT:-50}
+  case "$snapshot_limit" in
+    ''|*[!0-9]*)
+      fatal "GRUB_BTRFS_LIMIT must be numeric"
+      ;;
+  esac
+
+  kernel_images=$(list_bootable_kernel_images || true)
+  tmp_output=$(new_temp_file "${output_file}.XXXXXX")
+
+  cleanup() {
+    local temp_path
+
+    if [[ -n "${mount_root:-}" ]] && grep -qs " ${mount_root} " /proc/mounts; then
+      umount "${mount_root}" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${mount_root:-}" ]]; then
+      rmdir "${mount_root}" >/dev/null 2>&1 || true
+    fi
+    for temp_path in "${temp_files[@]}"; do
+      [[ -n "$temp_path" ]] && rm -f -- "$temp_path"
+    done
+  }
+  trap cleanup EXIT
+
+  if [[ -z "$kernel_images" ]]; then
+    write_fallback_menu "$tmp_output"
+    install_snapshot_menu "$tmp_output"
+    exit 0
+  fi
+
+  default_img=$(printf '%s\n' "$kernel_images" | head -n 1)
+  default_ver=${default_img#/boot/vmlinuz-}
+  root_uuid=$(blkid -s UUID -o value "$dev_part_root" 2>/dev/null || true)
+  [[ -n "$root_uuid" ]] || fatal "unable to determine UUID for ${dev_part_root}"
+  boot_uuid=$(blkid -s UUID -o value "$dev_part_boot" 2>/dev/null || true)
+  if [[ -n "$boot_uuid" ]]; then
+    boot_search="search --no-floppy --fs-uuid --set=root ${boot_uuid}"
+  else
+    boot_search="search --no-floppy --file --set=root /vmlinuz-${default_ver}"
+  fi
+  root_arg="root=UUID=${root_uuid}"
+  base_cmdline="${grub_initramfs_flags} ${grub_nvme_flags} ${grub_systemd_mask_flags} ${grub_cgroup_flags} ${grub_security_core_flags} ${grub_blacklist_flags} ${grub_vfio_flags} ${grub_memory_core_flags} ${grub_hardening_flags} ${grub_aspm_flags}"
+
+  mount_root=$(mktemp -d /run/grub-btrfs-refresh.XXXXXX)
+  mount -o ro,subvolid=5 "/dev/disk/by-uuid/${root_uuid}" "${mount_root}"
+  snapshot_root="${mount_root}/${snapshot_dir_rel#/}"
+  if [[ ! -d "$snapshot_root" ]]; then
+    write_fallback_menu "$tmp_output"
+    install_snapshot_menu "$tmp_output"
+    exit 0
+  fi
+
+  {
+    printf '# Managed by installer automation.\n'
+    printf 'set timeout=-1\n\n'
+  } >"$tmp_output"
+
+  while IFS= read -r snapshot_name; do
+    [[ -n "$snapshot_name" ]] || continue
+    [[ -d "${snapshot_root}/${snapshot_name}/${snapshot_root_subvolume}" ]] || continue
+
+    read_snapshot_metadata "${snapshot_root}/${snapshot_name}"
+    snapshot_title=$(format_snapshot_timestamp "$snapshot_name")
+    if [[ -n "${SNAPSHOT_TAG_LABEL:-}" ]]; then
+      snapshot_title="${snapshot_title} [${SNAPSHOT_TAG_LABEL}]"
+    fi
+    if [[ -n "${SNAPSHOT_COMMENT:-}" ]]; then
+      snapshot_title="${snapshot_title} ${SNAPSHOT_COMMENT}"
+    fi
+    snapshot_title_escaped=$(grub_single_quote "$snapshot_title")
+    snapshot_entry_id="installer_snapshot_$(grub_id_fragment "$snapshot_name")"
+    snapshot_rootfs_flags=$(snapshot_root_flags "$snapshot_name")
+
+    snapshot_has_entries=false
+    snapshot_body=$(new_temp_file "${output_file}.snapshot.XXXXXX")
+    {
+      while IFS= read -r profile_spec; do
+        [[ -n "$profile_spec" ]] || continue
+        IFS='|' read -r profile_name profile_label profile_flags <<<"$profile_spec"
+
+        profile_has_entries=false
+        profile_body=$(new_temp_file "${output_file}.profile.XXXXXX")
+        while IFS= read -r kernel_image; do
+          [[ -n "$kernel_image" ]] || continue
+          kernel_ver=${kernel_image#/boot/vmlinuz-}
+          [[ -d "${snapshot_root}/${snapshot_name}/${snapshot_root_subvolume}/lib/modules/${kernel_ver}" ]] || continue
+
+          kernel_title_escaped=$(grub_single_quote "[${profile_label}] ${kernel_ver}")
+          cat <<EOF >>"$profile_body"
+    menuentry '${kernel_title_escaped}' --id '${snapshot_entry_id}_$(grub_id_fragment "$profile_name")_$(grub_id_fragment "$kernel_ver")' {
+        if [ -s \$prefix/grubenv ]; then
+            set installer_linux_last_profile='${profile_name}'
+            set installer_linux_last_kernel='${kernel_ver}'
+            save_env installer_linux_last_profile
+            save_env installer_linux_last_kernel
+        fi
+        insmod gzio
+        insmod zstd
+        insmod part_gpt
+        insmod ext2
+        ${boot_search}
+        linux   /vmlinuz-${kernel_ver} ${root_arg} ro ${snapshot_rootfs_flags} ${base_cmdline} bootprofile=${profile_name} ${profile_flags}
+        initrd  /initrd.img-${kernel_ver}
+    }
+EOF
+          profile_has_entries=true
+        done <<<"$kernel_images"
+
+        if [[ "$profile_has_entries" == true ]]; then
+          printf "submenu '%s' {\n" "$(grub_single_quote "$profile_label")"
+          cat "$profile_body"
+          printf "}\n"
+          snapshot_has_entries=true
+        fi
+        remove_temp_file "$profile_body"
+        profile_body=
+      done <<EOF
+${bootprofile_default}|Balanced|${grub_profile_default_flags}
+${bootprofile_performance}|Performance|${grub_profile_performance_flags}
+${bootprofile_hardened}|Hardened|${grub_profile_hardened_flags}
+EOF
+    } >"$snapshot_body"
+
+    if [[ "$snapshot_has_entries" == true ]]; then
+      printf "submenu '%s' {\n" "$snapshot_title_escaped" >>"$tmp_output"
+      cat "$snapshot_body" >>"$tmp_output"
+      printf "}\n\n" >>"$tmp_output"
+      rendered_snapshot=true
+      snapshot_count=$((snapshot_count + 1))
+    fi
+    remove_temp_file "$snapshot_body"
+    snapshot_body=
+
+    if (( snapshot_limit > 0 && snapshot_count >= snapshot_limit )); then
+      break
+    fi
+  done < <(find "$snapshot_root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -r)
+
+  if [[ "$rendered_snapshot" != true ]]; then
+    write_fallback_menu "$tmp_output"
+  else
+    cat <<'EOF' >>"$tmp_output"
+menuentry 'Return to main menu' {
+    configfile $prefix/grub.cfg
+}
+EOF
+  fi
+
+  install_snapshot_menu "$tmp_output"
+}
+
+main "$@"

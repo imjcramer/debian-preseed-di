@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+debounce_seconds=${LABWC_OUTPUT_HOTPLUG_DEBOUNCE_SECONDS:-2}
+
+labwc-output-refresh || true
+
+command -v udevadm >/dev/null 2>&1 || exit 0
+
+udevadm monitor --subsystem-match=drm 2>/dev/null | while IFS= read -r event_line; do
+  case "$event_line" in
+    *' change '*|*' add '*|*' remove '*|*change*drm*|*add*drm*|*remove*drm*)
+      sleep "$debounce_seconds"
+      labwc-output-refresh || true
+      ;;
+  esac
+done

@@ -1,0 +1,136 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: pihole
+  description: Pi-hole DNS/web/DHCP/NTP overlay. DNS and admin UI are LAN/VPN only by default.
+  merge_priority: 50
+services:
+  pihole_dns_udp:
+    enabled: true
+    direction: inbound
+    protocols:
+    - udp
+    ports:
+    - 53
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 10.8.0.0/24
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      - fd00:8::/64
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true
+    log: false
+  pihole_dns_tcp:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 53
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 10.8.0.0/24
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      - fd00:8::/64
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true
+    log: false
+  pihole_web:
+    enabled: false
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 80
+    - 443
+    allow:
+      ipv4:
+      - 10.8.0.0/24
+      ipv6:
+      - fd00:8::/64
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true
+    log: false
+  pihole_dhcpv4:
+    enabled: false
+    direction: inbound
+    protocols:
+    - udp
+    ports:
+    - 67
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: true
+    log: false
+  pihole_dhcpv6:
+    enabled: false
+    direction: inbound
+    protocols:
+    - udp
+    ports:
+    - 547
+    allow:
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: true
+    log: false
+  pihole_ntp:
+    enabled: false
+    direction: inbound
+    protocols:
+    - udp
+    ports:
+    - 123
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    log: false

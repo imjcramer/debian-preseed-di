@@ -1,0 +1,7 @@
+#Package: <some_package>
+#Pin: release a=testing,n=forky
+#Pin-Priority: 100
+
+Package: *
+Pin: release a=testing,n=forky
+Pin-Priority: -1

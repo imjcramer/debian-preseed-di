@@ -1,0 +1,183 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: wazuh-server
+  description: Wazuh manager/server/indexer/dashboard overlay.
+  merge_priority: 50
+services:
+  wazuh_agent_comm:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 1514
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 10.8.0.0/24
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      - fd00:8::/64
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true
+    log: false
+  wazuh_enrollment:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 1515
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 10.8.0.0/24
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      - fd00:8::/64
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true
+    log: false
+  wazuh_api:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 55000
+    allow:
+      ipv4:
+      - 10.8.0.0/24
+      ipv6:
+      - fd00:8::/64
+      interfaces:
+      - wg0
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: true
+    log: false
+  wazuh_dashboard:
+    enabled: false
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 443
+    allow:
+      ipv4:
+      - 10.8.0.0/24
+      ipv6:
+      - fd00:8::/64
+      interfaces:
+      - wg0
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: true
+    log: false
+  wazuh_indexer_api:
+    enabled: false
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 9200
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 192.168.0.0/16
+      ipv6:
+      - fc00::/7
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true
+    log: false
+  wazuh_indexer_cluster:
+    enabled: false
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 9300
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 192.168.0.0/16
+      ipv6:
+      - fc00::/7
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true
+    log: false
+  wazuh_syslog_udp:
+    enabled: false
+    direction: inbound
+    protocols:
+    - udp
+    ports:
+    - 514
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: true
+    log: false
+  wazuh_syslog_tcp:
+    enabled: false
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 514
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: true
+    log: false

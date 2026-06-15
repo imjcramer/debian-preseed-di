@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+command -v swaylock >/dev/null 2>&1 || exit 1
+
+exec swaylock -f

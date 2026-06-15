@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily zram writeback budget reset
+Documentation=man:zram-writeback(8)
+
+[Timer]
+OnCalendar=daily
+AccuracySec=5min
+Persistent=true
+Unit=zram-writeback-budget.service
+
+[Install]
+WantedBy=timers.target

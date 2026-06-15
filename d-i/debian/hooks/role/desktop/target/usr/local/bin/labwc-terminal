@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+# Accept xterm-style `-e` for callers, but normalize it before we reach Kitty.
+xterm_execute_mode=0
+case "${1:-}" in
+  -e|--execute)
+    xterm_execute_mode=1
+    exec_flag=$1
+    shift
+    [ "$#" -gt 0 ] || {
+      printf 'fatal: labwc-terminal requires a command after %s\n' "$exec_flag" >&2
+      exit 1
+    }
+    ;;
+esac
+
+seen_terminals=' '
+for terminal_cmd in "${LABWC_TERMINAL_PRIMARY:-foot}" "${LABWC_TERMINAL_FALLBACK:-kitty}" foot kitty x-terminal-emulator; do
+  [ -n "$terminal_cmd" ] || continue
+  case "$seen_terminals" in
+    *" $terminal_cmd "*) continue ;;
+  esac
+  seen_terminals="${seen_terminals}${terminal_cmd} "
+  if command -v "$terminal_cmd" >/dev/null 2>&1; then
+    case "$terminal_cmd" in
+      kitty)
+        exec "$terminal_cmd" "$@"
+        ;;
+    esac
+    if [ "$xterm_execute_mode" -eq 1 ]; then
+      exec "$terminal_cmd" -e "$@"
+    fi
+    exec "$terminal_cmd" "$@"
+  fi
+done
+
+printf 'fatal: no supported terminal is installed\n' >&2
+exit 1

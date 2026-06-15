@@ -1,0 +1,19 @@
+LABEL debian-trixie-desktop-auto
+  KERNEL install.amd/vmlinuz
+  APPEND initrd=install.amd/initrd.gz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=http://192.0.2.10:8080/d-i/debian/preseed.cfg classes=prod,desktop,standard,dhcp ---
+
+LABEL debian-trixie-desktop-ssh
+  KERNEL install.amd/vmlinuz
+  APPEND initrd=install.amd/initrd.gz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=http://192.0.2.10:8080/d-i/debian/preseed.cfg classes=prod,desktop,standard,dhcp,ssh ---
+
+LABEL debian-trixie-desktop-nvidia
+  KERNEL install.amd/vmlinuz
+  APPEND initrd=install.amd/initrd.gz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=http://192.0.2.10:8080/d-i/debian/preseed.cfg classes=prod,desktop,standard,dhcp,nvidia ---
+
+LABEL debian-trixie-desktop-emmc
+  KERNEL install.amd/vmlinuz
+  APPEND initrd=install.amd/initrd.gz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=http://192.0.2.10:8080/d-i/debian/preseed.cfg classes=prod,desktop,standard,dhcp,disk/emmc ---
+
+LABEL debian-trixie-server-web
+  KERNEL install.amd/vmlinuz
+  APPEND initrd=install.amd/initrd.gz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=http://192.0.2.10:8080/d-i/debian/preseed.cfg classes=prod,server,enhanced,dhcp,web ---

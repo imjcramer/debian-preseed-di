@@ -1,0 +1,11 @@
+[Unit]
+Description=Create the managed monthly Timeshift snapshot
+ConditionPathExists=/usr/bin/timeshift
+ConditionPathExists=/etc/timeshift/timeshift.json
+After=local-fs.target
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/local/sbin/timeshift-managed-snapshot monthly

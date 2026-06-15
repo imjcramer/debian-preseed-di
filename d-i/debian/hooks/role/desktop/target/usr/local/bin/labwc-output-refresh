@@ -1,0 +1,250 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+
+my %defaults = load_defaults('/etc/default/labwc-desktop');
+apply_env_overrides(
+    \%defaults,
+    qw(
+      LABWC_OUTPUT_EXTERNAL_PREFERRED_HEIGHT
+      LABWC_OUTPUT_EXTERNAL_PREFERRED_REFRESH_HZ
+      LABWC_OUTPUT_EXTERNAL_PREFERRED_WIDTH
+      LABWC_OUTPUT_INTERNAL_PREFIXES
+      LABWC_OUTPUT_POLICY
+      LABWC_OUTPUT_SCALE
+    )
+);
+
+if (($ARGV[0] // q{}) eq '--dpms-off') {
+    run_optional('wlopm', '--off', '*');
+    exit 0;
+}
+
+my $wlr_randr = find_command('wlr-randr');
+exit 0 if !defined $wlr_randr;
+
+run_optional('wlopm', '--on', '*');
+
+my $state = capture_command($wlr_randr);
+exit 0 if $state eq q{};
+
+my @lines = split /\n/, $state;
+my @outputs = connected_outputs(@lines);
+exit 0 if !@outputs;
+
+my (@internal_outputs, @external_outputs);
+for my $output_name (@outputs) {
+    if (is_internal_output($output_name)) {
+        push @internal_outputs, $output_name;
+    } else {
+        push @external_outputs, $output_name;
+    }
+}
+
+my $selected_output = $external_outputs[0];
+if (defined $selected_output) {
+    my $selected_mode = mode_for_output(\@lines, $selected_output);
+    enable_output($wlr_randr, $selected_output, $selected_mode) or exit 0;
+
+    if (($defaults{LABWC_OUTPUT_POLICY} // 'external-only') eq 'external-only') {
+        for my $output_name (@internal_outputs) {
+            disable_output($wlr_randr, $output_name);
+        }
+        for my $output_name (@external_outputs) {
+            next if $output_name eq $selected_output;
+            disable_output($wlr_randr, $output_name);
+        }
+    }
+    exit 0;
+}
+
+$selected_output = $internal_outputs[0];
+exit 0 if !defined $selected_output;
+
+enable_output($wlr_randr, $selected_output, undef) or exit 0;
+for my $output_name (@internal_outputs) {
+    next if $output_name eq $selected_output;
+    disable_output($wlr_randr, $output_name);
+}
+
+sub load_defaults {
+    my ($path) = @_;
+    my %values;
+
+    return %values if !-r $path;
+    open my $fh, '<', $path or return %values;
+    while (my $line = <$fh>) {
+        chomp $line;
+        $line =~ s/^\s+//;
+        $line =~ s/\s+$//;
+        next if $line eq q{} || $line =~ /^#/;
+        next if $line !~ /^([A-Z0-9_]+)=(.*)$/;
+
+        my ($key, $value) = ($1, $2);
+        $value =~ s/^\s+//;
+        $value =~ s/\s+$//;
+        if ($value =~ /\A'(.*)'\z/s || $value =~ /\A"(.*)"\z/s) {
+            $value = $1;
+        }
+        $values{$key} = $value;
+    }
+    close $fh;
+    return %values;
+}
+
+sub apply_env_overrides {
+    my ($values, @keys) = @_;
+
+    for my $key (@keys) {
+        next if !exists $ENV{$key};
+        $values->{$key} = $ENV{$key};
+    }
+    return;
+}
+
+sub find_command {
+    my ($command_name) = @_;
+    for my $dir (split /:/, ($ENV{PATH} // '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')) {
+        next if $dir eq q{};
+        my $candidate = "$dir/$command_name";
+        return $candidate if -x $candidate;
+    }
+    return undef;
+}
+
+sub capture_command {
+    my ($command, @args) = @_;
+    my $pid = open my $fh, '-|';
+    return q{} if !defined $pid;
+    if ($pid == 0) {
+        open STDERR, '>', '/dev/null' or exit 1;
+        exec {$command} $command, @args;
+        exit 1;
+    }
+
+    local $/ = undef;
+    my $output = <$fh> // q{};
+    close $fh;
+    return $output;
+}
+
+sub run_optional {
+    my ($command_name, @args) = @_;
+    my $command = find_command($command_name);
+    return 0 if !defined $command;
+    system {$command} $command, @args;
+    return 1;
+}
+
+sub connected_outputs {
+    my (@state_lines) = @_;
+    my @names;
+
+    for my $line (@state_lines) {
+        next if $line =~ /^\s*$/ || $line =~ /^[[:space:]]/;
+        my ($output_name) = split /[[:space:]]+/, $line, 2;
+        next if !output_name_safe($output_name);
+        push @names, $output_name;
+    }
+    return @names;
+}
+
+sub output_name_safe {
+    my ($output_name) = @_;
+    return defined $output_name && $output_name =~ /\A[A-Za-z0-9._-]+\z/;
+}
+
+sub is_internal_output {
+    my ($output_name) = @_;
+    my @prefixes = split /[[:space:]]+/, ($defaults{LABWC_OUTPUT_INTERNAL_PREFIXES} // 'eDP LVDS DSI');
+    for my $prefix (@prefixes) {
+        next if $prefix eq q{};
+        return 1 if $output_name =~ /\A\Q$prefix\E(?:-|[0-9])/;
+    }
+    return 0;
+}
+
+sub mode_for_output {
+    my ($state_lines, $output_name) = @_;
+    my $preferred_width  = $defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_WIDTH}  // q{};
+    my $preferred_height = $defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_HEIGHT} // q{};
+    my $preferred_hz     = $defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_REFRESH_HZ} // q{};
+    my $preferred_size   = q{};
+    my $configured_mode  = q{};
+    my $connector_preferred_mode = q{};
+    my $largest_mode = q{};
+    my $largest_area = 0;
+    my $in_output = 0;
+
+    if ($preferred_width =~ /\A\d+\z/ && $preferred_height =~ /\A\d+\z/) {
+        $preferred_size = "${preferred_width}x${preferred_height}";
+    } else {
+        $preferred_hz = q{};
+    }
+
+    for my $line (@{$state_lines}) {
+        if ($line =~ /^\Q$output_name\E\b/) {
+            $in_output = 1;
+            next;
+        }
+        if ($line !~ /^[[:space:]]/ && $in_output) {
+            $in_output = 0;
+        }
+        next if !$in_output;
+        next if $line !~ /^\s+(\d+x\d+)\s+px,\s+([0-9.]+)\s+Hz\b(.*)$/;
+
+        my ($mode_size, $mode_hz, $mode_flags) = ($1, $2, $3 // q{});
+        my ($mode_width, $mode_height) = split /x/, $mode_size, 2;
+        next if !defined $mode_width || !defined $mode_height;
+        next if $mode_width !~ /\A\d+\z/ || $mode_height !~ /\A\d+\z/;
+
+        my $mode_value = sprintf '%s@%sHz', $mode_size, $mode_hz;
+        my $mode_area = $mode_width * $mode_height;
+        if ($mode_area > $largest_area) {
+            $largest_area = $mode_area;
+            $largest_mode = $mode_value;
+        }
+
+        if ($mode_flags =~ /preferred/ && $connector_preferred_mode eq q{}) {
+            $connector_preferred_mode = $mode_value;
+        }
+
+        next if $preferred_size eq q{} || $mode_size ne $preferred_size;
+        if ($preferred_hz eq q{}) {
+            $configured_mode = $mode_value;
+            last;
+        }
+        my $rounded_hz = int($mode_hz + 0.5);
+        next if $rounded_hz != $preferred_hz;
+        $configured_mode = $mode_value;
+        last;
+    }
+
+    return $configured_mode if $configured_mode ne q{};
+    return $connector_preferred_mode if $preferred_size eq q{} && $connector_preferred_mode ne q{};
+    return $largest_mode if $preferred_size eq q{} && $largest_mode ne q{};
+    return undef;
+}
+
+sub enable_output {
+    my ($wlr_randr, $output_name, $output_mode) = @_;
+    return 0 if !output_name_safe($output_name);
+
+    my $output_scale = $defaults{LABWC_OUTPUT_SCALE} // '1';
+    my @base_args = ('--output', $output_name, '--on', '--scale', $output_scale, '--pos', '0,0');
+
+    if (defined $output_mode && $output_mode ne q{}) {
+        system {$wlr_randr} $wlr_randr, @base_args[0 .. 2], '--mode', $output_mode, @base_args[3 .. $#base_args];
+        return 1 if $? == 0;
+    }
+
+    system {$wlr_randr} $wlr_randr, @base_args;
+    return $? == 0 ? 1 : 0;
+}
+
+sub disable_output {
+    my ($wlr_randr, $output_name) = @_;
+    return if !output_name_safe($output_name);
+    system {$wlr_randr} $wlr_randr, '--output', $output_name, '--off';
+    return;
+}

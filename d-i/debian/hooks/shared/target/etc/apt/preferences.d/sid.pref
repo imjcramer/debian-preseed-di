@@ -1,0 +1,7 @@
+#Package: <some_package>
+#Pin: release a=unstable,n=sid
+#Pin-Priority: 100
+
+Package: *
+Pin: release a=unstable,n=sid
+Pin-Priority: -1

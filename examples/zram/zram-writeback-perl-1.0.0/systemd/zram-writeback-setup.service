@@ -1,0 +1,17 @@
+[Unit]
+Description=Configure zram writeback and recompression swap
+Documentation=man:zram-writeback(8)
+DefaultDependencies=no
+After=systemd-modules-load.service cryptsetup.target local-fs.target
+Before=swap.target
+ConditionPathExists=/etc/zram-writeback.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/zram-writeback
+ExecStart=/usr/sbin/zram-writeback setup --config ${ZRAM_WRITEBACK_CONFIG}
+TimeoutStartSec=90
+
+[Install]
+WantedBy=sysinit.target

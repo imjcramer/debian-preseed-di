@@ -1,0 +1,38 @@
+[Unit]
+Description=Refresh APT package lists after the apt lists mount is ready
+After=local-fs.target nss-lookup.target network-online.target NetworkManager-dispatcher.service
+Before=apt-daily.service apt-daily-upgrade.service
+Wants=nss-lookup.target network-online.target
+RequiresMountsFor=__INSTALLER_DIR_APT_LISTS__
+ConditionPathIsMountPoint=__INSTALLER_DIR_APT_LISTS__
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+Environment=DEBIAN_FRONTEND=noninteractive
+Environment=APT_LISTCHANGES_FRONTEND=none
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStartPre=/bin/sh -eu -c 'unit=NetworkManager-dispatcher.service; command -v systemctl >/dev/null 2>&1 || exit 0; if ! systemctl cat "$unit" >/dev/null 2>&1; then exit 0; fi; waited=0; while :; do state=$(systemctl is-active "$unit" 2>/dev/null || true); case "$state" in inactive|unknown) exit 0 ;; failed) exit 1 ;; esac; [ "$waited" -lt 30 ] || exit 1; sleep 1; waited=$((waited + 1)); done'
+ExecStart=/usr/bin/flock -w 5 /run/apt-refresh-lists.lock /usr/local/sbin/apt-refresh-lists
+TimeoutStartSec=__INSTALLER_APT_REFRESH_LISTS_TIMEOUT__
+RemainAfterExit=yes
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

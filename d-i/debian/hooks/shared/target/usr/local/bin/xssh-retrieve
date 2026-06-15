@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+PROG="${0##*/}"
+
+die() {
+  printf '%s: %s\n' "$PROG" "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat >&2 <<EOF
+usage: ${PROG} --remote-ip <ip-or-host> --port <ssh-port> [--user <remote-user>] <remote-path> [local-path]
+EOF
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+validate_host() {
+  [[ "$1" =~ ^[A-Za-z0-9:.%-]+$ ]] || die "host must contain only letters, digits, dots, dashes, percent signs, and colons"
+}
+
+validate_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] || die "port must be numeric"
+  (( 10#$1 >= 1 && 10#$1 <= 65535 )) || die "port must be in range 1..65535"
+}
+
+validate_user() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "remote user is invalid: ${1:-unset}"
+}
+
+validate_remote_path() {
+  local remote_path="$1"
+  [[ -n "$remote_path" ]] || die "remote path must not be empty"
+  [[ "$remote_path" != -* ]] || die "remote path must not start with -"
+  [[ "$remote_path" != *$'\n'* && "$remote_path" != *$'\r'* ]] || die "remote path contains control characters"
+}
+
+parse_args() {
+  remote_user="${USER:-$(id -un)}"
+  local_path="."
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --remote-ip) remote_host="${2:-}"; shift 2 ;;
+      --port) port="${2:-}"; shift 2 ;;
+      --user) remote_user="${2:-}"; shift 2 ;;
+      --help|-h) usage; exit 0 ;;
+      --) shift; break ;;
+      -*) usage; die "unsupported option: $1" ;;
+      *) break ;;
+    esac
+  done
+
+  remote_path="${1:-}"
+  [[ -n "$remote_path" ]] || {
+    usage
+    exit 2
+  }
+  shift
+  if [[ "$#" -gt 1 ]]; then
+    usage
+    exit 2
+  fi
+  if [[ "$#" -eq 1 ]]; then
+    local_path=$1
+  fi
+
+  [[ -n "${remote_host:-}" ]] || die "--remote-ip is required"
+  [[ -n "${port:-}" ]] || die "--port is required"
+
+  validate_host "$remote_host"
+  validate_port "$port"
+  validate_user "$remote_user"
+  validate_remote_path "$remote_path"
+  [[ "$local_path" != -* ]] || die "local path must not start with -"
+}
+
+main() {
+  require_cmd scp
+  parse_args "$@"
+  printf '%s: retrieving %s@%s:%s to %s\n' "$PROG" "$remote_user" "$remote_host" "$remote_path" "$local_path" >&2
+  scp -r -P "$port" "${remote_user}@${remote_host}:${remote_path}" "$local_path"
+  printf '%s: retrieve completed: %s@%s:%s -> %s\n' "$PROG" "$remote_user" "$remote_host" "$remote_path" "$local_path" >&2
+}
+
+main "$@"

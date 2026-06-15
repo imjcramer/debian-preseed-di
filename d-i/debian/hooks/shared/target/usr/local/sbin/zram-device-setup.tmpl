@@ -1,0 +1,1115 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CONF=${ZRAM_DEFAULT_PATH:-/etc/default/zram-writeback}
+ZRAM_ENABLE=1
+ZRAM_LOG_LEVEL=${ZRAM_LOG_LEVEL:-error}
+ZRAM_RUNTIME_DIR=/run/zram
+ZRAM_LOCK_FILE=/run/zram/zram-writeback.lock
+ZRAM_SWAP_DEVICE=/dev/zram0
+ZRAM_SYSFS=/sys/block/zram0
+ZRAM_BACKING_RAW_DEVICE=
+ZRAM_BACKING_MAPPER_NAME=zram-writeback
+ZRAM_BACKING_DEVICE=/dev/mapper/zram-writeback
+ZRAM_BACKING_RESERVE_MIB=128
+DMCRYPT_EPHEMERAL_CIPHER=aes-xts-plain64
+DMCRYPT_EPHEMERAL_KEY_SIZE=512
+DMCRYPT_EPHEMERAL_HASH=sha256
+DMCRYPT_RANDOM_KEY_FILE=/dev/urandom
+ZRAM_WRITEBACK_ENABLE=1
+ZRAM_COMPRESSION_ALGORITHM=lz4
+ZRAM_ALGORITHM_PARAMS=
+ZRAM_TIER1_ENABLE=1
+ZRAM_TIER1_ALGORITHM=lzo-rle
+ZRAM_TIER1_PRIORITY=1
+ZRAM_TIER1_LEVEL=0
+ZRAM_TIER2_ENABLE=1
+ZRAM_TIER2_ALGORITHM=zstd
+ZRAM_TIER2_PRIORITY=2
+ZRAM_TIER2_LEVEL=6
+ZRAM_TIER3_ENABLE=1
+ZRAM_TIER3_ALGORITHM=zstd
+ZRAM_TIER3_PRIORITY=3
+ZRAM_TIER3_LEVEL=3
+ZRAM_SWAP_PRIORITY=300
+ZRAM_MAX_COMP_STREAMS=0
+ZRAM_COMPRESSED_WRITEBACK=1
+ZRAM_WRITEBACK_BATCH_SIZE=512
+ZRAM_WRITEBACK_LIMIT_ENABLE=1
+ZRAM_PCT=100
+ZRAM_MIN_MIB=2048
+ZRAM_MAX_MIB=4096
+ZRAM_MEM_LIMIT_PCT=65
+ZRAM_WRITEBACK_LIMIT_PCT=25
+ZRAM_POLICY_CONFIG=/etc/zram-writeback.conf
+LOG_TAG="zram-device-setup"
+LOG_HELPER="/usr/libexec/install-tools/preseed-log.sh"
+
+[ -r "$LOG_HELPER" ] || { printf 'error: missing logging helper: %s\n' "$LOG_HELPER" >&2; exit 1; }
+# shellcheck disable=SC1090
+. "$LOG_HELPER"
+
+validate_abs_path() {
+  path_label=$1
+  path_value=$2
+
+  case "$path_value" in
+    /*) ;;
+    *) preseed_log_raw_error "${path_label} must be an absolute path, got '${path_value:-unset}'"; exit 1 ;;
+  esac
+  case "$path_value" in
+    *'..'*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./:+-]*)
+      preseed_log_raw_error "${path_label} contains unsafe path characters: ${path_value}"
+      exit 1
+      ;;
+  esac
+}
+
+strip_quoted_default_value() {
+  default_key=$1
+  default_value=$2
+
+  case "$default_value" in
+    \"*\")
+      default_value=${default_value#\"}
+      default_value=${default_value%\"}
+      ;;
+    *\"*)
+      preseed_log_raw_error "unsupported quoting in $default_key"
+      exit 1
+      ;;
+  esac
+  printf '%s\n' "$default_value"
+}
+
+validate_default_value() {
+  default_key=$1
+  default_value=$2
+
+  case "$default_value" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./:+=\ -]*)
+      preseed_log_raw_error "${default_key} contains unsafe characters"
+      exit 1
+      ;;
+  esac
+}
+
+set_default_value() {
+  default_key=$1
+  default_value=$2
+
+  default_value=$(strip_quoted_default_value "$default_key" "$default_value")
+  validate_default_value "$default_key" "$default_value"
+  case "$default_key" in
+    ZRAM_ENABLE) ZRAM_ENABLE=$default_value ;;
+    ZRAM_LOG_LEVEL) ZRAM_LOG_LEVEL=$default_value ;;
+    ZRAM_RUNTIME_DIR) ZRAM_RUNTIME_DIR=$default_value ;;
+    ZRAM_LOCK_FILE) ZRAM_LOCK_FILE=$default_value ;;
+    ZRAM_SWAP_DEVICE) ZRAM_SWAP_DEVICE=$default_value ;;
+    ZRAM_SYSFS) ZRAM_SYSFS=$default_value ;;
+    ZRAM_BACKING_RAW_DEVICE) ZRAM_BACKING_RAW_DEVICE=$default_value ;;
+    ZRAM_BACKING_MAPPER_NAME) ZRAM_BACKING_MAPPER_NAME=$default_value ;;
+    ZRAM_BACKING_DEVICE) ZRAM_BACKING_DEVICE=$default_value ;;
+    ZRAM_BACKING_RESERVE_MIB) ZRAM_BACKING_RESERVE_MIB=$default_value ;;
+    DMCRYPT_EPHEMERAL_CIPHER) DMCRYPT_EPHEMERAL_CIPHER=$default_value ;;
+    DMCRYPT_EPHEMERAL_KEY_SIZE) DMCRYPT_EPHEMERAL_KEY_SIZE=$default_value ;;
+    DMCRYPT_EPHEMERAL_HASH) DMCRYPT_EPHEMERAL_HASH=$default_value ;;
+    DMCRYPT_RANDOM_KEY_FILE) DMCRYPT_RANDOM_KEY_FILE=$default_value ;;
+    ZRAM_WRITEBACK_ENABLE) ZRAM_WRITEBACK_ENABLE=$default_value ;;
+    ZRAM_COMPRESSION_ALGORITHM) ZRAM_COMPRESSION_ALGORITHM=$default_value ;;
+    ZRAM_ALGORITHM_PARAMS) ZRAM_ALGORITHM_PARAMS=$default_value ;;
+    ZRAM_TIER1_ENABLE) ZRAM_TIER1_ENABLE=$default_value ;;
+    ZRAM_TIER1_ALGORITHM) ZRAM_TIER1_ALGORITHM=$default_value ;;
+    ZRAM_TIER1_PRIORITY) ZRAM_TIER1_PRIORITY=$default_value ;;
+    ZRAM_TIER1_LEVEL) ZRAM_TIER1_LEVEL=$default_value ;;
+    ZRAM_TIER2_ENABLE) ZRAM_TIER2_ENABLE=$default_value ;;
+    ZRAM_TIER2_ALGORITHM) ZRAM_TIER2_ALGORITHM=$default_value ;;
+    ZRAM_TIER2_PRIORITY) ZRAM_TIER2_PRIORITY=$default_value ;;
+    ZRAM_TIER2_LEVEL) ZRAM_TIER2_LEVEL=$default_value ;;
+    ZRAM_TIER3_ENABLE) ZRAM_TIER3_ENABLE=$default_value ;;
+    ZRAM_TIER3_ALGORITHM) ZRAM_TIER3_ALGORITHM=$default_value ;;
+    ZRAM_TIER3_PRIORITY) ZRAM_TIER3_PRIORITY=$default_value ;;
+    ZRAM_TIER3_LEVEL) ZRAM_TIER3_LEVEL=$default_value ;;
+    ZRAM_SWAP_PRIORITY) ZRAM_SWAP_PRIORITY=$default_value ;;
+    ZRAM_MAX_COMP_STREAMS) ZRAM_MAX_COMP_STREAMS=$default_value ;;
+    ZRAM_COMPRESSED_WRITEBACK) ZRAM_COMPRESSED_WRITEBACK=$default_value ;;
+    ZRAM_WRITEBACK_BATCH_SIZE) ZRAM_WRITEBACK_BATCH_SIZE=$default_value ;;
+    ZRAM_WRITEBACK_LIMIT_ENABLE) ZRAM_WRITEBACK_LIMIT_ENABLE=$default_value ;;
+    ZRAM_PCT) ZRAM_PCT=$default_value ;;
+    ZRAM_MIN_MIB) ZRAM_MIN_MIB=$default_value ;;
+    ZRAM_MAX_MIB) ZRAM_MAX_MIB=$default_value ;;
+    ZRAM_MEM_LIMIT_PCT) ZRAM_MEM_LIMIT_PCT=$default_value ;;
+    ZRAM_WRITEBACK_LIMIT_PCT) ZRAM_WRITEBACK_LIMIT_PCT=$default_value ;;
+    ZRAM_POLICY_CONFIG) ZRAM_POLICY_CONFIG=$default_value ;;
+    *)
+      preseed_log_raw_error "unsupported zram default key: $default_key"
+      exit 1
+      ;;
+  esac
+}
+
+load_service_defaults() {
+  validate_abs_path ZRAM_DEFAULT_PATH "$CONF"
+  [ -r "$CONF" ] || { preseed_log_raw_error "missing zram defaults $CONF"; exit 1; }
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ "${#line}" -le 512 ] || { preseed_log_raw_error "oversized zram defaults line in $CONF"; exit 1; }
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    case "$line" in
+      *=*) ;;
+      *) preseed_log_raw_error "invalid zram defaults line in $CONF"; exit 1 ;;
+    esac
+    default_key=${line%%=*}
+    default_value=${line#*=}
+    set_default_value "$default_key" "$default_value"
+  done <"$CONF"
+}
+
+load_service_defaults
+preseed_log_init "$LOG_TAG" ZRAM_LOG_LEVEL error
+ZRAM_LOG_LEVEL=$PRESEED_LOG_ACTIVE_LEVEL
+
+case "$ZRAM_ENABLE" in
+  0|1) ;;
+  *) fatal "ZRAM_ENABLE must be 0 or 1, got '${ZRAM_ENABLE:-unset}'" ;;
+esac
+BLOCKDEV_CMD=$(command -v blockdev 2>/dev/null || true)
+BLKID_CMD=$(command -v blkid 2>/dev/null || true)
+FINDMNT_CMD=$(command -v findmnt 2>/dev/null || true)
+FLOCK_CMD=$(command -v flock 2>/dev/null || true)
+MODPROBE_CMD=$(command -v modprobe 2>/dev/null || true)
+ZRAMCTL_CMD=$(command -v zramctl 2>/dev/null || true)
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fatal "required command is unavailable: $1"
+}
+
+zram_runtime_dir() {
+  printf '%s\n' "${ZRAM_RUNTIME_DIR:-/run/zram}"
+}
+
+zram_lock_file() {
+  printf '%s\n' "${ZRAM_LOCK_FILE:-/run/zram/zram-writeback.lock}"
+}
+
+validate_runtime_dir_path() {
+  path_label=$1
+  runtime_dir=$2
+
+  case "$runtime_dir" in
+    /run/*) ;;
+    *)
+      fatal "${path_label} must stay under /run, got '${runtime_dir:-unset}'"
+      ;;
+  esac
+  case "$runtime_dir" in
+    *'..'*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./+-]*)
+      fatal "${path_label} contains unsafe path characters: ${runtime_dir}"
+      ;;
+  esac
+}
+
+ensure_runtime_dir() {
+  runtime_dir=$(zram_runtime_dir)
+
+  validate_runtime_dir_path ZRAM_RUNTIME_DIR "$runtime_dir"
+  if [ -e "$runtime_dir" ] && [ -L "$runtime_dir" ]; then
+    fatal "zram runtime dir must not be a symlink: $runtime_dir"
+  fi
+  install -d -m 0750 "$runtime_dir" || fatal "failed to create zram runtime dir $runtime_dir"
+  [ -d "$runtime_dir" ] && [ ! -L "$runtime_dir" ] || fatal "zram runtime path is not a directory: $runtime_dir"
+  chmod 0750 "$runtime_dir" || fatal "failed to chmod zram runtime dir $runtime_dir"
+}
+
+acquire_zram_lock() {
+  wait_seconds=$1
+  lock_file=
+  lock_dir=
+
+  ensure_integer zram_lock_wait_seconds "$wait_seconds"
+  [ -n "$FLOCK_CMD" ] || fatal "required command is unavailable: flock"
+  ensure_runtime_dir
+  lock_file=$(zram_lock_file)
+  validate_runtime_dir_path ZRAM_LOCK_FILE "$lock_file"
+  lock_dir=${lock_file%/*}
+  [ "$lock_dir" != "$lock_file" ] || fatal "invalid zram lock path: $lock_file"
+  if [ -e "$lock_file" ] && [ -L "$lock_file" ]; then
+    fatal "zram lock file must not be a symlink: $lock_file"
+  fi
+  install -d -m 0755 "$lock_dir" || fatal "failed to create zram lock parent $lock_dir"
+  exec 9>>"$lock_file" || fatal "failed to open zram lifecycle lock $lock_file"
+  chmod 0600 "$lock_file" || fatal "failed to chmod zram lifecycle lock $lock_file"
+  "$FLOCK_CMD" -w "$wait_seconds" 9 || fatal "timed out waiting for zram lifecycle lock $lock_file"
+}
+
+have_attr() {
+  [ -e "$1" ] && [ -w "$1" ]
+}
+
+readable_attr() {
+  [ -r "$1" ]
+}
+
+format_sysfs_write_error() {
+  error_text=$1
+
+  case "$error_text" in
+    *"I/O error"*) printf 'kernel rejected sysfs write with I/O error\n' ;;
+    *"Invalid argument"*) printf 'kernel rejected sysfs write as invalid\n' ;;
+    *"Device or resource busy"*) printf 'kernel reported device busy\n' ;;
+    '') printf 'write rejected\n' ;;
+    *) printf '%s\n' "$error_text" ;;
+  esac
+}
+
+write_attr_required() {
+  path=$1
+  value=$2
+  desc=$3
+  have_attr "$path" || fatal "${desc} is unavailable at ${path}"
+  if ! error=$({ printf '%s\n' "$value" >"$path"; } 2>&1); then
+    if [ -n "$error" ]; then
+      fatal "failed to set ${desc} via ${path}: $(format_sysfs_write_error "$error")"
+    fi
+    fatal "failed to set ${desc} via ${path}"
+  fi
+}
+
+write_attr_optional() {
+  path=$1
+  value=$2
+  desc=$3
+
+  have_attr "$path" || return 1
+  if ! error=$({ printf '%s\n' "$value" >"$path"; } 2>&1); then
+    if [ -n "$error" ]; then
+      log "warn: failed to set optional ${desc} via ${path}: $(format_sysfs_write_error "$error")"
+    else
+      log "warn: failed to set optional ${desc} via ${path}"
+    fi
+    return 1
+  fi
+  return 0
+}
+
+try_values_logged() {
+  severity=$1
+  path=$2
+  desc=$3
+  shift 3
+
+  have_attr "$path" || return 1
+  attempted=false
+  last_error=
+  for value in "$@"; do
+    [ -n "$value" ] || continue
+    attempted=true
+    if error=$({ printf '%s\n' "$value" >"$path"; } 2>&1); then
+      return 0
+    fi
+    if [ -n "$error" ]; then
+      last_error=$(format_sysfs_write_error "$error")
+    else
+      last_error="write rejected"
+    fi
+  done
+  if [ "$severity" = info ]; then
+    if [ "$attempted" = true ]; then
+      log "info: optional ${desc} is unsupported or rejected by this kernel; continuing without this tuning"
+    else
+      log "info: no non-empty candidate values supplied for optional ${desc} via ${path}"
+    fi
+    return 1
+  fi
+  if [ "$attempted" = false ]; then
+    log "${severity}: no non-empty candidate values supplied for ${desc} via ${path}"
+  elif [ -n "$last_error" ]; then
+    log "${severity}: none of the candidate values worked for ${desc} via ${path}: ${last_error}"
+  else
+    log "${severity}: none of the candidate values worked for ${desc} via ${path}"
+  fi
+  return 1
+}
+
+try_optional_values() {
+  try_values_logged info "$@"
+}
+
+try_required_values() {
+  if try_values_logged warn "$@"; then
+    return 0
+  fi
+  fatal "failed to set required $2 via $1"
+}
+
+canonical_device_path() {
+  readlink -f "$1" 2>/dev/null || printf '%s\n' "$1"
+}
+
+same_device_path() {
+  left=$(canonical_device_path "$1")
+  right=$(canonical_device_path "$2")
+  [ "$left" = "$right" ]
+}
+
+swap_active() {
+  target=$(canonical_device_path "$1")
+  {
+    IFS= read -r _
+    while read -r swapdev _; do
+      [ -n "$swapdev" ] || continue
+      swapdev_path=$(canonical_device_path "$swapdev")
+      if [ "$swapdev" = "$target" ] || [ "$swapdev_path" = "$target" ]; then
+        return 0
+      fi
+    done
+  } </proc/swaps
+  return 1
+}
+
+device_mounted() {
+  dev=$1
+  if [ -n "$FINDMNT_CMD" ]; then
+    "$FINDMNT_CMD" -rn -S "$dev" >/dev/null 2>&1
+    return $?
+  fi
+  while IFS=' ' read -r mount_source _mount_path _mount_type _mount_options _mount_rest || [ -n "${mount_source:-}" ]; do
+    [ "$mount_source" = "$dev" ] && return 0
+  done </proc/mounts
+  return 1
+}
+
+online_cpus() {
+  getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '1\n'
+}
+
+read_attr_first_line() {
+  path=$1
+  readable_attr "$path" || return 1
+  IFS= read -r value <"$path" || return 1
+  printf '%s\n' "$value"
+}
+
+zram_initstate() {
+  read_attr_first_line "$ZRAM_SYSFS/initstate" 2>/dev/null || printf 'unknown\n'
+}
+
+zram_disksize() {
+  read_attr_first_line "$ZRAM_SYSFS/disksize" 2>/dev/null || printf '0\n'
+}
+
+zram_uninitialized() {
+  state=$(zram_initstate)
+  disksize=$(zram_disksize)
+  case "$disksize" in
+    ''|*[!0-9]*) disksize=0 ;;
+  esac
+  case "$state" in
+    0|'') [ "$disksize" -eq 0 ] && return 0 ;;
+    unknown)
+      [ "$disksize" -eq 0 ] && return 0
+      ;;
+  esac
+  return 1
+}
+
+zram_initialized() {
+  zram_uninitialized && return 1
+  return 0
+}
+
+wait_until() {
+  timeout_sec=$1
+  shift
+
+  ensure_integer wait_timeout_sec "$timeout_sec"
+  waited=0
+  while :; do
+    "$@" && return 0
+    [ "$waited" -ge "$timeout_sec" ] && return 1
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
+wait_for_block_device() {
+  dev=$1
+  timeout_sec=$2
+
+  wait_until "$timeout_sec" test -b "$dev"
+}
+
+wait_for_zram_uninitialized() {
+  timeout_sec=$1
+
+  wait_until "$timeout_sec" zram_uninitialized
+}
+
+swap_inactive() {
+  ! swap_active "$1"
+}
+
+wait_for_swap_inactive() {
+  dev=$1
+  timeout_sec=$2
+
+  wait_until "$timeout_sec" swap_inactive "$dev"
+}
+
+zram_has_holders() {
+  holders_dir="${ZRAM_SYSFS}/holders"
+
+  [ -d "$holders_dir" ] || return 1
+  for holder in "$holders_dir"/*; do
+    [ -e "$holder" ] && return 0
+  done
+  return 1
+}
+
+zram_no_holders() {
+  ! zram_has_holders
+}
+
+wait_for_zram_no_holders() {
+  timeout_sec=$1
+
+  wait_until "$timeout_sec" zram_no_holders
+}
+
+device_size_mib() {
+  dev=$1
+
+  [ -b "$dev" ] || fatal "missing block device for size probe: $dev"
+  if [ -n "$BLOCKDEV_CMD" ]; then
+    bytes=$("$BLOCKDEV_CMD" --getsize64 "$dev" 2>/dev/null || true)
+    case "$bytes" in
+      ''|*[!0-9]*|0) ;;
+      *)
+        printf '%s\n' "$(((bytes + 1048575) / 1048576))"
+        return 0
+        ;;
+    esac
+  fi
+
+  sys_name=${dev##*/}
+  sectors_file="/sys/class/block/${sys_name}/size"
+  if [ -r "$sectors_file" ]; then
+    sectors=$(cat "$sectors_file" 2>/dev/null || true)
+    case "$sectors" in
+      ''|*[!0-9]*|0) ;;
+      *)
+        printf '%s\n' "$(((sectors * 512 + 1048575) / 1048576))"
+        return 0
+        ;;
+    esac
+  fi
+
+  fatal "unable to determine block device size for $dev"
+}
+
+backing_size_device() {
+  if [ -b "$ZRAM_BACKING_DEVICE" ]; then
+    printf '%s\n' "$ZRAM_BACKING_DEVICE"
+    return 0
+  fi
+  if [ -n "${ZRAM_BACKING_RAW_DEVICE:-}" ] && [ -b "$ZRAM_BACKING_RAW_DEVICE" ]; then
+    printf '%s\n' "$ZRAM_BACKING_RAW_DEVICE"
+    return 0
+  fi
+  if [ -n "${ZRAM_BACKING_RAW_DEVICE:-}" ]; then
+    require_raw_backing_device 30
+    return 0
+  fi
+  printf '%s\n' "$ZRAM_BACKING_DEVICE"
+}
+
+require_raw_backing_device() {
+  timeout_sec=$1
+
+  validate_device_path ZRAM_BACKING_RAW_DEVICE "$ZRAM_BACKING_RAW_DEVICE"
+  wait_for_block_device "$ZRAM_BACKING_RAW_DEVICE" "$timeout_sec" || \
+    fatal "missing raw zram writeback partition $ZRAM_BACKING_RAW_DEVICE"
+  printf '%s\n' "$ZRAM_BACKING_RAW_DEVICE"
+}
+
+block_device_readonly_flag() {
+  dev=$1
+
+  if [ -n "$BLOCKDEV_CMD" ]; then
+    readonly_flag=$("$BLOCKDEV_CMD" --getro "$dev" 2>/dev/null || true)
+    case "$readonly_flag" in
+      0|1)
+        printf '%s\n' "$readonly_flag"
+        return 0
+        ;;
+    esac
+  fi
+
+  canonical_dev=$(canonical_device_path "$dev")
+  sys_name=${canonical_dev##*/}
+  ro_file="/sys/class/block/${sys_name}/ro"
+  if [ -r "$ro_file" ]; then
+    readonly_flag=$(read_attr_first_line "$ro_file" 2>/dev/null || true)
+    case "$readonly_flag" in
+      0|1)
+        printf '%s\n' "$readonly_flag"
+        return 0
+        ;;
+    esac
+  fi
+  return 1
+}
+
+require_block_device_writable() {
+  dev=$1
+  desc=$2
+
+  if readonly_flag=$(block_device_readonly_flag "$dev"); then
+    [ "$readonly_flag" = "0" ] || fatal "${desc} is read-only: $dev"
+  fi
+}
+
+block_device_writable() {
+  dev=$1
+
+  readonly_flag=$(block_device_readonly_flag "$dev" || true)
+  [ "$readonly_flag" = "0" ]
+}
+
+total_ram_mib() {
+  if [ -r /proc/meminfo ]; then
+    mem_kib=
+    while IFS=' ' read -r key value _rest || [ -n "${key:-}" ]; do
+      [ "$key" = "MemTotal:" ] || continue
+      mem_kib=$value
+      break
+    done </proc/meminfo
+    case "$mem_kib" in
+      ''|*[!0-9]*|0) ;;
+      *)
+        printf '%s\n' "$(((mem_kib + 1023) / 1024))"
+        return 0
+        ;;
+    esac
+  fi
+
+  fatal "unable to determine total RAM"
+}
+
+ensure_integer() {
+  integer_label=$1
+  integer_value=$2
+  case "$integer_value" in
+    ''|*[!0-9]*)
+      fatal "$integer_label must be an integer, got '${integer_value:-unset}'"
+      ;;
+  esac
+}
+
+ensure_positive_integer() {
+  integer_label=$1
+  integer_value=$2
+  ensure_integer "$integer_label" "$integer_value"
+  [ "$integer_value" -gt 0 ] || fatal "$integer_label must be greater than zero"
+}
+
+ensure_bool_integer() {
+  bool_label=$1
+  bool_value=$2
+  case "$bool_value" in
+    0|1) ;;
+    *)
+      fatal "$bool_label must be 0 or 1, got '${bool_value:-unset}'"
+      ;;
+  esac
+}
+
+ensure_key_size_bits() {
+  key_size_label=$1
+  key_size_value=$2
+  ensure_positive_integer "$key_size_label" "$key_size_value"
+  [ "$((key_size_value % 8))" -eq 0 ] || fatal "$key_size_label must be a multiple of 8 bits"
+}
+
+ensure_percent() {
+  percent_label=$1
+  percent_value=$2
+  ensure_integer "$percent_label" "$percent_value"
+  if [ "$percent_value" -lt 0 ] || [ "$percent_value" -gt 100 ]; then
+    fatal "$percent_label must be between 0 and 100, got ${percent_value}"
+  fi
+}
+
+validate_device_path() {
+  label=$1
+  value=$2
+  case "$value" in
+    /dev/*) ;;
+    *)
+      fatal "${label} must be an absolute /dev path, got '${value:-unset}'"
+      ;;
+  esac
+  case "$value" in
+    *'..'*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./:+-]*)
+      fatal "${label} contains unsafe path characters: ${value}"
+      ;;
+  esac
+}
+
+validate_mapper_name() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.+-]*)
+      fatal "${label} must be a simple dm-crypt mapper name, got '${value:-unset}'"
+      ;;
+  esac
+}
+
+validate_token() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:+-]*)
+      fatal "${label} must be a simple sysfs token, got '${value:-unset}'"
+      ;;
+  esac
+}
+
+validate_sysfs_param_string() {
+  label=$1
+  value=$2
+
+  [ -n "$value" ] || return 0
+  [ "${#value}" -le 512 ] || fatal "${label} is too large"
+  printf '%s\n' "$value" | grep -E -q '^[A-Za-z0-9_.:+-]+=[A-Za-z0-9_.:+-]+([[:space:]]+[A-Za-z0-9_.:+-]+=[A-Za-z0-9_.:+-]+)*$' || \
+    fatal "${label} must be a space-separated key=value sysfs parameter string"
+}
+
+percent_ceil() {
+  total=$1
+  pct=$2
+  ensure_integer percent_total "$total"
+  ensure_integer percent_pct "$pct"
+  printf '%s\n' "$(((total * pct + 99) / 100))"
+}
+
+clamp_integer() {
+  value=$1
+  min=$2
+  max=$3
+  ensure_integer clamp_value "$value"
+  ensure_integer clamp_min "$min"
+  ensure_integer clamp_max "$max"
+  if [ "$min" -gt "$max" ]; then
+    fatal "invalid clamp bounds: ${min} > ${max}"
+  fi
+  if [ "$value" -lt "$min" ]; then
+    printf '%s\n' "$min"
+  elif [ "$value" -gt "$max" ]; then
+    printf '%s\n' "$max"
+  else
+    printf '%s\n' "$value"
+  fi
+}
+
+apply_dynamic_sizing() {
+  ensure_percent ZRAM_PCT "${ZRAM_PCT:-}"
+  [ "$ZRAM_PCT" -gt 0 ] || fatal "ZRAM_PCT must be greater than zero"
+  ensure_positive_integer ZRAM_MIN_MIB "$ZRAM_MIN_MIB"
+  ensure_positive_integer ZRAM_MAX_MIB "$ZRAM_MAX_MIB"
+  ensure_percent ZRAM_MEM_LIMIT_PCT "$ZRAM_MEM_LIMIT_PCT"
+  ensure_percent ZRAM_WRITEBACK_LIMIT_PCT "$ZRAM_WRITEBACK_LIMIT_PCT"
+  [ "$ZRAM_MIN_MIB" -le "$ZRAM_MAX_MIB" ] || fatal "ZRAM_MIN_MIB must be <= ZRAM_MAX_MIB"
+
+  ram_total_mib=$(total_ram_mib)
+  zram_target_mib=$(percent_ceil "$ram_total_mib" "$ZRAM_PCT")
+  ZRAM_SIZE_MIB=$(clamp_integer "$zram_target_mib" "$ZRAM_MIN_MIB" "$ZRAM_MAX_MIB")
+
+  zram_mem_limit_mib=$(percent_ceil "$ZRAM_SIZE_MIB" "$ZRAM_MEM_LIMIT_PCT")
+  if [ "$zram_mem_limit_mib" -gt "$ZRAM_SIZE_MIB" ]; then
+    zram_mem_limit_mib=$ZRAM_SIZE_MIB
+  fi
+  ZRAM_MEM_LIMIT_MIB=$zram_mem_limit_mib
+
+  if [ "$ZRAM_WRITEBACK_ENABLE" -eq 0 ]; then
+    ZRAM_WRITEBACK_LIMIT_ENABLE=0
+    ZRAM_WRITEBACK_LIMIT_MIB=0
+    return 0
+  fi
+
+  backing_size_mib=$(device_size_mib "$(backing_size_device)")
+  ensure_integer ZRAM_BACKING_RESERVE_MIB "$ZRAM_BACKING_RESERVE_MIB"
+  backing_reserve_mib=$ZRAM_BACKING_RESERVE_MIB
+  [ "$backing_size_mib" -gt "$backing_reserve_mib" ] || \
+    fatal "zram backing device is too small after reserve: ${backing_size_mib} MiB"
+  backing_usable_mib=$((backing_size_mib - backing_reserve_mib))
+
+  zram_writeback_target_mib=$(percent_ceil "$ZRAM_SIZE_MIB" "$ZRAM_WRITEBACK_LIMIT_PCT")
+  zram_writeback_cap_mib=$((backing_usable_mib / 2))
+  if [ "$zram_writeback_cap_mib" -lt 1024 ]; then
+    zram_writeback_cap_mib=$backing_usable_mib
+  fi
+  if [ "$zram_writeback_target_mib" -le "$zram_writeback_cap_mib" ]; then
+    ZRAM_WRITEBACK_LIMIT_MIB=$zram_writeback_target_mib
+  else
+    ZRAM_WRITEBACK_LIMIT_MIB=$zram_writeback_cap_mib
+  fi
+}
+
+validate_recompression_tier() {
+  tier=$1
+  enabled=$2
+  algorithm=$3
+  priority=$4
+  level=$5
+
+  ensure_bool_integer "ZRAM_TIER${tier}_ENABLE" "$enabled"
+  validate_token "ZRAM_TIER${tier}_ALGORITHM" "$algorithm"
+  ensure_positive_integer "ZRAM_TIER${tier}_PRIORITY" "$priority"
+  ensure_integer "ZRAM_TIER${tier}_LEVEL" "$level"
+}
+
+validate_static_setup_environment() {
+  validate_device_path ZRAM_SWAP_DEVICE "$ZRAM_SWAP_DEVICE"
+  validate_abs_path ZRAM_SYSFS "$ZRAM_SYSFS"
+  case "$ZRAM_SYSFS" in
+    /sys/*) ;;
+    *) fatal "ZRAM_SYSFS must stay under /sys, got '${ZRAM_SYSFS:-unset}'" ;;
+  esac
+  validate_device_path ZRAM_BACKING_RAW_DEVICE "$ZRAM_BACKING_RAW_DEVICE"
+  validate_device_path ZRAM_BACKING_DEVICE "$ZRAM_BACKING_DEVICE"
+  validate_mapper_name ZRAM_BACKING_MAPPER_NAME "$ZRAM_BACKING_MAPPER_NAME"
+  [ "$ZRAM_SWAP_DEVICE" != "$ZRAM_BACKING_DEVICE" ] || fatal "ZRAM swap device and backing device must differ"
+  [ "$ZRAM_BACKING_RAW_DEVICE" != "$ZRAM_BACKING_DEVICE" ] || fatal "ZRAM raw backing device and dm-crypt mapper must differ"
+  validate_token DMCRYPT_EPHEMERAL_CIPHER "$DMCRYPT_EPHEMERAL_CIPHER"
+  ensure_key_size_bits DMCRYPT_EPHEMERAL_KEY_SIZE "$DMCRYPT_EPHEMERAL_KEY_SIZE"
+  validate_token DMCRYPT_EPHEMERAL_HASH "$DMCRYPT_EPHEMERAL_HASH"
+  validate_device_path DMCRYPT_RANDOM_KEY_FILE "$DMCRYPT_RANDOM_KEY_FILE"
+  ensure_bool_integer ZRAM_WRITEBACK_ENABLE "$ZRAM_WRITEBACK_ENABLE"
+  validate_abs_path ZRAM_POLICY_CONFIG "$ZRAM_POLICY_CONFIG"
+}
+
+validate_dynamic_setup_environment() {
+  validate_static_setup_environment
+  validate_token ZRAM_COMPRESSION_ALGORITHM "$ZRAM_COMPRESSION_ALGORITHM"
+  validate_sysfs_param_string ZRAM_ALGORITHM_PARAMS "${ZRAM_ALGORITHM_PARAMS:-}"
+  validate_recompression_tier 1 "$ZRAM_TIER1_ENABLE" "$ZRAM_TIER1_ALGORITHM" "$ZRAM_TIER1_PRIORITY" "$ZRAM_TIER1_LEVEL"
+  validate_recompression_tier 2 "$ZRAM_TIER2_ENABLE" "$ZRAM_TIER2_ALGORITHM" "$ZRAM_TIER2_PRIORITY" "$ZRAM_TIER2_LEVEL"
+  validate_recompression_tier 3 "$ZRAM_TIER3_ENABLE" "$ZRAM_TIER3_ALGORITHM" "$ZRAM_TIER3_PRIORITY" "$ZRAM_TIER3_LEVEL"
+  ensure_positive_integer ZRAM_SIZE_MIB "$ZRAM_SIZE_MIB"
+  ensure_positive_integer ZRAM_MEM_LIMIT_MIB "$ZRAM_MEM_LIMIT_MIB"
+  ensure_integer ZRAM_SWAP_PRIORITY "$ZRAM_SWAP_PRIORITY"
+  ensure_integer ZRAM_MAX_COMP_STREAMS "$ZRAM_MAX_COMP_STREAMS"
+  ensure_bool_integer ZRAM_COMPRESSED_WRITEBACK "$ZRAM_COMPRESSED_WRITEBACK"
+  ensure_positive_integer ZRAM_WRITEBACK_BATCH_SIZE "$ZRAM_WRITEBACK_BATCH_SIZE"
+  ensure_bool_integer ZRAM_WRITEBACK_LIMIT_ENABLE "$ZRAM_WRITEBACK_LIMIT_ENABLE"
+  ensure_integer ZRAM_WRITEBACK_LIMIT_MIB "$ZRAM_WRITEBACK_LIMIT_MIB"
+  if [ "$ZRAM_WRITEBACK_LIMIT_ENABLE" -gt 0 ]; then
+    [ "$ZRAM_WRITEBACK_LIMIT_MIB" -gt 0 ] || fatal "ZRAM_WRITEBACK_LIMIT_MIB must be greater than zero when writeback_limit is enabled"
+  fi
+}
+
+to_bytes() {
+  ensure_integer "$1" "$2"
+  printf '%s\n' "$(($2 * 1024 * 1024))"
+}
+
+to_writeback_units() {
+  ensure_integer "$1" "$2"
+  printf '%s\n' "$((($2 * 1024 * 1024) / 4096))"
+}
+
+clear_backing_signatures() {
+  [ -b "$ZRAM_BACKING_DEVICE" ] || fatal "missing zram backing device $ZRAM_BACKING_DEVICE"
+  if [ -n "$BLKID_CMD" ] && "$BLKID_CMD" "$ZRAM_BACKING_DEVICE" >/dev/null 2>&1; then
+    require_command wipefs
+    wipefs -a -f "$ZRAM_BACKING_DEVICE" >/dev/null 2>&1 || \
+      fatal "failed to clear stale signatures from $ZRAM_BACKING_DEVICE"
+  fi
+}
+
+ephemeral_keyfile_size_bytes() {
+  ensure_key_size_bits DMCRYPT_EPHEMERAL_KEY_SIZE "$DMCRYPT_EPHEMERAL_KEY_SIZE"
+  printf '%s\n' "$((DMCRYPT_EPHEMERAL_KEY_SIZE / 8))"
+}
+
+active_mapper_device() {
+  mapper_name=$1
+
+  cryptsetup status "$mapper_name" 2>/dev/null |
+    while IFS=' ' read -r key value _rest; do
+      [ "$key" = "device:" ] || continue
+      [ -n "$value" ] || continue
+      printf '%s\n' "$value"
+      break
+    done
+}
+
+ensure_mapper_matches_raw_device() {
+  mapper_name=$1
+  mapper_path=$2
+  raw_device=$3
+
+  [ -b "$mapper_path" ] || return 1
+  mapper_source=$(active_mapper_device "$mapper_name") || \
+    fatal "existing zram writeback mapper ${mapper_path} is not an active cryptsetup mapping"
+  same_device_path "$mapper_source" "$raw_device" || \
+    fatal "existing zram writeback mapper ${mapper_path} maps ${mapper_source}, expected ${raw_device}"
+}
+
+open_ephemeral_backing_mapper() {
+  require_raw_backing_device 30 >/dev/null
+  require_command cryptsetup
+  if [ -b "$ZRAM_BACKING_DEVICE" ]; then
+    ensure_mapper_matches_raw_device "$ZRAM_BACKING_MAPPER_NAME" "$ZRAM_BACKING_DEVICE" "$ZRAM_BACKING_RAW_DEVICE"
+    return 0
+  fi
+
+  if [ -n "$MODPROBE_CMD" ]; then
+    "$MODPROBE_CMD" dm_mod >/dev/null 2>&1 || true
+    "$MODPROBE_CMD" dm_crypt >/dev/null 2>&1 || true
+  fi
+
+  keyfile_size=$(ephemeral_keyfile_size_bytes)
+  log "info: opening ephemeral zram writeback mapper ${ZRAM_BACKING_MAPPER_NAME} from ${ZRAM_BACKING_RAW_DEVICE}"
+  if ! cryptsetup open \
+    --type plain \
+    --batch-mode \
+    --key-file "$DMCRYPT_RANDOM_KEY_FILE" \
+    --keyfile-size "$keyfile_size" \
+    --cipher "$DMCRYPT_EPHEMERAL_CIPHER" \
+    --key-size "$DMCRYPT_EPHEMERAL_KEY_SIZE" \
+    --hash "$DMCRYPT_EPHEMERAL_HASH" \
+    "$ZRAM_BACKING_RAW_DEVICE" \
+    "$ZRAM_BACKING_MAPPER_NAME"; then
+    fatal "failed to open ephemeral zram writeback mapper ${ZRAM_BACKING_MAPPER_NAME}"
+  fi
+  wait_for_block_device "$ZRAM_BACKING_DEVICE" 10 || fatal "zram writeback mapper did not appear: $ZRAM_BACKING_DEVICE"
+}
+
+close_ephemeral_backing_mapper() {
+  [ -b "$ZRAM_BACKING_DEVICE" ] || return 0
+  require_command cryptsetup
+  ensure_mapper_matches_raw_device "$ZRAM_BACKING_MAPPER_NAME" "$ZRAM_BACKING_DEVICE" "$ZRAM_BACKING_RAW_DEVICE"
+  log "info: closing ephemeral zram writeback mapper ${ZRAM_BACKING_MAPPER_NAME}"
+  cryptsetup close "$ZRAM_BACKING_MAPPER_NAME" || fatal "failed to close ephemeral zram writeback mapper ${ZRAM_BACKING_MAPPER_NAME}"
+}
+
+ensure_backing_device() {
+  open_ephemeral_backing_mapper
+  wait_for_block_device "$ZRAM_BACKING_DEVICE" 30 || fatal "missing zram backing device $ZRAM_BACKING_DEVICE"
+  require_block_device_writable "$ZRAM_BACKING_DEVICE" "zram backing device"
+  if device_mounted "$ZRAM_BACKING_DEVICE"; then
+    fatal "zram backing device must not be mounted: $ZRAM_BACKING_DEVICE"
+  fi
+  if swap_active "$ZRAM_BACKING_DEVICE"; then
+    fatal "zram backing device must not be active swap: $ZRAM_BACKING_DEVICE"
+  fi
+  clear_backing_signatures
+}
+
+reset_device() {
+  reset_error=
+  sysfs_error=
+
+  [ -d "$ZRAM_SYSFS" ] || fatal "zram sysfs path is unavailable: $ZRAM_SYSFS"
+  if swap_active "$ZRAM_SWAP_DEVICE"; then
+    swapoff "$ZRAM_SWAP_DEVICE" || fatal "failed to swapoff $ZRAM_SWAP_DEVICE"
+    wait_for_swap_inactive "$ZRAM_SWAP_DEVICE" 10 || fatal "zram swap stayed active after swapoff: $ZRAM_SWAP_DEVICE"
+  fi
+  wait_for_zram_no_holders 10 || fatal "zram device still has open holders after swapoff: ${ZRAM_SWAP_DEVICE}"
+  if ! zram_initialized; then
+    log "info: zram device is already uninitialized; reset not required"
+    return 0
+  fi
+
+  if [ -n "$ZRAMCTL_CMD" ]; then
+    if error=$("$ZRAMCTL_CMD" --reset "$ZRAM_SWAP_DEVICE" 2>&1 >/dev/null); then
+      wait_for_zram_uninitialized 5 || fatal "zramctl reset did not reach uninitialized state for ${ZRAM_SWAP_DEVICE}"
+      return 0
+    fi
+    reset_error=$(format_sysfs_write_error "$error")
+  fi
+
+  if error=$({ printf '%s\n' 1 >"$ZRAM_SYSFS/reset"; } 2>&1); then
+    wait_for_zram_uninitialized 5 || fatal "zram reset did not reach uninitialized state for ${ZRAM_SWAP_DEVICE}"
+    if [ -n "$reset_error" ]; then
+      log "warn: zramctl reset failed but sysfs reset succeeded for ${ZRAM_SWAP_DEVICE}: ${reset_error}"
+    fi
+    return 0
+  fi
+  sysfs_error=$(format_sysfs_write_error "$error")
+  if [ -n "$reset_error" ]; then
+    fatal "failed to reset initialized zram device ${ZRAM_SWAP_DEVICE}; zramctl reset: ${reset_error}; sysfs reset: ${sysfs_error}"
+  fi
+  fatal "failed to reset initialized zram device ${ZRAM_SWAP_DEVICE}; sysfs reset: ${sysfs_error}"
+}
+
+configure_streams() {
+  streams=$ZRAM_MAX_COMP_STREAMS
+  ensure_integer ZRAM_MAX_COMP_STREAMS "$streams"
+  if [ "$streams" -eq 0 ]; then
+    streams=$(online_cpus)
+  fi
+  write_attr_optional "$ZRAM_SYSFS/max_comp_streams" "$streams" "zram max_comp_streams" || true
+}
+
+comp_algorithm_available() {
+  algorithm=$1
+  available=$(read_attr_first_line "$ZRAM_SYSFS/comp_algorithm" 2>/dev/null || true)
+  case " $available " in
+    *" $algorithm "*|*"[[]$algorithm] "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+configure_recompression_tier() {
+  tier=$1
+  enabled=$2
+  algorithm=$3
+  priority=$4
+  level=$5
+
+  [ "$enabled" -eq 1 ] || return 0
+  write_attr_required \
+    "$ZRAM_SYSFS/recomp_algorithm" \
+    "algo=${algorithm} priority=${priority}" \
+    "zram recompression tier ${tier} algorithm"
+  if [ "$level" -gt 0 ]; then
+    have_attr "$ZRAM_SYSFS/algorithm_params" || fatal "zram algorithm_params is unavailable for recompression tier ${tier}"
+    write_attr_required \
+      "$ZRAM_SYSFS/algorithm_params" \
+      "algo=${algorithm} priority=${priority} level=${level}" \
+      "zram recompression tier ${tier} parameters"
+  fi
+}
+
+configure_algorithms() {
+  if comp_algorithm_available "$ZRAM_COMPRESSION_ALGORITHM"; then
+    write_attr_required "$ZRAM_SYSFS/comp_algorithm" "$ZRAM_COMPRESSION_ALGORITHM" "zram comp_algorithm"
+  else
+    fatal "primary zram algorithm ${ZRAM_COMPRESSION_ALGORITHM} is unavailable"
+  fi
+
+  configure_recompression_tier 1 "$ZRAM_TIER1_ENABLE" "$ZRAM_TIER1_ALGORITHM" "$ZRAM_TIER1_PRIORITY" "$ZRAM_TIER1_LEVEL"
+  configure_recompression_tier 2 "$ZRAM_TIER2_ENABLE" "$ZRAM_TIER2_ALGORITHM" "$ZRAM_TIER2_PRIORITY" "$ZRAM_TIER2_LEVEL"
+  configure_recompression_tier 3 "$ZRAM_TIER3_ENABLE" "$ZRAM_TIER3_ALGORITHM" "$ZRAM_TIER3_PRIORITY" "$ZRAM_TIER3_LEVEL"
+
+  if [ -n "${ZRAM_ALGORITHM_PARAMS:-}" ]; then
+    write_attr_required \
+      "$ZRAM_SYSFS/algorithm_params" \
+      "$ZRAM_ALGORITHM_PARAMS" \
+      "zram algorithm_params"
+  fi
+}
+
+configure_writeback() {
+  [ "$ZRAM_WRITEBACK_ENABLE" -eq 1 ] || return 0
+  write_attr_required "$ZRAM_SYSFS/backing_dev" "$ZRAM_BACKING_DEVICE" "zram backing_dev"
+  if [ "$ZRAM_COMPRESSED_WRITEBACK" -gt 0 ]; then
+    try_required_values \
+      "$ZRAM_SYSFS/compressed_writeback" \
+      "zram compressed_writeback" \
+      yes \
+      1
+  fi
+  write_attr_required "$ZRAM_SYSFS/writeback_batch_size" "$ZRAM_WRITEBACK_BATCH_SIZE" "zram writeback_batch_size"
+  write_attr_required "$ZRAM_SYSFS/writeback_limit_enable" "$ZRAM_WRITEBACK_LIMIT_ENABLE" "zram writeback_limit_enable"
+  if [ "$ZRAM_WRITEBACK_LIMIT_ENABLE" -gt 0 ]; then
+    write_attr_required "$ZRAM_SYSFS/writeback_limit" \
+      "$(to_writeback_units ZRAM_WRITEBACK_LIMIT_MIB "$ZRAM_WRITEBACK_LIMIT_MIB")" \
+      "zram writeback_limit"
+  fi
+}
+
+start_device() {
+  [ "$ZRAM_ENABLE" -eq 1 ] || { log "info: zram setup disabled by defaults"; return 0; }
+  apply_dynamic_sizing
+  validate_dynamic_setup_environment
+  require_command modprobe
+  require_command mkswap
+  require_command swapon
+  require_command swapoff
+  [ -b "$ZRAM_SWAP_DEVICE" ] || "$MODPROBE_CMD" zram num_devices=1
+  wait_for_block_device "$ZRAM_SWAP_DEVICE" 10 || fatal "zram device node not present: $ZRAM_SWAP_DEVICE"
+  [ -d "$ZRAM_SYSFS" ] || fatal "zram sysfs path is unavailable: $ZRAM_SYSFS"
+  if [ "$ZRAM_WRITEBACK_ENABLE" -eq 1 ]; then
+    ensure_backing_device
+  else
+    log "info: zram writeback disabled; skipping backing device setup"
+  fi
+  reset_device
+  configure_streams
+  configure_algorithms
+  configure_writeback
+  write_attr_required "$ZRAM_SYSFS/mem_limit" "$(to_bytes ZRAM_MEM_LIMIT_MIB "$ZRAM_MEM_LIMIT_MIB")" "zram mem_limit"
+  write_attr_required "$ZRAM_SYSFS/disksize" "$(to_bytes ZRAM_SIZE_MIB "$ZRAM_SIZE_MIB")" "zram disksize"
+  write_attr_optional "$ZRAM_SYSFS/mem_used_max" 0 "zram mem_used_max reset" || true
+  mkswap -L zram0 "$ZRAM_SWAP_DEVICE" >/dev/null
+  swapon -p "$ZRAM_SWAP_PRIORITY" "$ZRAM_SWAP_DEVICE"
+}
+
+stop_device() {
+  validate_static_setup_environment
+  require_command swapoff
+  reset_device
+  close_ephemeral_backing_mapper
+}
+
+wait_backing_device() {
+  [ "$ZRAM_ENABLE" -eq 1 ] || return 0
+  validate_static_setup_environment
+  [ "$ZRAM_WRITEBACK_ENABLE" -eq 1 ] || return 0
+  open_ephemeral_backing_mapper
+  validate_device_path ZRAM_BACKING_DEVICE "$ZRAM_BACKING_DEVICE"
+  wait_for_block_device "$ZRAM_BACKING_DEVICE" 30 || fatal "missing zram backing device $ZRAM_BACKING_DEVICE"
+  [ -b "$ZRAM_BACKING_DEVICE" ] || fatal "zram backing path is not a block device: $ZRAM_BACKING_DEVICE"
+  require_block_device_writable "$ZRAM_BACKING_DEVICE" "zram backing device"
+  same_device_path "$ZRAM_BACKING_DEVICE" "$ZRAM_SWAP_DEVICE" && \
+    fatal "zram backing device must not be the zram swap device: $ZRAM_BACKING_DEVICE"
+}
+
+bool_status() {
+  if "$@"; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+backing_mapper_writable() {
+  [ -b "$ZRAM_BACKING_DEVICE" ] || return 1
+  block_device_writable "$ZRAM_BACKING_DEVICE"
+}
+
+status_device() {
+  [ "$ZRAM_ENABLE" -eq 1 ] || { printf 'enabled=0\n'; return 0; }
+  validate_static_setup_environment
+  printf 'enabled=1\n'
+  printf 'zram_device=%s\n' "$ZRAM_SWAP_DEVICE"
+  printf 'zram_device_present=%s\n' "$(bool_status test -b "$ZRAM_SWAP_DEVICE")"
+  printf 'zram_sysfs=%s\n' "$ZRAM_SYSFS"
+  printf 'zram_sysfs_exists=%s\n' "$(bool_status test -d "$ZRAM_SYSFS")"
+  printf 'zram_initialized=%s\n' "$(bool_status zram_initialized)"
+  printf 'zram_swap_active=%s\n' "$(bool_status swap_active "$ZRAM_SWAP_DEVICE")"
+  printf 'backing_mapper=%s\n' "$ZRAM_BACKING_MAPPER_NAME"
+  printf 'backing_device=%s\n' "$ZRAM_BACKING_DEVICE"
+  printf 'backing_mapper_exists=%s\n' "$(bool_status test -b "$ZRAM_BACKING_DEVICE")"
+  printf 'backing_mapper_writable=%s\n' "$(bool_status backing_mapper_writable)"
+}
+
+case "${1:-}" in
+  start) acquire_zram_lock 45; start_device ;;
+  stop) acquire_zram_lock 20; stop_device ;;
+  reset) acquire_zram_lock 20; validate_static_setup_environment; reset_device ;;
+  wait-backing) acquire_zram_lock 45; wait_backing_device ;;
+  status) status_device ;;
+  *)
+    echo "usage: ${0##*/} {start|stop|reset|wait-backing|status}" >&2
+    exit 1
+    ;;
+esac

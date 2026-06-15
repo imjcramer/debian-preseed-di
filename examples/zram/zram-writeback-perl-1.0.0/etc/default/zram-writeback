@@ -1,0 +1,8 @@
+# /etc/default/zram-writeback
+# Environment consumed by the systemd units shipped with this project.
+
+ZRAM_WRITEBACK_CONFIG=/etc/zram-writeback.conf
+ZRAM_WRITEBACK_DAEMON_INTERVAL=60
+ZRAM_WRITEBACK_DAEMON_OPTS=
+ZRAM_WRITEBACK_DRY_RUN=0
+ZRAM_WRITEBACK_VERBOSE=0

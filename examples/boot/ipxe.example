@@ -1,0 +1,40 @@
+#!ipxe
+set base http://192.0.2.10/debian
+set seed http://192.0.2.10:8080/d-i/debian/preseed.cfg
+
+menu Debian Trixie class examples
+item desktop_auto Desktop auto hardware
+item desktop_ssh Desktop with SSH server
+item desktop_nvidia Desktop with NVIDIA addon
+item desktop_emmc Desktop forcing eMMC storage
+item server_web Server web role
+choose target || goto cancelled
+goto ${target}
+
+:desktop_auto
+kernel ${base}/install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,desktop,standard,dhcp ---
+initrd ${base}/install.amd/initrd.gz
+boot
+
+:desktop_ssh
+kernel ${base}/install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,desktop,standard,dhcp,ssh ---
+initrd ${base}/install.amd/initrd.gz
+boot
+
+:desktop_nvidia
+kernel ${base}/install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,desktop,standard,dhcp,nvidia ---
+initrd ${base}/install.amd/initrd.gz
+boot
+
+:desktop_emmc
+kernel ${base}/install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,desktop,standard,dhcp,disk/emmc ---
+initrd ${base}/install.amd/initrd.gz
+boot
+
+:server_web
+kernel ${base}/install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,server,enhanced,dhcp,web ---
+initrd ${base}/install.amd/initrd.gz
+boot
+
+:cancelled
+echo Boot menu cancelled

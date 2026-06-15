@@ -1,0 +1,26 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: matrix-synapse
+  description: Matrix Synapse overlay.
+  merge_priority: 50
+services:
+  matrix_client_federation:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 443
+    - 8448
+    allow:
+      ipv4:
+      - 0.0.0.0/0
+      ipv6:
+      - ::/0
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: false

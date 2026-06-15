@@ -1,0 +1,195 @@
+@define-color panel rgba(8, 17, 31, 0.94);
+@define-color panel_alt rgba(16, 29, 51, 0.92);
+@define-color panel_hover rgba(28, 44, 70, 0.96);
+@define-color border rgba(236, 184, 96, 0.24);
+@define-color border_strong rgba(236, 184, 96, 0.74);
+@define-color text #f5efe3;
+@define-color muted #aeb7c6;
+@define-color amber #ecb860;
+@define-color amber_soft rgba(236, 184, 96, 0.18);
+@define-color amber_bold #f29f67;
+@define-color mint #9fd2bf;
+@define-color rose #f6a09a;
+@define-color red #f87171;
+
+* {
+  border: none;
+  border-radius: 0;
+  font-family: "Noto Sans", "Noto Color Emoji", "Symbola", "Font Awesome 6 Free", "Material Design Icons";
+  font-size: 17px;
+  min-height: 0;
+  font-feature-settings: "tnum";
+}
+
+window#waybar {
+  background: @panel;
+  border: 1px solid @border;
+  border-radius: 24px;
+  color: @text;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+}
+
+#workspaces {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+#custom-launcher,
+#custom-files,
+#custom-terminal,
+#taskbar button,
+#workspaces button,
+#clock,
+#network,
+#pulseaudio,
+#backlight,
+#battery,
+#disk,
+#cpu,
+#memory,
+#tray,
+#custom-keyboard,
+#custom-dnd,
+#custom-lock,
+#custom-power {
+  margin: 9px 5px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: @panel_alt;
+  border: 1px solid @border;
+  color: @text;
+}
+
+#workspaces button {
+  min-width: 32px;
+  padding: 0 16px;
+  font-weight: 700;
+}
+
+#workspaces button.active,
+#taskbar button.active,
+#custom-launcher:hover,
+#workspaces button:hover,
+#taskbar button:hover,
+#custom-files:hover,
+#custom-terminal:hover,
+#custom-keyboard:hover,
+#custom-dnd:hover,
+#custom-lock:hover,
+#custom-power:hover {
+  background: linear-gradient(135deg, rgba(236, 184, 96, 0.92), rgba(242, 159, 103, 0.92));
+  border-color: @border_strong;
+  color: #08111f;
+  box-shadow: 0 10px 26px rgba(236, 184, 96, 0.22);
+}
+
+#workspaces button.urgent {
+  background: rgba(68, 25, 33, 0.78);
+  border-color: rgba(246, 173, 173, 0.34);
+  color: @rose;
+}
+
+#workspaces button.hidden {
+  color: @muted;
+}
+
+#custom-launcher {
+  color: @amber;
+  font-weight: 700;
+}
+
+#taskbar button.minimized {
+  color: @muted;
+}
+
+#network,
+#pulseaudio,
+#backlight,
+#battery,
+#disk,
+#cpu,
+#memory,
+#tray,
+#custom-keyboard,
+#custom-dnd,
+#custom-lock,
+#custom-power {
+  margin-left: 1px;
+  margin-right: 1px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+#network,
+#pulseaudio,
+#backlight,
+#battery,
+#disk,
+#cpu,
+#memory {
+  min-width: 60px;
+}
+
+#custom-keyboard,
+#custom-dnd,
+#custom-lock,
+#custom-power {
+  min-width: 28px;
+}
+
+#custom-keyboard {
+  color: @mint;
+  font-weight: 700;
+}
+
+#custom-power {
+  background: rgba(248, 113, 113, 0.16);
+  border-color: rgba(248, 113, 113, 0.66);
+  color: @red;
+  font-weight: 700;
+}
+
+#custom-power:hover {
+  background: linear-gradient(135deg, rgba(248, 113, 113, 0.92), rgba(246, 160, 154, 0.92));
+  border-color: rgba(248, 113, 113, 0.86);
+  color: #08111f;
+  box-shadow: 0 10px 26px rgba(248, 113, 113, 0.22);
+}
+
+#network.disconnected,
+#network.disabled,
+#pulseaudio.muted {
+  color: @amber;
+}
+
+#clock {
+  font-weight: 700;
+  color: @amber;
+}
+
+#custom-dnd {
+  color: @amber_bold;
+}
+
+#battery.charging,
+#battery.full {
+  color: @mint;
+}
+
+#battery.warning {
+  color: @amber;
+}
+
+#battery.critical,
+#disk.critical,
+#cpu.critical,
+#memory.critical {
+  color: @red;
+}
+
+#disk.warning,
+#cpu.warning,
+#memory.warning {
+  color: @amber;
+}

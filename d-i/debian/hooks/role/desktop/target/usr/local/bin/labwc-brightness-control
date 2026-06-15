@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+command -v brightnessctl >/dev/null 2>&1 || {
+  printf 'fatal: brightnessctl is not installed\n' >&2
+  exit 1
+}
+command -v labwc-wofi >/dev/null 2>&1 || {
+  printf 'fatal: labwc-wofi is not installed\n' >&2
+  exit 1
+}
+
+current_percent=$(
+  brightnessctl -m 2>/dev/null |
+    awk -F, 'NR == 1 { gsub(/%/, "", $4); print $4 }' 2>/dev/null ||
+    true
+)
+case "$current_percent" in
+  ''|*[!0123456789]*) current_label='current unknown' ;;
+  *) current_label="current ${current_percent}%" ;;
+esac
+
+choice=$(
+  printf '%s\n' \
+    'Increase +10%' \
+    'Decrease -10%' \
+    'Night 15%' \
+    'Dim 30%' \
+    'Balanced 55%' \
+    'Bright 80%' \
+    'Maximum 100%' |
+    labwc-wofi --dmenu --prompt "Brightness (${current_label})" 2>/dev/null ||
+    true
+)
+
+case "$choice" in
+  'Increase +10%') exec brightnessctl set +10% ;;
+  'Decrease -10%') exec brightnessctl set 10%- ;;
+  'Night 15%') exec brightnessctl set 15% ;;
+  'Dim 30%') exec brightnessctl set 30% ;;
+  'Balanced 55%') exec brightnessctl set 55% ;;
+  'Bright 80%') exec brightnessctl set 80% ;;
+  'Maximum 100%') exec brightnessctl set 100% ;;
+esac
+
+exit 0

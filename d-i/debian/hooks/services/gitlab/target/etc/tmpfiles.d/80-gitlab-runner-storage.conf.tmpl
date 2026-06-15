@@ -1,0 +1,10 @@
+# Managed by debian-preseed-di.
+# GitLab runner storage that intentionally differs from the shared root policy.
+d /pool/aptly 0755 root root -
+d /pool/aptly/.aptly 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -
+d /pool/aptly/secrets 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -
+d /pool/aptly/bin 0755 root root -
+d /pool/aptly/queue 0750 root devops -
+d /pool/aptly/queue/requests 03770 root devops -
+d /pool/aptly/queue/results 03770 root devops -
+d /pool/aptly/queue/processing 0700 root root -

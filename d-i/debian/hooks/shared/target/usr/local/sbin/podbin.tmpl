@@ -1,0 +1,1140 @@
+#!/bin/sh
+# shellcheck disable=SC1091
+set -eu
+
+DEFAULTS_FILE=${PODBIN_DEFAULTS_FILE:-/etc/default/podbin}
+# shellcheck source=/etc/default/podbin
+[ ! -r "$DEFAULTS_FILE" ] || . "$DEFAULTS_FILE"
+
+: "${PODBIN_USER_HOME_BASE:=/data/accounts/podman/users}"
+: "${PODBIN_CONFIG_BASE:=/data/config/podman}"
+: "${PODBIN_USER_CONFIG_BASE:=${PODBIN_CONFIG_BASE}/users}"
+: "${PODBIN_SYSTEMD_USER_BASE:=${PODBIN_CONFIG_BASE}/systemd/users}"
+: "${PODBIN_ADMIN_META_BASE:=${PODBIN_CONFIG_BASE}/podbin/users}"
+: "${PODBIN_TEMPLATE_DIR:=${PODBIN_CONFIG_BASE}/templates/podbin}"
+: "${PODBIN_STATE_BASE:=/pool/podman}"
+: "${PODBIN_KEY_DIR:=/data/pki/ssh/.keys}"
+: "${PODBIN_KEY_NAME:=podbin_ed25519}"
+: "${PODBIN_HIGH_PORT_MIN:=1024}"
+: "${PODBIN_PORT_SCAN_START:=22000}"
+: "${PODBIN_PORT_SCAN_END:=60999}"
+: "${PODBIN_DEFAULT_BIND_IP:=127.0.0.1}"
+: "${PODBIN_DEFAULT_CONTAINER_SSH_PORT:=2222}"
+: "${PODBIN_SERVICE_USER:=podsvc}"
+: "${PODBIN_DEFAULT_IMAGE:=localhost/podbin-runtime:trixie}"
+: "${PODBIN_RUNTIME_USER_NAME:=poduser}"
+: "${PODBIN_RUNTIME_USER_UID:=2000}"
+: "${PODBIN_RUNTIME_USER_GID:=2000}"
+: "${PODBIN_RUNTIME_USER_HOME:=/home/poduser}"
+: "${PODBIN_RUNTIME_USER_SHELL:=/bin/sh}"
+: "${PODBIN_RUNTIME_AUTH_KEYS_DIR:=${PODBIN_RUNTIME_USER_HOME}/.ssh}"
+: "${PODBIN_RUNTIME_WORKDIR:=/workspace}"
+: "${PODBIN_KNOWN_HOSTS_FILE:=${PODBIN_CONFIG_BASE}/podbin/known_hosts}"
+: "${PODBIN_DEFAULT_CONTAINER_SSH_USER:=$PODBIN_RUNTIME_USER_NAME}"
+: "${PODBIN_DEFAULT_CONTAINER_SHELL:=$PODBIN_RUNTIME_USER_SHELL}"
+
+PODBIN_USER_MANAGER_READY_UIDS=" "
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+fatal() {
+  printf 'podbin: fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+warn() {
+  printf 'podbin: warning: %s\n' "$*" >&2
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  podbin --create-user <username>
+  podbin --create-container <username>
+  podbin --delete-container <username>
+  podbin --start-container <username>
+  podbin --connect-container <username>
+  podbin --open-container <username>
+
+Guide:
+  /data/docs/podbin.md
+EOF
+}
+
+require_root() {
+  [ "$(id -u)" -eq 0 ] || fatal "run as root"
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fatal "required command is missing: $1"
+}
+
+require_uint() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!0-9]*) fatal "$label must be an integer: ${value:-unset}" ;;
+  esac
+}
+
+require_high_port() {
+  label=$1
+  value=$2
+  require_uint "$label" "$value"
+  [ "$value" -ge "$PODBIN_HIGH_PORT_MIN" ] || fatal "$label must be >= ${PODBIN_HIGH_PORT_MIN}: $value"
+  [ "$value" -le 65535 ] || fatal "$label must be <= 65535: $value"
+}
+
+require_abs_path() {
+  label=$1
+  value=$2
+  case "$value" in
+    /*) ;;
+    *) fatal "$label must be an absolute path: ${value:-unset}" ;;
+  esac
+  case "$value" in
+    /|*..*|*//*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@%:+,-]*)
+      fatal "$label contains unsupported path syntax: $value"
+      ;;
+  esac
+}
+
+require_managed_child_path() {
+  label=$1
+  base=$2
+  value=$3
+  require_abs_path "$label" "$value"
+  case "$value" in
+    "$base"/*) ;;
+    *) fatal "$label must stay below $base: $value" ;;
+  esac
+}
+
+validate_account_name() {
+  value=$1
+  [ ${#value} -le 32 ] || fatal "username is too long: $value"
+  case "$value" in
+    [abcdefghijklmnopqrstuvwxyz_]*)
+      ;;
+    *)
+      fatal "username must start with a lowercase letter or underscore: ${value:-unset}"
+      ;;
+  esac
+  case "$value" in
+    *[!abcdefghijklmnopqrstuvwxyz0123456789_-]*)
+      fatal "username contains unsupported characters: $value"
+      ;;
+  esac
+  case "$value" in
+    root|nobody|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|_apt)
+      fatal "refusing reserved account name: $value"
+      ;;
+  esac
+}
+
+validate_username() {
+  value=$1
+  validate_account_name "$value"
+  [ "$value" != "$PODBIN_SERVICE_USER" ] || fatal "refusing reserved Podman service account name: $value"
+}
+
+validate_container_ssh_user() {
+  value=$1
+  [ ${#value} -le 32 ] || fatal "container SSH user is too long: $value"
+  case "$value" in
+    [ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_]*)
+      ;;
+    *)
+      fatal "container SSH user must start with a letter or underscore: ${value:-unset}"
+      ;;
+  esac
+  case "$value" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*)
+      fatal "container SSH user contains unsupported characters: $value"
+      ;;
+  esac
+}
+
+validate_container_name() {
+  value=$1
+  [ ${#value} -le 63 ] || fatal "container name is too long: $value"
+  case "$value" in
+    [abcdefghijklmnopqrstuvwxyz0123456789]*)
+      ;;
+    *)
+      fatal "container name must start with lowercase alphanumeric: ${value:-unset}"
+      ;;
+  esac
+  case "$value" in
+    *[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
+      fatal "container name may only contain lowercase letters, numbers, and dashes: $value"
+      ;;
+  esac
+}
+
+validate_image_ref() {
+  value=$1
+  [ -n "$value" ] || fatal "image reference is required"
+  [ ${#value} -le 512 ] || fatal "image reference is too long"
+  case "$value" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@%:+,-]*)
+      fatal "image reference contains unsupported characters"
+      ;;
+  esac
+  case "$value" in
+    */*) ;;
+    *)
+      warn "image is not fully qualified; fully qualified names or digests are more robust"
+      ;;
+  esac
+}
+
+validate_bind_ip() {
+  case "$1" in
+    127.0.0.1|0.0.0.0) ;;
+    *) fatal "bind address must be 127.0.0.1 or 0.0.0.0: $1" ;;
+  esac
+}
+
+validate_shell_path() {
+  require_abs_path "container shell" "$1"
+}
+
+bool_from_prompt() {
+  value=$1
+  case "$value" in
+    ''|y|Y|yes|YES|true|TRUE|1) printf '%s\n' true ;;
+    n|N|no|NO|false|FALSE|0) printf '%s\n' false ;;
+    *) fatal "expected yes or no, got: $value" ;;
+  esac
+}
+
+shell_quote() {
+  case "$1" in
+    *\'*)
+      printf "'"
+      printf '%s' "$1" | sed "s/'/'\\\\''/g"
+      printf "'"
+      ;;
+    *)
+      printf "'%s'" "$1"
+      ;;
+  esac
+}
+
+safe_install_dir() {
+  mode=$1
+  owner=$2
+  group=$3
+  path=$4
+  [ ! -L "$path" ] || fatal "managed directory must not be a symlink: $path"
+  install -d -m "$mode" -o "$owner" -g "$group" "$path"
+}
+
+validate_template_relpath() {
+  relpath=$1
+  case "$relpath" in
+    ''|/*|.*|*..*|*//*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*)
+      fatal "unsafe template path: ${relpath:-unset}"
+      ;;
+  esac
+}
+
+template_path() {
+  relpath=$1
+  validate_template_relpath "$relpath"
+  printf '%s/%s\n' "$PODBIN_TEMPLATE_DIR" "$relpath"
+}
+
+render_template() {
+  src=$1
+  dest=$2
+  map_file="${dest}.map.$$"
+  shift 2
+
+  [ -r "$src" ] || fatal "template is missing: $src"
+  [ $(( $# % 2 )) -eq 0 ] || fatal "template arguments must be name/value pairs"
+  : >"$map_file" || {
+    rm -f "$map_file"
+    return 1
+  }
+  while [ "$#" -gt 1 ]; do
+    name=$1
+    value=$2
+    shift 2
+    case "$name" in
+      [ABCDEFGHIJKLMNOPQRSTUVWXYZ_][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]*) ;;
+      *)
+        rm -f "$map_file"
+        fatal "invalid template placeholder name: $name"
+        ;;
+    esac
+    printf '%s\t%s\n' "$name" "$value" >>"$map_file" || {
+      rm -f "$map_file"
+      return 1
+    }
+  done
+  awk '
+    NR == FNR {
+      tab = index($0, "\t")
+      if (tab == 0) {
+        next
+      }
+      name = substr($0, 1, tab - 1)
+      value = substr($0, tab + 1)
+      gsub(/\\/, "\\\\", value)
+      gsub(/&/, "\\\\&", value)
+      replacements["__" name "__"] = value
+      next
+    }
+    {
+      line = $0
+      for (placeholder in replacements) {
+        gsub(placeholder, replacements[placeholder], line)
+      }
+      print line
+    }
+  ' "$map_file" "$src" >"$dest" || {
+    rm -f "$map_file" "$dest"
+    return 1
+  }
+  rm -f "$map_file"
+}
+
+install_template() {
+  relpath=$1
+  dest=$2
+  mode=$3
+  owner=$4
+  group=$5
+  shift 5
+  tmp="${dest}.tmp.$$"
+  src=$(template_path "$relpath")
+
+  render_template "$src" "$tmp" "$@" || {
+    rm -f "$tmp"
+    return 1
+  }
+  install -m "$mode" -o "$owner" -g "$group" "$tmp" "$dest" || {
+    rm -f "$tmp"
+    return 1
+  }
+  rm -f "$tmp"
+}
+
+login_value() {
+  key=$1
+  fallback=$2
+  value=$(awk -v wanted="$key" '$1 == wanted && $2 ~ /^[0-9]+$/ { print $2; exit }' /etc/login.defs 2>/dev/null || true)
+  [ -n "$value" ] || value=$fallback
+  printf '%s\n' "$value"
+}
+
+load_user_record() {
+  user=$1
+  record=$(getent passwd "$user" 2>/dev/null || true)
+  [ -n "$record" ] || return 1
+  PODBIN_USER_NAME=$user
+  old_ifs=$IFS
+  IFS=:
+  read -r _ _ PODBIN_USER_UID PODBIN_USER_GID _ PODBIN_USER_HOME PODBIN_USER_SHELL <<EOF
+$record
+EOF
+  IFS=$old_ifs
+  group_record=$(getent group "$PODBIN_USER_GID" 2>/dev/null || true)
+  [ -n "$group_record" ] || fatal "primary group is missing for $user"
+  old_ifs=$IFS
+  IFS=:
+  read -r PODBIN_USER_GROUP _ _ _ <<EOF
+$group_record
+EOF
+  IFS=$old_ifs
+  require_uint "uid" "$PODBIN_USER_UID"
+  require_uint "gid" "$PODBIN_USER_GID"
+  [ -n "$PODBIN_USER_HOME" ] || fatal "account home is empty for $user"
+  [ -n "$PODBIN_USER_GROUP" ] || fatal "primary group is missing for $user"
+  export PODBIN_USER_NAME PODBIN_USER_UID PODBIN_USER_GID PODBIN_USER_HOME PODBIN_USER_SHELL PODBIN_USER_GROUP
+}
+
+user_config_root() {
+  printf '%s/%s\n' "$PODBIN_USER_CONFIG_BASE" "$1"
+}
+
+user_state_root() {
+  printf '%s/%s\n' "$PODBIN_STATE_BASE" "$1"
+}
+
+user_meta_root() {
+  printf '%s/%s\n' "$PODBIN_ADMIN_META_BASE" "$1"
+}
+
+user_systemd_dir() {
+  printf '%s/%s\n' "$PODBIN_SYSTEMD_USER_BASE" "$1"
+}
+
+ensure_symlink() {
+  link_path=$1
+  target_path=$2
+  backup_dir=$3
+  owner=$4
+  group=$5
+
+  safe_install_dir 0700 root root "$backup_dir"
+  if [ -L "$link_path" ] && [ "$(readlink "$link_path")" = "$target_path" ]; then
+    return 0
+  fi
+  if [ -e "$link_path" ] || [ -L "$link_path" ]; then
+    backup_path="${backup_dir}/$(basename "$link_path").$(date -u +%Y%m%dT%H%M%SZ)"
+    [ ! -e "$backup_path" ] || backup_path="${backup_path}.$$"
+    mv "$link_path" "$backup_path"
+  fi
+  ln -s "$target_path" "$link_path"
+  chown -h "$owner:$group" "$link_path"
+}
+
+subid_entry() {
+  file=$1
+  user=$2
+  [ -r "$file" ] || return 0
+  awk -F: -v wanted="$user" '$1 == wanted { print; exit }' "$file"
+}
+
+next_subid_start() {
+  block_size=$1
+  min_start=$2
+  max_end=$(awk -F: '
+    $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
+      end = $2 + $3 - 1
+      if (end > max) {
+        max = end
+      }
+    }
+    END {
+      if (max == 0) {
+        print 99999
+      } else {
+        print max
+      }
+    }
+  ' /etc/subuid /etc/subgid 2>/dev/null || printf '99999')
+  next=$((max_end + 1))
+  next=$((((next + block_size - 1) / block_size) * block_size))
+  [ "$next" -ge "$min_start" ] || next=$min_start
+  printf '%s\n' "$next"
+}
+
+subid_range_available() {
+  user=$1
+  start=$2
+  count=$3
+  end=$((start + count - 1))
+  conflict=$(awk -F: -v wanted="$user" -v start="$start" -v end="$end" '
+    $1 == wanted {
+      next
+    }
+    $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
+      entry_start = $2
+      entry_end = $2 + $3 - 1
+      if (!(end < entry_start || start > entry_end)) {
+        printf "%s:%s:%s:%s", FILENAME, $1, $2, $3
+        exit
+      }
+    }
+  ' /etc/subuid /etc/subgid 2>/dev/null || true)
+  [ -z "$conflict" ] || fatal "subordinate ID range ${start}:${count} for ${user} overlaps ${conflict}"
+}
+
+write_subid_entry() {
+  file=$1
+  user=$2
+  start=$3
+  count=$4
+  tmp_file="${file}.tmp.$$"
+  replacement="${user}:${start}:${count}"
+  awk -F: -v wanted="$user" -v replacement="$replacement" '
+    BEGIN { done = 0 }
+    $1 == wanted {
+      if (!done) {
+        print replacement
+        done = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!done) {
+        print replacement
+      }
+    }
+  ' "$file" >"$tmp_file"
+  chmod 0644 "$tmp_file"
+  mv "$tmp_file" "$file"
+}
+
+ensure_subids() {
+  user=$1
+  subid_count=65536
+  sub_gid_count=
+  subid_min=100000
+  sub_gid_min=
+  if [ -r /etc/login.defs ]; then
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+      [ -n "$key" ] || continue
+      case "$key" in
+        SUB_UID_COUNT) subid_count=$value ;;
+        SUB_GID_COUNT) sub_gid_count=$value ;;
+        SUB_UID_MIN) subid_min=$value ;;
+        SUB_GID_MIN) sub_gid_min=$value ;;
+      esac
+    done <<EOF
+$(awk '
+  ($1 == "SUB_UID_COUNT" || $1 == "SUB_GID_COUNT" || $1 == "SUB_UID_MIN" || $1 == "SUB_GID_MIN") && $2 ~ /^[0-9]+$/ {
+    print $1 "=" $2
+  }
+' /etc/login.defs 2>/dev/null || true)
+EOF
+  fi
+  [ -z "$sub_gid_count" ] || [ "$sub_gid_count" -le "$subid_count" ] || subid_count=$sub_gid_count
+  [ -z "$sub_gid_min" ] || [ "$sub_gid_min" -le "$subid_min" ] || subid_min=$sub_gid_min
+
+  [ ! -L /etc/subuid ] || fatal "/etc/subuid must not be a symlink"
+  [ ! -L /etc/subgid ] || fatal "/etc/subgid must not be a symlink"
+  [ -e /etc/subuid ] || : >/etc/subuid
+  [ -e /etc/subgid ] || : >/etc/subgid
+
+  subuid_entry=$(subid_entry /etc/subuid "$user")
+  subgid_entry=$(subid_entry /etc/subgid "$user")
+  if [ -n "$subuid_entry" ] && [ -n "$subgid_entry" ]; then
+    subuid_rest=${subuid_entry#*:}
+    subuid_start=${subuid_rest%%:*}
+    subuid_count=${subuid_rest#*:}
+    subgid_rest=${subgid_entry#*:}
+    subgid_start=${subgid_rest%%:*}
+    subgid_count=${subgid_rest#*:}
+    require_uint "subuid start" "$subuid_start"
+    require_uint "subgid start" "$subgid_start"
+    require_uint "subuid count" "$subuid_count"
+    require_uint "subgid count" "$subgid_count"
+    [ "$subuid_start" = "$subgid_start" ] || fatal "subuid/subgid starts differ for $user"
+    [ "$subuid_count" = "$subgid_count" ] || fatal "subuid/subgid counts differ for $user"
+    subid_start=$subuid_start
+    subid_count=$subuid_count
+  elif [ -n "$subuid_entry" ]; then
+    subuid_rest=${subuid_entry#*:}
+    subid_start=${subuid_rest%%:*}
+    subid_count=${subuid_rest#*:}
+  elif [ -n "$subgid_entry" ]; then
+    subgid_rest=${subgid_entry#*:}
+    subid_start=${subgid_rest%%:*}
+    subid_count=${subgid_rest#*:}
+  else
+    subid_start=$(next_subid_start "$subid_count" "$subid_min")
+  fi
+
+  require_uint "subid start" "$subid_start"
+  require_uint "subid count" "$subid_count"
+  subid_range_available "$user" "$subid_start" "$subid_count"
+  write_subid_entry /etc/subuid "$user" "$subid_start" "$subid_count"
+  write_subid_entry /etc/subgid "$user" "$subid_start" "$subid_count"
+}
+
+user_systemctl() {
+  user=$1
+  uid=$2
+  home=$3
+  shift 3
+  /usr/sbin/runuser -u "$user" -- \
+    env HOME="$home" XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" PATH="$PATH" \
+    /usr/bin/systemctl --user "$@"
+}
+
+user_podman() {
+  user=$1
+  uid=$2
+  home=$3
+  shift 3
+  /usr/sbin/runuser -u "$user" -- \
+    env HOME="$home" XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" PATH="$PATH" \
+    /usr/bin/podman "$@"
+}
+
+ensure_user_manager() {
+  user=$1
+  uid=$2
+  home=$3
+  case "$PODBIN_USER_MANAGER_READY_UIDS" in
+    *" $uid "*) return 0 ;;
+  esac
+  require_command loginctl
+  require_command systemctl
+  loginctl enable-linger "$user"
+  systemctl start "user@${uid}.service"
+  bus_path="/run/user/${uid}/bus"
+  for _ in 1 2 3 4 5; do
+    [ -S "$bus_path" ] && {
+      user_systemctl "$user" "$uid" "$home" daemon-reload
+      PODBIN_USER_MANAGER_READY_UIDS="${PODBIN_USER_MANAGER_READY_UIDS}${uid} "
+      return 0
+    }
+    sleep 1
+  done
+  fatal "user manager bus did not become ready for $user"
+}
+
+ensure_keypair() {
+  require_command ssh-keygen
+  safe_install_dir 0700 root root "$PODBIN_KEY_DIR"
+  key_path="${PODBIN_KEY_DIR}/${PODBIN_KEY_NAME}"
+  [ ! -L "$key_path" ] || fatal "private key path must not be a symlink: $key_path"
+  [ ! -L "${key_path}.pub" ] || fatal "public key path must not be a symlink: ${key_path}.pub"
+  if [ ! -f "$key_path" ]; then
+    [ ! -e "${key_path}.pub" ] || fatal "public podbin key exists without private key: ${key_path}.pub"
+    ssh-keygen -q -t ed25519 -a 100 -N '' -C "podbin@$(hostname 2>/dev/null || printf managed)" -f "$key_path"
+  fi
+  if [ ! -f "${key_path}.pub" ]; then
+    ssh-keygen -y -f "$key_path" >"${key_path}.pub"
+  fi
+  chmod 0600 "$key_path"
+  chmod 0644 "${key_path}.pub"
+  chown root:root "$key_path" "${key_path}.pub"
+}
+
+ensure_known_hosts_file() {
+  known_hosts_dir=$(dirname "$PODBIN_KNOWN_HOSTS_FILE")
+  safe_install_dir 0700 root root "$known_hosts_dir"
+  [ ! -L "$PODBIN_KNOWN_HOSTS_FILE" ] || fatal "known_hosts path must not be a symlink: $PODBIN_KNOWN_HOSTS_FILE"
+  [ -e "$PODBIN_KNOWN_HOSTS_FILE" ] || : >"$PODBIN_KNOWN_HOSTS_FILE"
+  chmod 0600 "$PODBIN_KNOWN_HOSTS_FILE"
+  chown root:root "$PODBIN_KNOWN_HOSTS_FILE"
+}
+
+runtime_image_template_dir() {
+  printf '%s/images/runtime\n' "$PODBIN_TEMPLATE_DIR"
+}
+
+ensure_runtime_image() {
+  user=$1
+  image=$2
+
+  if [ "$image" != "$PODBIN_DEFAULT_IMAGE" ]; then
+    warn "custom image must provide login user ${PODBIN_RUNTIME_USER_NAME}, shell ${PODBIN_RUNTIME_USER_SHELL}, and authorized_keys path ${PODBIN_RUNTIME_AUTH_KEYS_DIR}"
+    return 0
+  fi
+
+  template_dir=$(runtime_image_template_dir)
+  [ -d "$template_dir" ] || fatal "managed runtime image template directory is missing: $template_dir"
+  [ -r "$template_dir/Containerfile" ] || fatal "managed runtime Containerfile is missing: $template_dir/Containerfile"
+  [ -x "$template_dir/entrypoint.sh" ] || fatal "managed runtime entrypoint is missing or not executable: $template_dir/entrypoint.sh"
+  [ -r "$template_dir/sshd_config" ] || fatal "managed runtime sshd_config is missing: $template_dir/sshd_config"
+  if user_podman "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME" image exists "$image" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  printf 'podbin: building managed runtime image %s for %s\n' "$image" "$user" >&2
+  user_podman "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME" build \
+    --pull=missing \
+    --tag "$image" \
+    --file "${template_dir}/Containerfile" \
+    "$template_dir"
+}
+
+create_user() {
+  user=$1
+  validate_username "$user"
+  require_command groupadd
+  require_command useradd
+  require_command usermod
+  require_command passwd
+  require_command getent
+
+  uid_min=$(login_value UID_MIN 1000)
+  if load_user_record "$user"; then
+    [ "$PODBIN_USER_UID" -lt "$uid_min" ] || fatal "refusing login-class account for podbin user: $user"
+    case "$PODBIN_USER_HOME" in
+      /home|/home/*|/) fatal "refusing login home for podbin user $user: $PODBIN_USER_HOME" ;;
+    esac
+    [ "$PODBIN_USER_GROUP" = "$user" ] || fatal "primary group for $user must be $user, found $PODBIN_USER_GROUP"
+    home=$PODBIN_USER_HOME
+  else
+    home="${PODBIN_USER_HOME_BASE}/${user}"
+    groupadd --force --system -- "$user"
+    useradd --system -g "$user" -M -d "$home" -s /usr/sbin/nologin -c "Podbin rootless Podman account" -- "$user"
+    load_user_record "$user" || fatal "created user is missing from passwd: $user"
+  fi
+
+  usermod -s /usr/sbin/nologin -d "$home" -c "Podbin rootless Podman account" -- "$user"
+  safe_install_dir 0700 "$user" "$user" "$home"
+  passwd -l "$user" >/dev/null 2>&1 || true
+  ensure_subids "$user"
+
+  config_root=$(user_config_root "$user")
+  containers_config_dir="${config_root}/containers"
+  state_root=$(user_state_root "$user")
+  meta_root=$(user_meta_root "$user")
+  systemd_dir=$(user_systemd_dir "$PODBIN_USER_UID")
+  backup_root="${meta_root}/backups"
+
+  safe_install_dir 0755 root root "$PODBIN_CONFIG_BASE"
+  safe_install_dir 0755 root root "$PODBIN_USER_CONFIG_BASE"
+  safe_install_dir 0755 root root "$PODBIN_SYSTEMD_USER_BASE"
+  safe_install_dir 0755 root root "$PODBIN_ADMIN_META_BASE"
+  safe_install_dir 0700 root root "$meta_root"
+  safe_install_dir 0700 root root "${meta_root}/containers"
+  safe_install_dir 0700 "$user" "$user" "$config_root"
+  safe_install_dir 0700 "$user" "$user" "$containers_config_dir"
+  safe_install_dir 0755 root root "$systemd_dir"
+  safe_install_dir 0755 root root "${systemd_dir}/containers"
+  safe_install_dir 0700 "$user" "$user" "$state_root"
+  for state_child in storage imagestore runroot volumes networks libpod tmp; do
+    safe_install_dir 0700 "$user" "$user" "${state_root}/${state_child}"
+  done
+
+  install_template containers.conf.tmpl "${containers_config_dir}/containers.conf" 0644 "$user" "$user" \
+    PODBIN_STATE_ROOT "$state_root"
+  install_template storage.conf.tmpl "${containers_config_dir}/storage.conf" 0644 "$user" "$user" \
+    PODBIN_STATE_ROOT "$state_root"
+  install_template registries.conf "${containers_config_dir}/registries.conf" 0644 "$user" "$user"
+
+  safe_install_dir 0700 "$user" "$user" "${home}/.config"
+  safe_install_dir 0700 "$user" "$user" "${home}/.config/systemd"
+  safe_install_dir 0700 "$user" "$user" "${home}/.config/systemd/user"
+  ensure_symlink "${home}/.config/containers" "$containers_config_dir" "$backup_root" "$user" "$user"
+  safe_install_dir 0755 root root /etc/containers
+  safe_install_dir 0755 root root /etc/containers/systemd
+  safe_install_dir 0755 root root /etc/containers/systemd/users
+  ensure_symlink "/etc/containers/systemd/users/${PODBIN_USER_UID}" "$systemd_dir" "$backup_root" root root
+  install_template systemd/user/podbin-rootless.slice "${home}/.config/systemd/user/podbin-rootless.slice" 0644 "$user" "$user"
+  safe_install_dir 0755 root root "${systemd_dir}/container.d"
+  install_template systemd/users/container.d/10-podbin-managed.conf "${systemd_dir}/container.d/10-podbin-managed.conf" 0644 root root
+
+  ensure_keypair
+  ensure_user_manager "$user" "$PODBIN_USER_UID" "$home"
+  printf 'podbin user ready: user=%s uid=%s home=%s config=%s state=%s\n' "$user" "$PODBIN_USER_UID" "$home" "$config_root" "$state_root"
+}
+
+prompt() {
+  label=$1
+  default=$2
+  [ -c /dev/tty ] || fatal "interactive prompt requires /dev/tty"
+  if [ -n "$default" ]; then
+    printf '%s [%s]: ' "$label" "$default" >/dev/tty
+  else
+    printf '%s: ' "$label" >/dev/tty
+  fi
+  IFS= read -r answer </dev/tty || fatal "failed to read prompt input"
+  [ -n "$answer" ] || answer=$default
+  printf '%s\n' "$answer"
+}
+
+next_host_port() {
+  start=$PODBIN_PORT_SCAN_START
+  end=$PODBIN_PORT_SCAN_END
+  require_high_port "PODBIN_PORT_SCAN_START" "$start"
+  require_high_port "PODBIN_PORT_SCAN_END" "$end"
+  [ "$start" -le "$end" ] || fatal "PODBIN_PORT_SCAN_START must be <= PODBIN_PORT_SCAN_END"
+  used_ports=" "
+  while IFS= read -r used_port || [ -n "$used_port" ]; do
+    case "$used_port" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    case "$used_ports" in
+      *" $used_port "*) ;;
+      *) used_ports="${used_ports}${used_port} " ;;
+    esac
+  done <<EOF
+$(ss -ltn 2>/dev/null | awk '
+  NR > 1 {
+    endpoint = $4
+    sub(/^.*[:.]/, "", endpoint)
+    if (endpoint ~ /^[0-9]+$/) {
+      print endpoint
+    }
+  }
+' 2>/dev/null || true)
+$(if [ -d "$PODBIN_ADMIN_META_BASE" ]; then
+  find "$PODBIN_ADMIN_META_BASE" -type f -name '*.env' -exec awk -F= '
+    BEGIN { quote = sprintf("%c", 39) }
+    $1 == "PODBIN_HOST_PORT" {
+      gsub(quote, "", $2)
+      if ($2 ~ /^[0-9]+$/) {
+        print $2
+      }
+    }
+  ' {} + 2>/dev/null
+fi || true)
+EOF
+  port=$start
+  while [ "$port" -le "$end" ]; do
+    case "$used_ports" in
+      *" $port "*) port=$((port + 1)); continue ;;
+    esac
+    printf '%s\n' "$port"
+    return 0
+  done
+  fatal "no high host ports are available in ${start}-${end}"
+}
+
+metadata_path() {
+  user=$1
+  container=$2
+  printf '%s/containers/%s.env\n' "$(user_meta_root "$user")" "$container"
+}
+
+container_data_dir() {
+  user=$1
+  container=$2
+  printf '%s/podbin/containers/%s\n' "$(user_config_root "$user")" "$container"
+}
+
+load_metadata() {
+  user=$1
+  container=$2
+  meta=$(metadata_path "$user" "$container")
+  [ -f "$meta" ] || fatal "container metadata is missing: $container"
+  owner=$(stat -c '%u' "$meta")
+  mode=$(stat -c '%a' "$meta")
+  [ "$owner" = 0 ] || fatal "container metadata must be root-owned: $meta"
+  [ "$mode" = 600 ] || fatal "container metadata must be mode 0600: $meta"
+  PODBIN_USER=
+  PODBIN_CONTAINER=
+  PODBIN_CONTAINER_NAME=
+  PODBIN_IMAGE=
+  PODBIN_BIND_IP=
+  PODBIN_HOST_PORT=
+  PODBIN_CONTAINER_SSH_PORT=
+  PODBIN_CONTAINER_SSH_USER=
+  PODBIN_CONTAINER_SHELL=
+  PODBIN_AUTH_KEYS_DIR=
+  PODBIN_UNIT_PATH=
+  PODBIN_DATA_DIR=
+  PODBIN_ENV_FILE=
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+      PODBIN_*=\'*\') ;;
+      *) fatal "invalid metadata line in $meta" ;;
+    esac
+    key=${line%%=*}
+    raw_value=${line#*=}
+    value=${raw_value#\'}
+    value=${value%\'}
+    case "$value" in
+      *\'*) fatal "metadata value contains unsupported quote: $key" ;;
+    esac
+    case "$key" in
+      PODBIN_USER) PODBIN_USER=$value ;;
+      PODBIN_CONTAINER) PODBIN_CONTAINER=$value ;;
+      PODBIN_CONTAINER_NAME) PODBIN_CONTAINER_NAME=$value ;;
+      PODBIN_IMAGE) PODBIN_IMAGE=$value ;;
+      PODBIN_BIND_IP) PODBIN_BIND_IP=$value ;;
+      PODBIN_HOST_PORT) PODBIN_HOST_PORT=$value ;;
+      PODBIN_CONTAINER_SSH_PORT) PODBIN_CONTAINER_SSH_PORT=$value ;;
+      PODBIN_CONTAINER_SSH_USER) PODBIN_CONTAINER_SSH_USER=$value ;;
+      PODBIN_CONTAINER_SHELL) PODBIN_CONTAINER_SHELL=$value ;;
+      PODBIN_AUTH_KEYS_DIR) PODBIN_AUTH_KEYS_DIR=$value ;;
+      PODBIN_UNIT_PATH) PODBIN_UNIT_PATH=$value ;;
+      PODBIN_DATA_DIR) PODBIN_DATA_DIR=$value ;;
+      PODBIN_ENV_FILE) PODBIN_ENV_FILE=$value ;;
+      *) fatal "unsupported metadata key in $meta: $key" ;;
+    esac
+  done <"$meta"
+  [ "$PODBIN_USER" = "$user" ] || fatal "metadata user mismatch for $container"
+  [ "$PODBIN_CONTAINER" = "$container" ] || fatal "metadata container mismatch for $container"
+  validate_container_name "$PODBIN_CONTAINER"
+  [ "$PODBIN_CONTAINER_NAME" = "$PODBIN_CONTAINER" ] || fatal "container name metadata mismatch for $container"
+  [ -n "$PODBIN_IMAGE" ] || fatal "metadata image is empty for $container"
+  [ ${#PODBIN_IMAGE} -le 512 ] || fatal "metadata image reference is too long for $container"
+  case "$PODBIN_IMAGE" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@%:+,-]*)
+      fatal "metadata image reference contains unsupported characters for $container"
+      ;;
+  esac
+  validate_bind_ip "$PODBIN_BIND_IP"
+  require_high_port "metadata host SSH port" "$PODBIN_HOST_PORT"
+  require_high_port "metadata container SSH port" "$PODBIN_CONTAINER_SSH_PORT"
+  validate_container_ssh_user "$PODBIN_CONTAINER_SSH_USER"
+  [ "$PODBIN_CONTAINER_SSH_USER" = "$PODBIN_RUNTIME_USER_NAME" ] || fatal "metadata SSH user drifted from managed runtime user for $container"
+  validate_shell_path "$PODBIN_CONTAINER_SHELL"
+  [ "$PODBIN_CONTAINER_SHELL" = "$PODBIN_RUNTIME_USER_SHELL" ] || fatal "metadata shell drifted from managed runtime shell for $container"
+  require_abs_path "metadata authorized_keys directory" "$PODBIN_AUTH_KEYS_DIR"
+  [ "$PODBIN_AUTH_KEYS_DIR" = "$PODBIN_RUNTIME_AUTH_KEYS_DIR" ] || fatal "metadata authorized_keys directory drifted from managed runtime path for $container"
+  require_managed_child_path "metadata unit path" "$(user_systemd_dir "$PODBIN_USER_UID")" "$PODBIN_UNIT_PATH"
+  require_managed_child_path "metadata container data directory" "$(user_config_root "$user")" "$PODBIN_DATA_DIR"
+  require_managed_child_path "metadata env file" "$PODBIN_DATA_DIR" "$PODBIN_ENV_FILE"
+}
+
+write_metadata() {
+  user=$1
+  container=$2
+  meta=$(metadata_path "$user" "$container")
+  safe_install_dir 0700 root root "$(dirname "$meta")"
+  install_template metadata.env.tmpl "$meta" 0600 root root \
+    PODBIN_USER_SQ "$(shell_quote "$user")" \
+    PODBIN_CONTAINER_SQ "$(shell_quote "$container")" \
+    PODBIN_CONTAINER_NAME_SQ "$(shell_quote "$PODBIN_CONTAINER_NAME")" \
+    PODBIN_IMAGE_SQ "$(shell_quote "$PODBIN_IMAGE")" \
+    PODBIN_BIND_IP_SQ "$(shell_quote "$PODBIN_BIND_IP")" \
+    PODBIN_HOST_PORT_SQ "$(shell_quote "$PODBIN_HOST_PORT")" \
+    PODBIN_CONTAINER_SSH_PORT_SQ "$(shell_quote "$PODBIN_CONTAINER_SSH_PORT")" \
+    PODBIN_CONTAINER_SSH_USER_SQ "$(shell_quote "$PODBIN_CONTAINER_SSH_USER")" \
+    PODBIN_CONTAINER_SHELL_SQ "$(shell_quote "$PODBIN_CONTAINER_SHELL")" \
+    PODBIN_AUTH_KEYS_DIR_SQ "$(shell_quote "$PODBIN_AUTH_KEYS_DIR")" \
+    PODBIN_UNIT_PATH_SQ "$(shell_quote "$PODBIN_UNIT_PATH")" \
+    PODBIN_DATA_DIR_SQ "$(shell_quote "$PODBIN_DATA_DIR")" \
+    PODBIN_ENV_FILE_SQ "$(shell_quote "$PODBIN_ENV_FILE")"
+}
+
+select_container() {
+  user=$1
+  meta_dir="$(user_meta_root "$user")/containers"
+  [ -d "$meta_dir" ] || fatal "no containers exist for $user"
+  set --
+  for meta in "$meta_dir"/*.env; do
+    [ -f "$meta" ] || continue
+    name=${meta##*/}
+    name=${name%.env}
+    set -- "$@" "$name"
+  done
+  [ "$#" -gt 0 ] || fatal "no containers exist for $user"
+  if [ "$#" -eq 1 ]; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  [ -c /dev/tty ] || fatal "container selection requires /dev/tty"
+  index=1
+  for name in "$@"; do
+    printf '%s) %s\n' "$index" "$name" >/dev/tty
+    index=$((index + 1))
+  done
+  printf 'Select container: ' >/dev/tty
+  IFS= read -r choice </dev/tty || fatal "failed to read selection"
+  require_uint "selection" "$choice"
+  [ "$choice" -ge 1 ] && [ "$choice" -le "$#" ] || fatal "selection out of range"
+  index=1
+  for name in "$@"; do
+    if [ "$index" -eq "$choice" ]; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+  fatal "selection failed"
+}
+
+ensure_existing_user() {
+  user=$1
+  validate_username "$user"
+  load_user_record "$user" || fatal "podbin user does not exist; run: podbin --create-user $user"
+  config_root=$(user_config_root "$user")
+  systemd_dir=$(user_systemd_dir "$PODBIN_USER_UID")
+  [ -d "$config_root" ] || fatal "podbin config is missing for $user; run: podbin --create-user $user"
+  [ -d "$systemd_dir" ] || fatal "podbin Quadlet directory is missing for $user; run: podbin --create-user $user"
+}
+
+create_container() {
+  user=$1
+  ensure_existing_user "$user"
+  ensure_keypair
+  ensure_user_manager "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME"
+
+  container=$(prompt "Container name" "")
+  validate_container_name "$container"
+  meta=$(metadata_path "$user" "$container")
+  [ ! -e "$meta" ] || fatal "container already exists: $container"
+
+  image=$(prompt "Image reference" "$PODBIN_DEFAULT_IMAGE")
+  validate_image_ref "$image"
+  ensure_runtime_image "$user" "$image"
+  ssh_user=$PODBIN_DEFAULT_CONTAINER_SSH_USER
+  container_port=$(prompt "Container SSH port" "$PODBIN_DEFAULT_CONTAINER_SSH_PORT")
+  require_high_port "container SSH port" "$container_port"
+  host_port=$(prompt "Host SSH port" "$(next_host_port)")
+  require_high_port "host SSH port" "$host_port"
+  bind_ip=$(prompt "Host bind address" "$PODBIN_DEFAULT_BIND_IP")
+  validate_bind_ip "$bind_ip"
+  auth_dir=$PODBIN_RUNTIME_AUTH_KEYS_DIR
+  shell_path=$PODBIN_DEFAULT_CONTAINER_SHELL
+  read_only_answer=$(prompt "Read-only root filesystem (yes/no)" "yes")
+  read_only=$(bool_from_prompt "$read_only_answer")
+
+  PODBIN_CONTAINER=$container
+  PODBIN_CONTAINER_NAME=$container
+  PODBIN_IMAGE=$image
+  PODBIN_BIND_IP=$bind_ip
+  PODBIN_HOST_PORT=$host_port
+  PODBIN_CONTAINER_SSH_PORT=$container_port
+  PODBIN_CONTAINER_SSH_USER=$ssh_user
+  PODBIN_CONTAINER_SHELL=$shell_path
+  PODBIN_AUTH_KEYS_DIR=$auth_dir
+  PODBIN_DATA_DIR=$(container_data_dir "$user" "$container")
+  PODBIN_ENV_FILE="${PODBIN_DATA_DIR}/container.env"
+  PODBIN_UNIT_PATH="$(user_systemd_dir "$PODBIN_USER_UID")/${container}.container"
+  PODBIN_READ_ONLY=$read_only
+  export PODBIN_CONTAINER PODBIN_CONTAINER_NAME PODBIN_IMAGE PODBIN_BIND_IP PODBIN_HOST_PORT PODBIN_CONTAINER_SSH_PORT PODBIN_CONTAINER_SSH_USER PODBIN_CONTAINER_SHELL PODBIN_AUTH_KEYS_DIR PODBIN_DATA_DIR PODBIN_ENV_FILE PODBIN_UNIT_PATH PODBIN_READ_ONLY
+
+  require_managed_child_path "container data directory" "$(user_config_root "$user")" "$PODBIN_DATA_DIR"
+  safe_install_dir 0700 "$user" "$user" "$PODBIN_DATA_DIR"
+  safe_install_dir 0755 "$user" "$user" "${PODBIN_DATA_DIR}/ssh"
+  install -m 0644 -o "$user" -g "$user" "${PODBIN_KEY_DIR}/${PODBIN_KEY_NAME}.pub" "${PODBIN_DATA_DIR}/ssh/authorized_keys"
+  [ -f "$PODBIN_ENV_FILE" ] || install -m 0600 -o "$user" -g "$user" /dev/null "$PODBIN_ENV_FILE"
+  install_template systemd/users/container.container.tmpl "$PODBIN_UNIT_PATH" 0644 root root \
+    PODBIN_CONTAINER_NAME "$PODBIN_CONTAINER_NAME" \
+    PODBIN_IMAGE "$PODBIN_IMAGE" \
+    PODBIN_BIND_IP "$PODBIN_BIND_IP" \
+    PODBIN_HOST_PORT "$PODBIN_HOST_PORT" \
+    PODBIN_CONTAINER_SSH_PORT "$PODBIN_CONTAINER_SSH_PORT" \
+    PODBIN_READ_ONLY "$PODBIN_READ_ONLY" \
+    PODBIN_DATA_DIR "$PODBIN_DATA_DIR" \
+    PODBIN_AUTH_KEYS_DIR "$PODBIN_AUTH_KEYS_DIR" \
+    PODBIN_ENV_FILE "$PODBIN_ENV_FILE" \
+    PODBIN_RUNTIME_USER_UID "$PODBIN_RUNTIME_USER_UID" \
+    PODBIN_RUNTIME_USER_GID "$PODBIN_RUNTIME_USER_GID" \
+    PODBIN_RUNTIME_USER_HOME "$PODBIN_RUNTIME_USER_HOME" \
+    PODBIN_RUNTIME_WORKDIR "$PODBIN_RUNTIME_WORKDIR" \
+    PODBIN_USER_NAME "$PODBIN_USER_NAME" \
+    PODBIN_CONTAINER "$PODBIN_CONTAINER"
+  write_metadata "$user" "$container"
+  user_systemctl "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME" daemon-reload
+  printf 'podbin container ready: user=%s container=%s ssh=%s@%s:%s\n' "$user" "$container" "$ssh_user" "$bind_ip" "$host_port"
+}
+
+start_container() {
+  user=$1
+  container=$2
+  load_metadata "$user" "$container"
+  ensure_user_manager "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME"
+  user_systemctl "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME" start "${PODBIN_CONTAINER_NAME}.service"
+}
+
+start_container_action() {
+  user=$1
+  ensure_existing_user "$user"
+  container=$(select_container "$user")
+  start_container "$user" "$container"
+  printf 'podbin container started: user=%s container=%s\n' "$user" "$container"
+}
+
+delete_container() {
+  user=$1
+  ensure_existing_user "$user"
+  container=$(select_container "$user")
+  load_metadata "$user" "$container"
+  [ -c /dev/tty ] || fatal "delete confirmation requires /dev/tty"
+  printf 'Delete container %s for %s and remove its podbin metadata? [no]: ' "$container" "$user" >/dev/tty
+  IFS= read -r answer </dev/tty || fatal "failed to read confirmation"
+  case "$answer" in
+    yes|YES) ;;
+    *) fatal "delete cancelled" ;;
+  esac
+  user_systemctl "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME" stop "${PODBIN_CONTAINER_NAME}.service" >/dev/null 2>&1 || true
+  user_podman "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME" rm -f "$PODBIN_CONTAINER_NAME" >/dev/null 2>&1 || true
+  unit_dir=$(user_systemd_dir "$PODBIN_USER_UID")
+  require_managed_child_path "unit path" "$unit_dir" "$PODBIN_UNIT_PATH"
+  rm -f "$PODBIN_UNIT_PATH"
+  require_managed_child_path "container data directory" "$(user_config_root "$user")" "$PODBIN_DATA_DIR"
+  rm -rf -- "$PODBIN_DATA_DIR"
+  rm -f "$(metadata_path "$user" "$container")"
+  user_systemctl "$user" "$PODBIN_USER_UID" "$PODBIN_USER_HOME" daemon-reload
+  printf 'podbin container deleted: user=%s container=%s\n' "$user" "$container"
+}
+
+connect_container() {
+  user=$1
+  ensure_existing_user "$user"
+  container=$(select_container "$user")
+  start_container "$user" "$container"
+  connect_host=$PODBIN_BIND_IP
+  [ "$connect_host" != 0.0.0.0 ] || connect_host=127.0.0.1
+  key_path="${PODBIN_KEY_DIR}/${PODBIN_KEY_NAME}"
+  [ -f "$key_path" ] || fatal "podbin SSH key is missing: $key_path"
+  ensure_known_hosts_file
+  exec /usr/bin/ssh \
+    -i "$key_path" \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -o GlobalKnownHostsFile=/dev/null \
+    -o UserKnownHostsFile="$PODBIN_KNOWN_HOSTS_FILE" \
+    -p "$PODBIN_HOST_PORT" \
+    "${PODBIN_CONTAINER_SSH_USER}@${connect_host}"
+}
+
+open_container() {
+  user=$1
+  ensure_existing_user "$user"
+  container=$(select_container "$user")
+  start_container "$user" "$container"
+  exec /usr/sbin/runuser -u "$user" -- \
+    env HOME="$PODBIN_USER_HOME" XDG_RUNTIME_DIR="/run/user/${PODBIN_USER_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${PODBIN_USER_UID}/bus" PATH="$PATH" \
+    /usr/bin/podman exec --user "${PODBIN_RUNTIME_USER_UID}:${PODBIN_RUNTIME_USER_GID}" -it "$PODBIN_CONTAINER_NAME" "$PODBIN_CONTAINER_SHELL"
+}
+
+[ "$#" -eq 2 ] || {
+  usage >&2
+  exit 2
+}
+
+action=$1
+username=$2
+require_root
+require_abs_path PODBIN_USER_HOME_BASE "$PODBIN_USER_HOME_BASE"
+require_abs_path PODBIN_CONFIG_BASE "$PODBIN_CONFIG_BASE"
+require_abs_path PODBIN_USER_CONFIG_BASE "$PODBIN_USER_CONFIG_BASE"
+require_abs_path PODBIN_SYSTEMD_USER_BASE "$PODBIN_SYSTEMD_USER_BASE"
+require_abs_path PODBIN_ADMIN_META_BASE "$PODBIN_ADMIN_META_BASE"
+require_abs_path PODBIN_TEMPLATE_DIR "$PODBIN_TEMPLATE_DIR"
+require_abs_path PODBIN_STATE_BASE "$PODBIN_STATE_BASE"
+require_abs_path PODBIN_KEY_DIR "$PODBIN_KEY_DIR"
+require_abs_path PODBIN_RUNTIME_USER_HOME "$PODBIN_RUNTIME_USER_HOME"
+require_abs_path PODBIN_RUNTIME_USER_SHELL "$PODBIN_RUNTIME_USER_SHELL"
+require_abs_path PODBIN_RUNTIME_AUTH_KEYS_DIR "$PODBIN_RUNTIME_AUTH_KEYS_DIR"
+require_abs_path PODBIN_RUNTIME_WORKDIR "$PODBIN_RUNTIME_WORKDIR"
+require_abs_path PODBIN_KNOWN_HOSTS_FILE "$PODBIN_KNOWN_HOSTS_FILE"
+require_high_port PODBIN_HIGH_PORT_MIN "$PODBIN_HIGH_PORT_MIN"
+require_high_port PODBIN_PORT_SCAN_START "$PODBIN_PORT_SCAN_START"
+require_high_port PODBIN_PORT_SCAN_END "$PODBIN_PORT_SCAN_END"
+[ "$PODBIN_PORT_SCAN_START" -le "$PODBIN_PORT_SCAN_END" ] || fatal "PODBIN_PORT_SCAN_START must be <= PODBIN_PORT_SCAN_END"
+require_high_port PODBIN_DEFAULT_CONTAINER_SSH_PORT "$PODBIN_DEFAULT_CONTAINER_SSH_PORT"
+require_uint PODBIN_RUNTIME_USER_UID "$PODBIN_RUNTIME_USER_UID"
+require_uint PODBIN_RUNTIME_USER_GID "$PODBIN_RUNTIME_USER_GID"
+validate_image_ref "$PODBIN_DEFAULT_IMAGE"
+validate_bind_ip "$PODBIN_DEFAULT_BIND_IP"
+validate_container_ssh_user "$PODBIN_DEFAULT_CONTAINER_SSH_USER"
+validate_shell_path "$PODBIN_DEFAULT_CONTAINER_SHELL"
+validate_account_name "$PODBIN_SERVICE_USER"
+validate_account_name "$PODBIN_RUNTIME_USER_NAME"
+[ "$PODBIN_RUNTIME_USER_NAME" != root ] || fatal "PODBIN_RUNTIME_USER_NAME must not be root"
+[ "$PODBIN_RUNTIME_USER_NAME" != "$PODBIN_SERVICE_USER" ] || fatal "PODBIN_RUNTIME_USER_NAME must not reuse the reserved Podman service account"
+[ "$PODBIN_RUNTIME_AUTH_KEYS_DIR" = "${PODBIN_RUNTIME_USER_HOME}/.ssh" ] || fatal "PODBIN_RUNTIME_AUTH_KEYS_DIR must remain ${PODBIN_RUNTIME_USER_HOME}/.ssh"
+[ "$PODBIN_DEFAULT_CONTAINER_SSH_USER" = "$PODBIN_RUNTIME_USER_NAME" ] || fatal "PODBIN_DEFAULT_CONTAINER_SSH_USER must match PODBIN_RUNTIME_USER_NAME"
+[ "$PODBIN_DEFAULT_CONTAINER_SSH_USER" != root ] || fatal "PODBIN_DEFAULT_CONTAINER_SSH_USER must not be root"
+[ "$PODBIN_DEFAULT_CONTAINER_SHELL" = "$PODBIN_RUNTIME_USER_SHELL" ] || fatal "PODBIN_DEFAULT_CONTAINER_SHELL must match PODBIN_RUNTIME_USER_SHELL"
+[ -d "$PODBIN_TEMPLATE_DIR" ] || fatal "podbin template directory is missing: $PODBIN_TEMPLATE_DIR"
+
+case "$action" in
+  --ensure-keypair)
+    ensure_keypair
+    ;;
+  --create-user)
+    create_user "$username"
+    ;;
+  --create-container)
+    create_container "$username"
+    ;;
+  --delete-container)
+    delete_container "$username"
+    ;;
+  --start-container)
+    start_container_action "$username"
+    ;;
+  --connect-container)
+    connect_container "$username"
+    ;;
+  --open-container)
+    open_container "$username"
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

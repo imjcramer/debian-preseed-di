@@ -1,0 +1,271 @@
+#!/bin/sh
+set -eu
+
+: "${HOME:?HOME must be set}"
+
+config_root=${XDG_CONFIG_HOME:-${HOME}/.config}
+data_root=${XDG_DATA_HOME:-${HOME}/.local/share}
+state_root=${XDG_STATE_HOME:-${HOME}/.local/state}
+vdirsyncer_config="${config_root}/vdirsyncer/config"
+khal_config="${config_root}/khal/config"
+todoman_config="${config_root}/todoman/config.py"
+calendar_discovery_stamp="${state_root}/vdirsyncer/.labwc-calendar-discovered"
+calendar_sync_lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/labwc-calendar-sync.lock"
+
+fatal() {
+  printf 'fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fatal "required command is not installed: $1"
+}
+
+require_file() {
+  [ -r "$1" ] || fatal "required file is missing: $1"
+}
+
+run_terminal_action() {
+  require_command labwc-terminal
+  exec labwc-terminal -e "$0" "$@"
+}
+
+prompt_close() {
+  printf '\nPress Enter to close...'
+  IFS= read -r _ || true
+}
+
+ensure_calendar_environment() {
+  export VDIRSYNCER_CONFIG="$vdirsyncer_config"
+  export KHAL_CONFIG="$khal_config"
+  export TODOMAN_CONFIG="$todoman_config"
+}
+
+ensure_calendar_discovered() {
+  [ ! -e "$calendar_discovery_stamp" ] || return 0
+
+  for calendar_pair in fruux_calendar fruux_tasks; do
+    vdirsyncer discover "$calendar_pair"
+  done
+  : >"$calendar_discovery_stamp"
+  chmod 0600 "$calendar_discovery_stamp"
+}
+
+sync_calendar() {
+  quiet=false
+  if [ "${1:-}" = "--quiet" ]; then
+    quiet=true
+    shift
+  fi
+  [ "$#" -eq 0 ] || fatal "unsupported labwc-calendar sync arguments"
+
+  ensure_calendar_environment
+  require_command vdirsyncer
+  require_file "$VDIRSYNCER_CONFIG"
+
+  install -d -m 0700 \
+    "${data_root}/calendars/personal" \
+    "${data_root}/calendars/tasks" \
+    "${state_root}/vdirsyncer/status"
+  calendar_sync_lock_dir=${calendar_sync_lock%/*}
+  [ "$calendar_sync_lock_dir" != "$calendar_sync_lock" ] || calendar_sync_lock_dir=.
+  install -d -m 0700 "$calendar_sync_lock_dir"
+
+  if ! mkdir "$calendar_sync_lock" 2>/dev/null; then
+    if [ "$quiet" = true ]; then
+      exit 0
+    fi
+    fatal "calendar synchronization is already running"
+  fi
+  trap 'rmdir "$calendar_sync_lock" >/dev/null 2>&1 || true' EXIT HUP INT TERM
+
+  ensure_calendar_discovered
+  vdirsyncer sync
+  if [ "$quiet" = true ]; then
+    exit 0
+  fi
+  printf 'Calendar synchronization completed.\n'
+}
+
+open_calendar() {
+  ensure_calendar_environment
+  require_command labwc-terminal
+  require_file "$KHAL_CONFIG"
+  if command -v ikhal >/dev/null 2>&1; then
+    exec labwc-terminal -e ikhal
+  fi
+  require_command khal
+  exec labwc-terminal -e khal interactive
+}
+
+show_agenda() {
+  ensure_calendar_environment
+  require_command khal
+  require_file "$KHAL_CONFIG"
+  run_terminal_action agenda-terminal
+}
+
+show_agenda_terminal() {
+  ensure_calendar_environment
+  require_command khal
+  require_file "$KHAL_CONFIG"
+  khal list today 14d
+  prompt_close
+}
+
+show_tasks() {
+  ensure_calendar_environment
+  require_command todoman
+  require_file "$TODOMAN_CONFIG"
+  run_terminal_action tasks-terminal
+}
+
+show_tasks_terminal() {
+  ensure_calendar_environment
+  require_command todoman
+  require_file "$TODOMAN_CONFIG"
+  todoman list
+  prompt_close
+}
+
+create_event() {
+  ensure_calendar_environment
+  require_command labwc-terminal
+  require_command khal
+  require_file "$KHAL_CONFIG"
+  exec labwc-terminal -e khal new -i
+}
+
+edit_event() {
+  ensure_calendar_environment
+  require_command khal
+  require_file "$KHAL_CONFIG"
+  run_terminal_action edit-event-terminal
+}
+
+edit_event_terminal() {
+  ensure_calendar_environment
+  require_command khal
+  require_file "$KHAL_CONFIG"
+  printf 'Search event to edit: '
+  IFS= read -r query || exit 0
+  [ -n "$query" ] || exit 0
+  exec khal edit --show-past "$query"
+}
+
+create_task() {
+  ensure_calendar_environment
+  require_command labwc-terminal
+  require_command todoman
+  require_file "$TODOMAN_CONFIG"
+  exec labwc-terminal -e todoman new -i
+}
+
+edit_task() {
+  ensure_calendar_environment
+  require_command todoman
+  require_file "$TODOMAN_CONFIG"
+  run_terminal_action edit-task-terminal
+}
+
+edit_task_terminal() {
+  ensure_calendar_environment
+  require_command todoman
+  require_file "$TODOMAN_CONFIG"
+  todoman list
+  printf '\nTask id to edit: '
+  IFS= read -r task_id || exit 0
+  [ -n "$task_id" ] || exit 0
+  exec todoman edit -i "$task_id"
+}
+
+sync_terminal() {
+  if "$0" sync; then
+    status=0
+    printf '\nCalendar synchronization completed.\n'
+  else
+    status=$?
+    printf '\nCalendar synchronization failed with status %s.\n' "$status" >&2
+  fi
+  printf 'Press Enter to close... '
+  IFS= read -r _ || true
+  exit "$status"
+}
+
+open_menu() {
+  require_command labwc-wofi
+  selection=$(labwc-wofi --dmenu --prompt Calendar 2>/dev/null <<'EOF' || true
+Open Calendar
+Upcoming Agenda
+Open Tasks
+Create new Event
+Edit Event
+Create new Task
+Edit Task
+Sync Calendar
+EOF
+)
+
+  case "$selection" in
+    'Open Calendar') exec "$0" browse ;;
+    'Upcoming Agenda') exec "$0" agenda ;;
+    'Open Tasks') exec "$0" tasks ;;
+    'Create new Event') exec "$0" new-event ;;
+    'Edit Event') exec "$0" edit-event ;;
+    'Create new Task') exec "$0" new-task ;;
+    'Edit Task') exec "$0" edit-task ;;
+    'Sync Calendar')
+      run_terminal_action sync-terminal
+      ;;
+  esac
+  exit 0
+}
+
+case "${1:-browse}" in
+  browse|open)
+    open_calendar
+    ;;
+  agenda)
+    show_agenda
+    ;;
+  agenda-terminal)
+    show_agenda_terminal
+    ;;
+  tasks)
+    show_tasks
+    ;;
+  tasks-terminal)
+    show_tasks_terminal
+    ;;
+  new-event)
+    create_event
+    ;;
+  edit-event)
+    edit_event
+    ;;
+  edit-event-terminal)
+    edit_event_terminal
+    ;;
+  new-task)
+    create_task
+    ;;
+  edit-task)
+    edit_task
+    ;;
+  edit-task-terminal)
+    edit_task_terminal
+    ;;
+  sync-terminal)
+    sync_terminal
+    ;;
+  menu)
+    open_menu
+    ;;
+  sync)
+    shift
+    sync_calendar "$@"
+    ;;
+  *)
+    fatal "unsupported labwc-calendar action: $1"
+    ;;
+esac

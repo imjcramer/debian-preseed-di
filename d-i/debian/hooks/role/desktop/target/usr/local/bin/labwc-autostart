@@ -1,0 +1,159 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+systemctl_cmd=$(command -v systemctl 2>/dev/null || true)
+current_uid=$(id -u)
+HYPRPOLKITAGENT_PATH=
+
+desktop_enabled() {
+  case "${1:-true}" in
+    true|yes|1|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+require_non_negative_integer() {
+  value_name=$1
+  value=$2
+
+  case "$value" in
+    ''|*[!0-9]*)
+      printf 'fatal: %s must be a non-negative integer, got: %s\n' "$value_name" "$value" >&2
+      exit 1
+      ;;
+  esac
+}
+
+start_background() {
+  command_name=$1
+  shift
+
+  command -v "$command_name" >/dev/null 2>&1 || return 0
+  "$command_name" "$@" >/dev/null 2>&1 &
+}
+
+process_running_for_user() {
+  process_name=$1
+
+  command -v pgrep >/dev/null 2>&1 || return 1
+  pgrep -U "$current_uid" -x "$process_name" >/dev/null 2>&1
+}
+
+find_first_executable() {
+  for candidate_path in "$@"; do
+    [ -x "$candidate_path" ] || continue
+    printf '%s\n' "$candidate_path"
+    return 0
+  done
+  return 1
+}
+
+waybar_running() {
+  process_running_for_user waybar
+}
+
+start_waybar() {
+  waybar_running && return 0
+  start_background waybar -c "$HOME/.config/waybar/config" -s "$HOME/.config/waybar/style.css"
+}
+
+polkit_agent_running() {
+  process_running_for_user hyprpolkitagent
+}
+
+start_polkit_agent() {
+  polkit_agent_running && return 0
+
+  if [ -n "$systemctl_cmd" ] &&
+     "$systemctl_cmd" --user --no-block start hyprpolkitagent.service >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ -z "$HYPRPOLKITAGENT_PATH" ]; then
+    HYPRPOLKITAGENT_PATH=$(find_first_executable \
+      /usr/libexec/hyprpolkitagent \
+      /usr/lib/hyprpolkitagent \
+      /usr/lib64/hyprpolkitagent 2>/dev/null || true)
+  fi
+  [ -n "$HYPRPOLKITAGENT_PATH" ] || return 0
+  QT_NO_XDG_DESKTOP_PORTAL=1 "$HYPRPOLKITAGENT_PATH" >/dev/null 2>&1 &
+}
+
+start_labwc_session_target() {
+  if [ -n "$systemctl_cmd" ]; then
+    "$systemctl_cmd" --user --no-block start labwc-session.target >/dev/null 2>&1 || true
+  fi
+}
+
+if [ "${1:-}" = "--delayed-waybar" ]; then
+  shift
+  waybar_delay=${1:-0}
+  require_non_negative_integer "Waybar delay" "$waybar_delay"
+  sleep "$waybar_delay"
+  start_waybar
+  exit 0
+fi
+
+start_labwc_session_target
+
+wallpaper_path=${LABWC_WALLPAPER_PATH:-/usr/share/backgrounds/labwc/wallpapers/wall-labwall2-1920x1080.png}
+if desktop_enabled "${LABWC_ENABLE_SWAYBG:-true}" &&
+   [ -r "$wallpaper_path" ]; then
+  start_background swaybg -m fill -i "$wallpaper_path"
+fi
+
+start_background labwc-output-watch
+
+if desktop_enabled "${LABWC_ENABLE_KANSHI:-true}" && [ -r "$HOME/.config/kanshi/config" ]; then
+  start_background kanshi
+fi
+
+if desktop_enabled "${LABWC_ENABLE_MAKO:-true}" && [ -r "$HOME/.config/mako/config" ]; then
+  start_background mako -c "$HOME/.config/mako/config"
+fi
+
+if desktop_enabled "${LABWC_ENABLE_POLKIT_AGENT:-true}"; then
+  start_polkit_agent
+fi
+
+if desktop_enabled "${LABWC_ENABLE_WAYBAR:-true}" && [ -r "$HOME/.config/waybar/config" ]; then
+  waybar_delay=${LABWC_WAYBAR_START_DELAY_SECONDS:-0}
+  require_non_negative_integer LABWC_WAYBAR_START_DELAY_SECONDS "$waybar_delay"
+  if [ "$waybar_delay" -gt 0 ]; then
+    start_background labwc-autostart --delayed-waybar "$waybar_delay"
+  else
+    start_waybar
+  fi
+fi
+
+if desktop_enabled "${LABWC_ENABLE_CRYSTAL_DOCK:-true}"; then
+  start_background labwc-dock
+fi
+
+if desktop_enabled "${LABWC_ENABLE_SWAYIDLE:-true}"; then
+  lock_seconds=${LABWC_IDLE_LOCK_SECONDS:-900}
+  dpms_seconds=${LABWC_IDLE_DPMS_SECONDS:-1200}
+  suspend_seconds=${LABWC_IDLE_SUSPEND_SECONDS:-0}
+  require_non_negative_integer LABWC_IDLE_LOCK_SECONDS "$lock_seconds"
+  require_non_negative_integer LABWC_IDLE_DPMS_SECONDS "$dpms_seconds"
+  require_non_negative_integer LABWC_IDLE_SUSPEND_SECONDS "$suspend_seconds"
+  if [ "$suspend_seconds" -gt 0 ]; then
+    start_background swayidle -w \
+      timeout "$lock_seconds" labwc-lock \
+      timeout "$dpms_seconds" 'labwc-output-refresh --dpms-off' resume 'labwc-output-refresh' \
+      timeout "$suspend_seconds" 'systemctl suspend' \
+      before-sleep labwc-lock
+  else
+    start_background swayidle -w \
+      timeout "$lock_seconds" labwc-lock \
+      timeout "$dpms_seconds" 'labwc-output-refresh --dpms-off' resume 'labwc-output-refresh' \
+      before-sleep labwc-lock
+  fi
+fi
+
+exit 0

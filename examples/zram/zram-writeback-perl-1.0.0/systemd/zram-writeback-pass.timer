@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic zram recompression/writeback policy pass
+Documentation=man:zram-writeback(8)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=60s
+AccuracySec=15s
+Persistent=false
+Unit=zram-writeback-pass.service
+
+[Install]
+WantedBy=timers.target

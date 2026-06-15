@@ -1,0 +1,12 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+
+use FindBin qw($RealBin);
+use lib "$RealBin/../libexec/zram-writeback", '/usr/local/libexec/zram-writeback';
+
+$ENV{PATH} = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+
+use Zram::CLI;
+
+exit Zram::CLI::run(@ARGV);

@@ -1,0 +1,17 @@
+sbin/zram-writeback usr/sbin/
+lib/Zram usr/share/perl5/
+etc/zram-writeback.conf etc/
+etc/default/zram-writeback etc/default/
+modules-load.d/zram-writeback.conf etc/modules-load.d/
+modprobe.d/zram-writeback.conf etc/modprobe.d/
+tmpfiles.d/zram-writeback.conf etc/tmpfiles.d/
+systemd/zram-writeback-setup.service lib/systemd/system/
+systemd/zram-writebackd.service lib/systemd/system/
+systemd/zram-writeback-pass.service lib/systemd/system/
+systemd/zram-writeback-pass.timer lib/systemd/system/
+systemd/zram-writeback-budget.service lib/systemd/system/
+systemd/zram-writeback-budget.timer lib/systemd/system/
+man/zram-writeback.8 usr/share/man/man8/
+README.md usr/share/doc/zram-writeback/
+SECURITY.md usr/share/doc/zram-writeback/
+docs/* usr/share/doc/zram-writeback/docs/

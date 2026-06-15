@@ -1,0 +1,98 @@
+#!/bin/sh
+set -eu
+
+fatal() {
+  printf 'fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fatal "required command is not installed: $1"
+}
+
+require_executable() {
+  [ -x "$1" ] || fatal "required executable is not available: $1"
+}
+
+run_session_shutdown_hook() {
+  shutdown_hook="${XDG_CONFIG_HOME:-${HOME}/.config}/labwc/shutdown"
+  [ -x "$shutdown_hook" ] || return 0
+  "$shutdown_hook" >/dev/null 2>&1 || true
+}
+
+run_terminal_action() {
+  [ "$#" -ge 3 ] || fatal "usage: labwc-admin-action --terminal-run <label> <shutdown|keep-session> <command> [args...]"
+  label=$1
+  shutdown_mode=$2
+  shift 2
+
+  require_executable "$1"
+  require_command sudo
+  printf '%s\n' "$label"
+  printf 'sudo authentication is required to continue.\n\n'
+  if sudo -k -v; then
+    if [ "$shutdown_mode" = shutdown ]; then
+      run_session_shutdown_hook
+    fi
+    if sudo -- "$@"; then
+      status=0
+    else
+      status=$?
+    fi
+  else
+    status=$?
+    printf '\nAuthentication failed with status %s.\n' "$status" >&2
+    printf 'Press Enter to close... '
+    IFS= read -r _ || true
+    exit "$status"
+  fi
+  if [ "$status" -eq 0 ]; then
+    exit 0
+  fi
+  printf '\nCommand failed with status %s.\n' "$status" >&2
+  printf 'Press Enter to close... '
+  IFS= read -r _ || true
+  exit "$status"
+}
+
+case "${1:-}" in
+  --terminal-run)
+    shift
+    run_terminal_action "$@"
+    ;;
+esac
+
+action=${1:-}
+[ -n "$action" ] || fatal "usage: labwc-admin-action <suspend|reboot|poweroff>"
+shutdown_mode=keep-session
+
+case "$action" in
+  suspend)
+    prompt_label='Suspend the system'
+    shift
+    set -- /usr/bin/systemctl suspend "$@"
+    ;;
+  reboot)
+    prompt_label='Reboot the system'
+    shutdown_mode=shutdown
+    shift
+    set -- /usr/bin/systemctl reboot "$@"
+    ;;
+  poweroff)
+    prompt_label='Power off the system'
+    shutdown_mode=shutdown
+    shift
+    set -- /usr/bin/systemctl poweroff "$@"
+    ;;
+  *)
+    fatal "unsupported privileged desktop action: ${action}"
+    ;;
+esac
+
+[ "$#" -ge 2 ] || fatal "no privileged command was selected"
+
+require_executable "$1"
+require_command labwc-terminal
+require_command sudo
+
+exec labwc-terminal -e "$0" --terminal-run "$prompt_label" "$shutdown_mode" "$@"

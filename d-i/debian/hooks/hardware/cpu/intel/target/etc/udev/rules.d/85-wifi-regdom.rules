@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="ieee80211", RUN+="/sbin/iw reg set AU"

@@ -1,0 +1,68 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+desktop_enabled() {
+  case "${1:-true}" in
+    true|yes|1|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/labwc"
+install -d -m 0700 "$state_dir"
+log_path="${state_dir}/crystal-dock.log"
+
+desktop_enabled "${LABWC_ENABLE_CRYSTAL_DOCK:-true}" || exit 0
+
+dock_command=${LABWC_CRYSTAL_DOCK_COMMAND:-crystal-dock}
+case "$dock_command" in
+  ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._+@%=:,/\ -]*)
+    printf '%s invalid LABWC_CRYSTAL_DOCK_COMMAND: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$dock_command" >>"$log_path"
+    exit 1
+    ;;
+esac
+
+dock_binary=${dock_command%% *}
+dock_process=${dock_binary##*/}
+dock_user_id=$(id -u)
+
+if ! command -v "$dock_binary" >/dev/null 2>&1; then
+  printf '%s missing crystal-dock binary\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$log_path"
+  exit 0
+fi
+
+case "${1:-}" in
+  --stop)
+    pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+    exit 0
+    ;;
+  --restart)
+    pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+    sleep "${LABWC_CRYSTAL_DOCK_RESTART_DELAY_SECONDS:-1}"
+    ;;
+  '')
+    if pgrep -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1; then
+      exit 0
+    fi
+    ;;
+  *)
+    printf '%s unsupported labwc-dock argument: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >>"$log_path"
+    exit 1
+    ;;
+esac
+
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-labwc:wlroots}"
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland}"
+export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-qt6ct}"
+export QT_STYLE_OVERRIDE="${QT_STYLE_OVERRIDE:-adwaita-dark}"
+
+set -f
+# The validated command string intentionally contains only simple argv tokens.
+set -- $dock_command
+set +f
+exec "$@" >>"$log_path" 2>&1

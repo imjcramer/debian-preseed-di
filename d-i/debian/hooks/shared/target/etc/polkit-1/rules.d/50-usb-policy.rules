@@ -1,0 +1,88 @@
+// Managed by debian-preseed-di.
+// Daily USB filesystem operations require usbmedia membership. Destructive,
+// encrypted-unlock, cancel, or system-scope UDisks operations require usbadmin
+// membership plus sudo administrator authentication.
+
+(function() {
+    var ADMIN_GROUP = "sudo";
+    var USB_MEDIA_GROUP = "usbmedia";
+    var USB_ADMIN_GROUP = "usbadmin";
+
+    function startsWith(value, prefix) {
+        return typeof value === "string" && value.indexOf(prefix) === 0;
+    }
+
+    function lookupString(action, key) {
+        var value = action.lookup(key);
+        if (value === undefined || value === null) {
+            return "";
+        }
+
+        return String(value);
+    }
+
+    function activeLocal(subject) {
+        if (subject.active !== true) {
+            return false;
+        }
+        return subject.local === true ||
+            (typeof subject.seat === "string" && subject.seat.length > 0);
+    }
+
+    function isUDisksAction(actionId) {
+        return startsWith(actionId, "org.freedesktop.udisks2.") ||
+            startsWith(actionId, "org.freedesktop.UDisks2.");
+    }
+
+    function isRemovableUsbStorage(action) {
+        return lookupString(action, "drive.removable.bus") === "usb" ||
+            lookupString(action, "id.bus") === "usb";
+    }
+
+    function isDailyUsbMediaAction(actionId) {
+        var dailyActions = {
+            "org.freedesktop.udisks2.filesystem-mount": true,
+            "org.freedesktop.udisks2.filesystem-unmount": true,
+            "org.freedesktop.udisks2.drive-eject": true,
+            "org.freedesktop.udisks2.eject-media": true,
+            "org.freedesktop.udisks2.power-off-drive": true
+        };
+
+        return dailyActions[actionId] === true;
+    }
+
+    function usbAdminOnly(subject) {
+        if (!activeLocal(subject)) {
+            return polkit.Result.NO;
+        }
+        if (!subject.isInGroup(USB_ADMIN_GROUP)) {
+            return polkit.Result.NO;
+        }
+        if (!subject.isInGroup(ADMIN_GROUP)) {
+            return polkit.Result.NO;
+        }
+        return polkit.Result.AUTH_ADMIN;
+    }
+
+    polkit.addRule(function(action, subject) {
+        if (!isUDisksAction(action.id)) {
+            return polkit.Result.NOT_HANDLED;
+        }
+
+        if (!activeLocal(subject)) {
+            return polkit.Result.NO;
+        }
+
+        if (subject.user === "root") {
+            return polkit.Result.YES;
+        }
+
+        if (isDailyUsbMediaAction(action.id) &&
+            isRemovableUsbStorage(action) &&
+            subject.isInGroup(USB_MEDIA_GROUP)) {
+            return polkit.Result.YES;
+        }
+
+        return usbAdminOnly(subject);
+    });
+})();

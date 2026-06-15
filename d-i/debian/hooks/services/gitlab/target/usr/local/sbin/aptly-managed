@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+shopt -s inherit_errexit 2>/dev/null || true
+
+PROG="${0##*/}"
+ENV_DIR="/etc/default/gitlab-runner"
+SHARED_ENV="${ENV_DIR}/gitlab-runner-shared.env"
+APTLY_ENV="${ENV_DIR}/gitlab-runner-aptly.env"
+APTLY_STATE_DIR_DEFAULT="/pool/aptly"
+APTLY_ROOT_DIR_DEFAULT="${APTLY_STATE_DIR_DEFAULT}/.aptly"
+APTLY_CONFIG_TEMPLATE_DEFAULT="${APTLY_STATE_DIR_DEFAULT}/.aptly.conf.template.json"
+APTLY_CONFIG_DEFAULT="${APTLY_STATE_DIR_DEFAULT}/.aptly.conf"
+
+info() {
+  printf '%s: %s\n' "$PROG" "$*" >&2
+}
+
+die() {
+  printf '%s: %s\n' "$PROG" "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+validate_username() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "${label} has an invalid user name: ${value:-unset}"
+}
+
+validate_absolute_path() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" == /* ]] || die "${label} must be an absolute path: ${value:-unset}"
+  [[ "$value" != "/" ]] || die "${label} must not be /"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "${label} contains control characters"
+  [[ "$value" != *".."* ]] || die "${label} must not contain .."
+}
+
+load_env_file() {
+  local path="$1"
+  [[ -r "$path" && ! -L "$path" ]] || die "env file is not a readable regular file: ${path}"
+  # shellcheck disable=SC1090
+  . "$path"
+}
+
+reexec_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    return 0
+  fi
+  require_cmd sudo
+  exec sudo -- "$0" "$@"
+}
+
+load_envs() {
+  load_env_file "$SHARED_ENV"
+  load_env_file "$APTLY_ENV"
+
+  validate_absolute_path GITLAB_RUNNER_USER_HOME_BASE "${GITLAB_RUNNER_USER_HOME_BASE:-}"
+  validate_username GITLAB_RUNNER_APTLY_USERNAME "${GITLAB_RUNNER_APTLY_USERNAME:-}"
+  validate_username GITLAB_RUNNER_APTLY_OWNER_USERNAME "${GITLAB_RUNNER_APTLY_OWNER_USERNAME:-}"
+
+  requested_runner_user="${requested_runner_user:-${GITLAB_RUNNER_APTLY_USERNAME}}"
+  [[ "$requested_runner_user" == "$GITLAB_RUNNER_APTLY_USERNAME" ]] ||
+    die "unsupported runner user for Aptly control path: ${requested_runner_user}"
+
+  publish_user="${GITLAB_RUNNER_APTLY_OWNER_USERNAME}"
+  publish_home="${GITLAB_RUNNER_USER_HOME_BASE}/${publish_user}"
+  validate_absolute_path publish_home "$publish_home"
+  publish_passwd="$(getent passwd "$publish_user" || true)"
+  [[ -n "$publish_passwd" ]] || die "managed Aptly owner user is missing from passwd: ${publish_user}"
+  IFS=: read -r _pub_name _pub_passwd publish_uid publish_gid _pub_gecos publish_home_actual _pub_shell <<<"$publish_passwd"
+  [[ "$publish_home_actual" == "$publish_home" ]] || die "managed Aptly owner home drifted from ${publish_home}: ${publish_home_actual}"
+
+  APTLY_STATE_DIR="${APTLY_STATE_DIR:-$APTLY_STATE_DIR_DEFAULT}"
+  APTLY_ROOT_DIR="${APTLY_ROOT_DIR:-$APTLY_ROOT_DIR_DEFAULT}"
+  APTLY_CONFIG_TEMPLATE="${APTLY_CONFIG_TEMPLATE:-$APTLY_CONFIG_TEMPLATE_DEFAULT}"
+  APTLY_CONFIG="${APTLY_CONFIG:-$APTLY_CONFIG_DEFAULT}"
+
+  validate_absolute_path APTLY_STATE_DIR "$APTLY_STATE_DIR"
+  validate_absolute_path APTLY_ROOT_DIR "$APTLY_ROOT_DIR"
+  validate_absolute_path APTLY_CONFIG_TEMPLATE "$APTLY_CONFIG_TEMPLATE"
+  validate_absolute_path APTLY_CONFIG "$APTLY_CONFIG"
+}
+
+ensure_runtime_layout() {
+  [[ -d "$APTLY_STATE_DIR" && ! -L "$APTLY_STATE_DIR" ]] || die "aptly state dir is missing: ${APTLY_STATE_DIR}"
+  [[ -d "$APTLY_ROOT_DIR" && ! -L "$APTLY_ROOT_DIR" ]] || die "aptly root dir is missing: ${APTLY_ROOT_DIR}"
+  [[ -r "$APTLY_CONFIG_TEMPLATE" && ! -L "$APTLY_CONFIG_TEMPLATE" ]] || die "aptly config template is missing: ${APTLY_CONFIG_TEMPLATE}"
+}
+
+export_aptly_runtime_env() {
+  export APTLY_STATE_DIR
+  export APTLY_ROOT_DIR
+  export APTLY_CONFIG
+  export APTLY_CONFIG_TEMPLATE
+  export APTLY_R2_ENDPOINT_NAME="${GITLAB_RUNNER_APTLY_R2_ENDPOINT_NAME:-r2}"
+  export APTLY_ARCHITECTURES="${GITLAB_RUNNER_APTLY_ARCHITECTURES:-amd64}"
+  export APTLY_DOWNLOAD_CONCURRENCY="${GITLAB_RUNNER_APTLY_DOWNLOAD_CONCURRENCY:-4}"
+  export APTLY_R2_STORAGE_CLASS="${GITLAB_RUNNER_APTLY_R2_STORAGE_CLASS:-STANDARD}"
+  export APTLY_R2_DEBUG="${GITLAB_RUNNER_APTLY_R2_DEBUG:-false}"
+  export APTLY_PUBLISH_ENDPOINT="s3:${APTLY_R2_ENDPOINT_NAME}:"
+  export APTLY_PUBLISH_COMPONENT="${GITLAB_RUNNER_APTLY_PUBLISH_COMPONENT:-main}"
+  export APTLY_PUBLISH_DISTRIBUTION="${GITLAB_RUNNER_APTLY_PUBLISH_DISTRIBUTION:-}"
+  export APTLY_PUBLISH_ORIGIN="${GITLAB_RUNNER_APTLY_PUBLISH_ORIGIN:-GitLab CI}"
+  export APTLY_PUBLISH_LABEL="${GITLAB_RUNNER_APTLY_PUBLISH_LABEL:-GitLab CI}"
+  export APTLY_PUBLISH_ACQUIRE_BY_HASH="${GITLAB_RUNNER_APTLY_PUBLISH_ACQUIRE_BY_HASH:-true}"
+  export APTLY_SKIP_CONTENTS="${GITLAB_RUNNER_APTLY_SKIP_CONTENTS:-false}"
+  export R2_BUCKET_NAME="${GITLAB_RUNNER_APTLY_R2_BUCKET_NAME:-}"
+  export R2_ENDPOINT_URL="${GITLAB_RUNNER_APTLY_R2_ENDPOINT_URL:-}"
+  export R2_ACCOUNT_ID="${GITLAB_RUNNER_APTLY_R2_ACCOUNT_ID:-}"
+  export R2_ACCESS_KEY_ID="${GITLAB_RUNNER_APTLY_R2_ACCESS_KEY_ID:-}"
+  export R2_SECRET_ACCESS_KEY="${GITLAB_RUNNER_APTLY_R2_SECRET_ACCESS_KEY:-}"
+  export GPG_SIGNING_KEY="${GITLAB_RUNNER_APTLY_GPG_SIGNING_KEY:-}"
+  export GPG_SIGNING_PASSPHRASE="${GITLAB_RUNNER_APTLY_GPG_SIGNING_PASSPHRASE:-}"
+}
+
+render_config() {
+  local endpoint_host prefix debug_value bucket
+
+  ensure_runtime_layout
+  export_aptly_runtime_env
+  # shellcheck disable=SC1091
+  source /pool/aptly/bin/prepare-aptly-env.sh
+
+  bucket="$(trim "${R2_BUCKET_NAME:-}")"
+  endpoint_host="$(aptly_normalize_endpoint_host)"
+  prefix="$(aptly_normalize_prefix "${R2_PREFIX:-${GITLAB_RUNNER_APTLY_R2_PREFIX:-debian/}}")"
+  debug_value="$(aptly_bool_value "${APTLY_R2_DEBUG:-false}")"
+
+  aptly_render_config_file \
+    "$APTLY_CONFIG_TEMPLATE" \
+    "$APTLY_CONFIG" \
+    "$APTLY_ROOT_DIR" \
+    "${APTLY_ARCHITECTURES}" \
+    "${APTLY_DOWNLOAD_CONCURRENCY}" \
+    "${APTLY_R2_ENDPOINT_NAME}" \
+    "$bucket" \
+    "$endpoint_host" \
+    "$prefix" \
+    "${APTLY_R2_STORAGE_CLASS}" \
+    "$debug_value"
+  chown "${publish_user}:${publish_user}" "$APTLY_CONFIG"
+  chmod 0600 "$APTLY_CONFIG"
+  info "rendered ${APTLY_CONFIG} for ${publish_user}"
+}
+
+append_shell_export() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  printf 'export %s=%q\n' "$key" "$value" >>"$file"
+}
+
+write_publish_env_file() {
+  local env_file="$1"
+  : >"$env_file"
+  chown "${publish_user}:${publish_user}" "$env_file"
+  chmod 0600 "$env_file"
+  append_shell_export "$env_file" APTLY_STATE_DIR "$APTLY_STATE_DIR"
+  append_shell_export "$env_file" APTLY_ROOT_DIR "$APTLY_ROOT_DIR"
+  append_shell_export "$env_file" APTLY_CONFIG "$APTLY_CONFIG"
+  append_shell_export "$env_file" APTLY_CONFIG_TEMPLATE "$APTLY_CONFIG_TEMPLATE"
+  append_shell_export "$env_file" APTLY_R2_ENDPOINT_NAME "${APTLY_R2_ENDPOINT_NAME}"
+  append_shell_export "$env_file" APTLY_ARCHITECTURES "${APTLY_ARCHITECTURES}"
+  append_shell_export "$env_file" APTLY_DOWNLOAD_CONCURRENCY "${APTLY_DOWNLOAD_CONCURRENCY}"
+  append_shell_export "$env_file" APTLY_R2_STORAGE_CLASS "${APTLY_R2_STORAGE_CLASS}"
+  append_shell_export "$env_file" APTLY_R2_DEBUG "${APTLY_R2_DEBUG}"
+  append_shell_export "$env_file" APTLY_PUBLISH_ENDPOINT "${APTLY_PUBLISH_ENDPOINT}"
+  append_shell_export "$env_file" APTLY_PUBLISH_COMPONENT "${APTLY_PUBLISH_COMPONENT}"
+  append_shell_export "$env_file" APTLY_PUBLISH_DISTRIBUTION "${APTLY_PUBLISH_DISTRIBUTION}"
+  append_shell_export "$env_file" APTLY_PUBLISH_ORIGIN "${APTLY_PUBLISH_ORIGIN}"
+  append_shell_export "$env_file" APTLY_PUBLISH_LABEL "${APTLY_PUBLISH_LABEL}"
+  append_shell_export "$env_file" APTLY_PUBLISH_ACQUIRE_BY_HASH "${APTLY_PUBLISH_ACQUIRE_BY_HASH}"
+  append_shell_export "$env_file" APTLY_SKIP_CONTENTS "${APTLY_SKIP_CONTENTS}"
+  append_shell_export "$env_file" R2_BUCKET_NAME "${R2_BUCKET_NAME}"
+  append_shell_export "$env_file" R2_ENDPOINT_URL "${R2_ENDPOINT_URL}"
+  append_shell_export "$env_file" R2_ACCOUNT_ID "${R2_ACCOUNT_ID}"
+  append_shell_export "$env_file" R2_ACCESS_KEY_ID "${R2_ACCESS_KEY_ID}"
+  append_shell_export "$env_file" R2_SECRET_ACCESS_KEY "${R2_SECRET_ACCESS_KEY}"
+  append_shell_export "$env_file" GPG_SIGNING_KEY "${GPG_SIGNING_KEY}"
+  append_shell_export "$env_file" GPG_SIGNING_PASSPHRASE "${GPG_SIGNING_PASSPHRASE}"
+  append_shell_export "$env_file" APTLY_ALLOW_PUBLISH "true"
+  append_shell_export "$env_file" APTLY_JOB_TMP_BASE "/tmp/aptly-managed"
+}
+
+run_publish_command() {
+  local env_file
+  local -a aptly_args=("$@")
+  render_config
+  export_aptly_runtime_env
+  env_file="$(mktemp "${TMPDIR:-/tmp}/${PROG}.env.XXXXXX")"
+  trap 'rm -f -- "$env_file"' RETURN
+  write_publish_env_file "$env_file"
+  runuser -u "$publish_user" -- bash -lc '
+set -Eeuo pipefail
+. "$1"
+shift
+source /pool/aptly/bin/prepare-aptly-env.sh
+exec /pool/aptly/bin/aptly "$@"
+' bash "$env_file" "${aptly_args[@]}"
+  trap - RETURN
+  rm -f -- "$env_file"
+}
+
+usage() {
+  cat >&2 <<EOF
+usage: ${PROG} render-config
+       ${PROG} run <aptly args...>
+       ${PROG} publish <aptly publish args...>
+       ${PROG} [--runner-user glab-aptly] <subcommand> ...
+EOF
+}
+
+parse_args() {
+  [[ "$#" -ge 1 ]] || {
+    usage
+    exit 2
+  }
+  requested_runner_user=
+  if [[ "${1:-}" == "--runner-user" ]]; then
+    [[ "$#" -ge 3 ]] || die "--runner-user requires a value and subcommand"
+    requested_runner_user="$2"
+    shift 2
+  fi
+  command_name="$1"
+  shift
+  case "$command_name" in
+    render-config)
+      [[ "$#" -eq 0 ]] || die "render-config does not accept extra arguments"
+      ;;
+    run)
+      [[ "$#" -gt 0 ]] || die "run requires aptly arguments"
+      ;;
+    publish)
+      [[ "$#" -gt 0 ]] || die "publish requires aptly publish arguments"
+      ;;
+    *)
+      die "unsupported command: ${command_name}"
+      ;;
+  esac
+  command_args=("$@")
+}
+
+main() {
+  local -a original_args=("$@")
+  parse_args "$@"
+  reexec_as_root "${original_args[@]}"
+  load_envs
+  case "$command_name" in
+    render-config)
+      render_config
+      ;;
+    run)
+      run_publish_command "${command_args[@]}"
+      ;;
+    publish)
+      run_publish_command publish "${command_args[@]}"
+      ;;
+  esac
+}
+
+main "$@"

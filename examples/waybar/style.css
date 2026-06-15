@@ -1,0 +1,142 @@
+@define-color panel rgba(12, 16, 23, 0.88);
+@define-color panel_alt rgba(23, 30, 41, 0.82);
+@define-color panel_hover rgba(38, 50, 66, 0.94);
+@define-color border rgba(229, 221, 202, 0.18);
+@define-color border_strong rgba(236, 184, 96, 0.50);
+@define-color text #f5efe3;
+@define-color muted #9aa9ba;
+@define-color amber #ecb860;
+@define-color sky #6dc4ed;
+@define-color mint #94d2bd;
+@define-color rose #ffb4a2;
+@define-color red #ef4444;
+
+* {
+  border: none;
+  border-radius: 0;
+  font-family: "Noto Sans", "Noto Color Emoji", "Symbola", "Font Awesome 6 Free", "Material Design Icons";
+  font-size: 14px;
+  min-height: 0;
+  font-feature-settings: "tnum";
+}
+
+window#waybar {
+  background: @panel;
+  border: 1px solid @border;
+  border-radius: 18px;
+  color: @text;
+}
+
+#workspaces {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+#custom-launcher,
+#workspaces button,
+#custom-files,
+#custom-terminal,
+#taskbar button,
+#clock,
+#network,
+#pulseaudio,
+#backlight,
+#battery,
+#disk,
+#cpu,
+#memory,
+#tray,
+#custom-dnd,
+#custom-lock,
+#custom-power {
+  margin: 6px 3px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: @panel_alt;
+  border: 1px solid @border;
+  color: @text;
+}
+
+#workspaces button {
+  min-width: 20px;
+  padding: 0 10px;
+  font-weight: 700;
+}
+
+#workspaces button.active,
+#taskbar button.active,
+#custom-launcher:hover,
+#workspaces button:hover,
+#taskbar button:hover,
+#custom-files:hover,
+#custom-terminal:hover,
+#custom-dnd:hover,
+#custom-lock:hover,
+#custom-power:hover {
+  background: @panel_hover;
+  border-color: @border_strong;
+  color: #ffffff;
+}
+
+#workspaces button.urgent {
+  background: rgba(68, 25, 33, 0.78);
+  border-color: rgba(246, 173, 173, 0.34);
+  color: @rose;
+}
+
+#workspaces button.hidden {
+  color: @muted;
+}
+
+#custom-launcher {
+  color: @amber;
+  font-weight: 700;
+}
+
+#taskbar button.minimized {
+  color: @muted;
+}
+
+#custom-power {
+  background: rgba(68, 25, 33, 0.78);
+  border-color: rgba(246, 173, 173, 0.34);
+  color: @rose;
+  font-weight: 700;
+}
+
+#network.disconnected,
+#network.disabled,
+#pulseaudio.muted {
+  color: @amber;
+}
+
+#clock {
+  font-weight: 700;
+}
+
+#custom-dnd {
+  color: @sky;
+}
+
+#battery.charging,
+#battery.full {
+  color: @mint;
+}
+
+#battery.warning {
+  color: @amber;
+}
+
+#battery.critical,
+#disk.critical,
+#cpu.critical,
+#memory.critical {
+  color: @red;
+}
+
+#disk.warning,
+#cpu.warning,
+#memory.warning {
+  color: @amber;
+}

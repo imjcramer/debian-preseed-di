@@ -1,0 +1,29 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: node-exporter
+  description: Prometheus node_exporter only.
+  merge_priority: 50
+services:
+  node_exporter:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 9100
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 192.168.0.0/16
+      - 10.8.0.0/24
+      ipv6:
+      - fc00::/7
+      - fd00:8::/64
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true

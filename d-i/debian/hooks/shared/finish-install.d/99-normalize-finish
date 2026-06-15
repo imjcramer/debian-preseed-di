@@ -1,0 +1,316 @@
+#!/bin/sh
+# Final finish-install hook: normalize volatile mount backing directories after
+# preseed/late_command and any later installer finish hooks.
+set -eu
+
+RUNTIME_DIR=${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}
+RUNTIME_LOG_DIR=${INSTALLER_LOG_DIR:-${INSTALLER_PRESEED_LOG_DIR:-/tmp/preseed-logs}}
+BOOTSTRAP_LIB="${RUNTIME_DIR}/bootstrap/common-lib.sh"
+TARGET=${INSTALLER_TARGET_DIR:-/target}
+ENV_DIR=${INSTALLER_ENV_DIR:-/tmp/install-env}
+HOST_ENV="${ENV_DIR}/host.env"
+RUNTIME_ENV="${ENV_DIR}/runtime.env"
+STATE_RUNTIME_ENV="${RUNTIME_DIR}/state/runtime.env"
+TARGET_LOG_DIR="${TARGET}/var/lib/preseed/logs/installer"
+START_EPOCH=$(date -u '+%s' 2>/dev/null || printf '')
+DEBUG_LOGS=0
+
+if [ -r "$BOOTSTRAP_LIB" ]; then
+  # shellcheck disable=SC1090
+  . "$BOOTSTRAP_LIB"
+  LOG=$(installer_resolve_runtime_log_path "${RUNTIME_LOG_DIR}/09-late.log")
+  if command -v installer_export_logging_policy >/dev/null 2>&1; then
+    installer_export_logging_policy
+  fi
+  if command -v installer_logging_enabled >/dev/null 2>&1 && installer_logging_enabled; then
+    DEBUG_LOGS=1
+  fi
+else
+  LOG="${RUNTIME_LOG_DIR}/09-late.log"
+  if [ -r "${RUNTIME_DIR}/state/context.env" ]; then
+    # shellcheck disable=SC1090
+    . "${RUNTIME_DIR}/state/context.env"
+    case " ${INSTALLER_SELECTED_CLASS_REFS:-} ${INSTALLER_SELECTED_CLASSES:-} ${INSTALLER_CLASSES_RAW:-} " in
+      *" debug "*|*" debug/debug "*|*" debug:debug "*|*" debug.debug "*) DEBUG_LOGS=1 ;;
+    esac
+  fi
+fi
+
+if [ "$DEBUG_LOGS" -eq 1 ]; then
+  mkdir -p "$(dirname "$LOG")"
+  : >>"$LOG"
+  chmod 0600 "$LOG" 2>/dev/null || true
+  exec >>"$LOG" 2>&1
+fi
+
+log() {
+  level=info
+  message=$*
+  case "$message" in
+    fatal:\ *) level=error; message=${message#fatal: } ;;
+    warn:\ *) level=warning; message=${message#warn: } ;;
+    error:\ *) level=error; message=${message#error: } ;;
+    info:\ *) level=info; message=${message#info: } ;;
+  esac
+  if [ "$DEBUG_LOGS" -ne 1 ]; then
+    [ "$level" = error ] || return 0
+  fi
+  printf '%s stage=post_install_validation level=%s component=finish-install-normalize-finish %s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf unknown-time)" \
+    "$level" \
+    "$message" >&2
+}
+
+target_is_mounted() {
+  if [ "${INSTALLER_ASSUME_TARGET_MOUNTED:-0}" = 1 ]; then
+    return 0
+  fi
+  while IFS=' ' read -r _mount_source mount_path _mount_type _mount_options _mount_rest || [ -n "${mount_path:-}" ]; do
+    [ "$mount_path" = "$TARGET" ] && return 0
+  done </proc/mounts
+  return 1
+}
+
+persist_log() {
+  [ "$DEBUG_LOGS" -eq 1 ] || return 0
+  [ -d "$TARGET" ] || return 0
+  target_is_mounted || return 0
+  if command -v installer_archive_logs_to_target >/dev/null 2>&1; then
+    installer_archive_logs_to_target || true
+    return 0
+  fi
+  mkdir -p "$TARGET_LOG_DIR" 2>/dev/null || return 0
+  for src in "$RUNTIME_LOG_DIR"/*.log; do
+    [ -f "$src" ] || continue
+    if cp "$src" "${TARGET_LOG_DIR}/${src##*/}" 2>/dev/null; then
+      chmod 0600 "${TARGET_LOG_DIR}/${src##*/}" 2>/dev/null || true
+      rm -f "$src"
+    fi
+  done
+}
+
+finish_log() {
+  status=${1:-0}
+  duration_field=
+  end_epoch=$(date -u '+%s' 2>/dev/null || printf '')
+  case "$end_epoch:${START_EPOCH:-}" in
+    [0-9]*:[0-9]*)
+      duration_field=" duration_seconds=$((end_epoch - START_EPOCH))"
+      ;;
+  esac
+  if [ "$status" -eq 0 ]; then
+    log "info: completed final target normalization hook${duration_field}"
+  else
+    log "error: final target normalization hook exited with status ${status}${duration_field}"
+  fi
+  persist_log
+}
+
+trap 'finish_log "$?"' EXIT
+
+[ -d "$TARGET" ] || exit 0
+target_is_mounted || exit 0
+[ -r "$HOST_ENV" ] || {
+  log "fatal: missing host env: $HOST_ENV"
+  exit 1
+}
+if [ ! -r "$RUNTIME_ENV" ] && [ -r "$STATE_RUNTIME_ENV" ]; then
+  RUNTIME_ENV=$STATE_RUNTIME_ENV
+fi
+
+# shellcheck disable=SC1090
+. "$HOST_ENV"
+if [ -r "$RUNTIME_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$RUNTIME_ENV"
+fi
+
+if command -v installer_archive_logs_to_target >/dev/null 2>&1; then
+  installer_archive_logs_to_target copy || true
+fi
+
+bool_is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+  esac
+  return 1
+}
+
+bool_is_false() {
+  case "${1:-}" in
+    0|false|FALSE|no|NO|off|OFF) return 0 ;;
+  esac
+  return 1
+}
+
+require_bool() {
+  label=$1
+  value=$2
+  if ! bool_is_true "$value" && ! bool_is_false "$value"; then
+    log "fatal: ${label} must be true or false, got '${value}'"
+    exit 1
+  fi
+}
+
+require_absolute_path() {
+  path=$1
+  label=$2
+  case "$path" in
+    /*) ;;
+    *)
+      log "fatal: ${label} must be absolute: ${path:-unset}"
+      exit 1
+      ;;
+  esac
+}
+
+target_path_for() {
+  rel_path=$1
+  label=$2
+
+  require_absolute_path "$rel_path" "$label"
+  printf '%s%s\n' "$TARGET" "$rel_path"
+}
+
+is_mounted() {
+  while IFS=' ' read -r _mount_source mount_path _mount_type _mount_options _mount_rest || [ -n "${mount_path:-}" ]; do
+    [ "$mount_path" = "$1" ] && return 0
+  done </proc/mounts
+  return 1
+}
+
+umount_path_if_mounted() {
+  path=$1
+  [ -n "$path" ] || return 0
+  if is_mounted "$path"; then
+    log "info: unmounting $path before final normalization"
+    umount "$path" 2>/dev/null || umount -l "$path" 2>/dev/null || {
+      log "fatal: failed to unmount $path during final normalization"
+      exit 1
+    }
+  fi
+}
+
+mounted_paths_at_or_below() {
+  root=$1
+  while IFS=' ' read -r _mount_source mount_path _mount_type _mount_options _mount_rest || [ -n "${mount_path:-}" ]; do
+    case "$mount_path" in
+      "$root"|"$root"/*)
+        printf '%s\n' "$mount_path"
+        ;;
+    esac
+  done </proc/mounts | sort -r
+}
+
+umount_mounts_at_or_below() {
+  root=$1
+  [ -n "$root" ] || return 0
+
+  while IFS= read -r mount_path; do
+    [ -n "$mount_path" ] || continue
+    umount_path_if_mounted "$mount_path"
+  done <<EOF_MOUNTS
+$(mounted_paths_at_or_below "$root")
+EOF_MOUNTS
+}
+
+wipe_tree_contents() {
+  path=$1
+  [ -d "$path" ] || return 0
+  find "$path" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+}
+
+assert_empty_dir() {
+  path=$1
+  label=$2
+  [ -d "$path" ] || {
+    log "fatal: ${label} directory is missing after normalization: $path"
+    exit 1
+  }
+  first_entry=$(find "$path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)
+  [ -z "$first_entry" ] || {
+    log "fatal: ${label} still has content after normalization: $first_entry"
+    exit 1
+  }
+}
+
+ensure_empty_dir_mode() {
+  path=$1
+  label=$2
+  mode=$3
+
+  umount_mounts_at_or_below "$path"
+  wipe_tree_contents "$path"
+  install -d -m "$mode" "$path"
+  chmod "$mode" "$path"
+  assert_empty_dir "$path" "$label"
+}
+
+ensure_dir_mode() {
+  path=$1
+  mode=$2
+  install -d -m "$mode" "$path"
+  chmod "$mode" "$path"
+}
+
+normalize_enabled_tmpfs_dir() {
+  bool_var=$1
+  dir_var=$2
+  mode=$3
+
+  eval "bool_value=\${$bool_var:-}"
+  [ -n "$bool_value" ] || {
+    log "fatal: ${bool_var} must be set"
+    exit 1
+  }
+  require_bool "$bool_var" "$bool_value"
+  bool_is_true "$bool_value" || return 0
+
+  eval "rel_dir=\${$dir_var:-}"
+  [ -n "$rel_dir" ] || {
+    log "fatal: ${dir_var} must be set when ${bool_var} is true"
+    exit 1
+  }
+  target_dir=$(target_path_for "$rel_dir" "$dir_var")
+  ensure_empty_dir_mode "$target_dir" "$dir_var" "$mode"
+}
+
+require_absolute_path "$TARGET" TARGET
+require_absolute_path "$DIR_TMP" DIR_TMP
+require_absolute_path "$DIR_VAR_TMP" DIR_VAR_TMP
+
+for tmpfs_var in \
+  TMPFS_VAR_LOG \
+  TMPFS_VAR_CACHE \
+  TMPFS_VAR_LIB_APT_LISTS \
+  TMPFS_DEV_SHM \
+  TMPFS_DATA_RUN \
+  TMPFS_SYSTEMD_COREDUMP
+do
+  eval "tmpfs_value=\${$tmpfs_var:-}"
+  [ -n "$tmpfs_value" ] || {
+    log "fatal: ${tmpfs_var} must be set"
+    exit 1
+  }
+  require_bool "$tmpfs_var" "$tmpfs_value"
+done
+
+normalize_enabled_tmpfs_dir TMPFS_VAR_LOG DIR_VAR_LOG 0755
+normalize_enabled_tmpfs_dir TMPFS_VAR_CACHE DIR_VAR_CACHE 0755
+normalize_enabled_tmpfs_dir TMPFS_VAR_LIB_APT_LISTS DIR_APT_LISTS 0755
+normalize_enabled_tmpfs_dir TMPFS_SYSTEMD_COREDUMP DIR_SYSTEMD_COREDUMP 0755
+normalize_enabled_tmpfs_dir TMPFS_DATA_RUN DIR_DATA_RUN 0755
+normalize_enabled_tmpfs_dir TMPFS_DEV_SHM DIR_DEV_SHM 1777
+
+if bool_is_true "${TMPFS_VAR_LIB_APT_LISTS:-false}"; then
+  dir_apt_state=${DIR_APT_LISTS%/lists}
+  target_apt_state=$(target_path_for "$dir_apt_state" DIR_APT_STATE)
+  ensure_dir_mode "$target_apt_state" 0755
+fi
+
+target_tmp=$(target_path_for "$DIR_TMP" DIR_TMP)
+target_var_tmp=$(target_path_for "$DIR_VAR_TMP" DIR_VAR_TMP)
+ensure_empty_dir_mode "$target_tmp" DIR_TMP 1777
+ensure_dir_mode "$target_var_tmp" 1777
+
+log "info: finished final target normalization; archiving installer logs to ${TARGET_LOG_DIR}"

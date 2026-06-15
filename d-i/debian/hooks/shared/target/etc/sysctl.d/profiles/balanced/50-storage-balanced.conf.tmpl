@@ -1,0 +1,33 @@
+# /etc/sysctl.d/profiles/balanced/50-storage-balanced.conf (rendered storage profile overlay)
+
+# VM reclaim and zram-backed swap behavior.
+vm.swappiness = __INSTALLER_SYSCTL_PROFILE_BALANCED_SWAPPINESS__
+vm.page-cluster = __INSTALLER_SYSCTL_PROFILE_BALANCED_PAGE_CLUSTER__
+vm.vfs_cache_pressure = __INSTALLER_SYSCTL_PROFILE_BALANCED_VFS_CACHE_PRESSURE__
+vm.watermark_boost_factor = __INSTALLER_SYSCTL_PROFILE_BALANCED_WATERMARK_BOOST_FACTOR__
+vm.watermark_scale_factor = __INSTALLER_SYSCTL_PROFILE_BALANCED_WATERMARK_SCALE_FACTOR__
+vm.compaction_proactiveness = __INSTALLER_SYSCTL_PROFILE_BALANCED_COMPACTION_PROACTIVENESS__
+vm.extfrag_threshold = __INSTALLER_SYSCTL_PROFILE_BALANCED_EXTFRAG_THRESHOLD__
+vm.zone_reclaim_mode = __INSTALLER_SYSCTL_PROFILE_BALANCED_ZONE_RECLAIM_MODE__
+
+# Dirty writeback budget for volatile caches and installer-managed storage.
+vm.dirty_background_bytes = __INSTALLER_SYSCTL_PROFILE_BALANCED_DIRTY_BACKGROUND_BYTES__
+vm.dirty_bytes = __INSTALLER_SYSCTL_PROFILE_BALANCED_DIRTY_BYTES__
+vm.dirty_expire_centisecs = __INSTALLER_SYSCTL_PROFILE_BALANCED_DIRTY_EXPIRE_CENTISECS__
+vm.dirty_writeback_centisecs = __INSTALLER_SYSCTL_PROFILE_BALANCED_DIRTY_WRITEBACK_CENTISECS__
+vm.dirtytime_expire_seconds = __INSTALLER_SYSCTL_PROFILE_BALANCED_DIRTYTIME_EXPIRE_SECONDS__
+vm.stat_interval = __INSTALLER_SYSCTL_PROFILE_BALANCED_STAT_INTERVAL__
+
+# File and event queue capacity for desktop/service workloads.
+fs.aio-max-nr = __INSTALLER_SYSCTL_PROFILE_BALANCED_AIO_MAX_NR__
+fs.inotify.max_user_instances = __INSTALLER_SYSCTL_PROFILE_BALANCED_INOTIFY_MAX_USER_INSTANCES__
+fs.inotify.max_user_watches = __INSTALLER_SYSCTL_PROFILE_BALANCED_INOTIFY_MAX_USER_WATCHES__
+fs.inotify.max_queued_events = __INSTALLER_SYSCTL_PROFILE_BALANCED_INOTIFY_MAX_QUEUED_EVENTS__
+
+# Network accept queues and connection churn.
+net.core.somaxconn = __INSTALLER_SYSCTL_PROFILE_BALANCED_SOMAXCONN__
+net.core.netdev_max_backlog = __INSTALLER_SYSCTL_PROFILE_BALANCED_NETDEV_MAX_BACKLOG__
+net.ipv4.tcp_max_syn_backlog = __INSTALLER_SYSCTL_PROFILE_BALANCED_TCP_MAX_SYN_BACKLOG__
+net.ipv4.tcp_fastopen = __INSTALLER_SYSCTL_PROFILE_BALANCED_TCP_FASTOPEN__
+net.ipv4.tcp_keepalive_time = __INSTALLER_SYSCTL_PROFILE_BALANCED_TCP_KEEPALIVE_TIME__
+net.ipv4.tcp_fin_timeout = __INSTALLER_SYSCTL_PROFILE_BALANCED_TCP_FIN_TIMEOUT__

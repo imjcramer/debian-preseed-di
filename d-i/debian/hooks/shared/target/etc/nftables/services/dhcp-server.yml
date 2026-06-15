@@ -1,0 +1,42 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: dhcp-server
+  description: DHCP server overlay. LAN only.
+  merge_priority: 50
+services:
+  dhcp_server_v4:
+    enabled: true
+    direction: inbound
+    protocols:
+    - udp
+    ports:
+    - 67
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: true
+  dhcp_server_v6:
+    enabled: false
+    direction: inbound
+    protocols:
+    - udp
+    ports:
+    - 547
+    allow:
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: true

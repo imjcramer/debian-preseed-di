@@ -1,0 +1,28 @@
+{
+  "rootDir": __ROOT_DIR__,
+  "downloadConcurrency": __DOWNLOAD_CONCURRENCY__,
+  "architectures": __ARCHITECTURES__,
+  "dependencyFollowSuggests": false,
+  "dependencyFollowRecommends": false,
+  "dependencyFollowAllVariants": false,
+  "dependencyFollowSource": false,
+  "gpgDisableSign": false,
+  "gpgDisableVerify": false,
+  "gpgProvider": "gpg",
+  "skipLegacyPool": true,
+  "S3PublishEndpoints": {
+    __ENDPOINT_NAME__: {
+      "region": "auto",
+      "bucket": __BUCKET__,
+      "endpoint": __ENDPOINT__,
+      "prefix": __PREFIX__,
+      "acl": "none",
+      "storageClass": __STORAGE_CLASS__,
+      "encryptionMethod": "",
+      "plusWorkaround": false,
+      "disableMultiDel": false,
+      "forceSigV2": false,
+      "debug": __DEBUG__
+    }
+  }
+}

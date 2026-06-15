@@ -1,0 +1,19 @@
+profile laptop-edp {
+  output eDP-1 enable position 0,0 scale 1
+  exec labwc-output-refresh
+}
+
+profile laptop-lvds {
+  output LVDS-1 enable position 0,0 scale 1
+  exec labwc-output-refresh
+}
+
+profile laptop-dsi {
+  output DSI-1 enable position 0,0 scale 1
+  exec labwc-output-refresh
+}
+
+profile any-output {
+  output * enable position 0,0 scale 1
+  exec labwc-output-refresh
+}

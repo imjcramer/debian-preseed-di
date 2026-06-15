@@ -1,0 +1,28 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: smtp-server
+  description: Inbound SMTP server overlay.
+  merge_priority: 50
+services:
+  smtp_server:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 25
+    - 465
+    - 587
+    allow:
+      ipv4:
+      - 0.0.0.0/0
+      ipv6:
+      - ::/0
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    sensitive: false
+    rate_limit: 100/second burst 200 packets

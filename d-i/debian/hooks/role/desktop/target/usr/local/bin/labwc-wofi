@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+command -v wofi >/dev/null 2>&1 || {
+  printf 'fatal: wofi is not installed\n' >&2
+  exit 1
+}
+
+config_root=${XDG_CONFIG_HOME:-${HOME}/.config}
+wofi_config_dir="${config_root}/wofi"
+have_conf=false
+have_style=false
+have_color=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --conf|-c) have_conf=true ;;
+    --style|-s) have_style=true ;;
+    --color) have_color=true ;;
+  esac
+done
+
+if [ "$have_color" != true ] && [ -r "${wofi_config_dir}/colors" ]; then
+  set -- --color "${wofi_config_dir}/colors" "$@"
+fi
+if [ "$have_style" != true ] && [ -r "${wofi_config_dir}/style.css" ]; then
+  set -- --style "${wofi_config_dir}/style.css" "$@"
+fi
+if [ "$have_conf" != true ] && [ -r "${wofi_config_dir}/config" ]; then
+  set -- --conf "${wofi_config_dir}/config" "$@"
+fi
+
+exec wofi "$@"

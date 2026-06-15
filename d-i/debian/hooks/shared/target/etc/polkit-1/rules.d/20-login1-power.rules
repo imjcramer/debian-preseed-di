@@ -1,0 +1,75 @@
+// Managed by debian-preseed-di.
+// Keep logind power, sleep, seat, and session controls behind sudo auth.
+
+(function() {
+    var ADMIN_GROUP = "sudo";
+    var POWER_GROUP = "power";
+    var STRICT_SUSPEND = true;
+
+    function startsWith(value, prefix) {
+        return typeof value === "string" && value.indexOf(prefix) === 0;
+    }
+
+    function contains(value, needle) {
+        return typeof value === "string" && value.indexOf(needle) !== -1;
+    }
+
+    function activeLocal(subject) {
+        if (subject.active !== true) {
+            return false;
+        }
+        return subject.local === true ||
+            (typeof subject.seat === "string" && subject.seat.length > 0);
+    }
+
+    function adminOnly(subject) {
+        if (!activeLocal(subject)) {
+            return polkit.Result.NO;
+        }
+        if (!subject.isInGroup(ADMIN_GROUP)) {
+            return polkit.Result.NO;
+        }
+        return polkit.Result.AUTH_ADMIN;
+    }
+
+    polkit.addRule(function(action, subject) {
+        var id = action.id;
+
+        if (!startsWith(id, "org.freedesktop.login1.")) {
+            return polkit.Result.NOT_HANDLED;
+        }
+
+        if (!activeLocal(subject)) {
+            return polkit.Result.NO;
+        }
+
+        if (
+            contains(id, "power-off") ||
+            contains(id, "reboot") ||
+            contains(id, "halt") ||
+            contains(id, "hibernate") ||
+            contains(id, "hybrid-sleep") ||
+            contains(id, "suspend-then-hibernate") ||
+            contains(id, "ignore-inhibit") ||
+            contains(id, "multiple-sessions") ||
+            contains(id, "set-") ||
+            contains(id, "attach-device") ||
+            contains(id, "flush-devices") ||
+            contains(id, "terminate-") ||
+            contains(id, "kill-") ||
+            contains(id, "schedule-shutdown") ||
+            contains(id, "cancel-scheduled-shutdown")
+        ) {
+            return adminOnly(subject);
+        }
+
+        if (contains(id, "suspend")) {
+            if (!STRICT_SUSPEND && subject.isInGroup(POWER_GROUP)) {
+                return polkit.Result.YES;
+            }
+            return adminOnly(subject);
+        }
+
+        return adminOnly(subject);
+    });
+})();

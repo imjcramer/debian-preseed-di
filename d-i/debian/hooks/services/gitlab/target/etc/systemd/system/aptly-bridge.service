@@ -1,0 +1,17 @@
+[Unit]
+Description=Process queued Aptly publish bridge requests
+ConditionPathExists=/usr/local/sbin/aptly-bridge-processor
+After=local-fs.target
+RequiresMountsFor=/pool/aptly
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/aptly-bridge-processor
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/pool/aptly

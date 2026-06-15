@@ -1,0 +1,893 @@
+#!/bin/sh
+set -eu
+
+RUNTIME_DIR=${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}
+BOOTSTRAP_LIB=${INSTALLER_BOOTSTRAP_LIB:-${RUNTIME_DIR}/bootstrap/bootstrap.sh}
+if [ ! -s "$BOOTSTRAP_LIB" ]; then
+  SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+  BOOTSTRAP_LIB="${SELF_DIR}/../common/bootstrap.sh"
+fi
+[ -s "$BOOTSTRAP_LIB" ] || {
+  echo "fatal: installer bootstrap library is unavailable: ${BOOTSTRAP_LIB}" >&2
+  exit 1
+}
+# shellcheck disable=SC1090,SC1091
+. "$BOOTSTRAP_LIB"
+bootstrap_source_common_lib "${2:-}"
+installer_init_stderr_log_file "$(installer_runtime_log_dir)/02-preseed.log" "" "preseed answers (${1:-unset})" preseed-answers preseed_loaded
+trap 'installer_finalize_log "$?"' EXIT
+
+preseed_parse_selection_fields() {
+  selection_line=$1
+
+  case $- in
+    *f*) preseed_glob_was_disabled=true ;;
+    *) preseed_glob_was_disabled=false ;;
+  esac
+  set -f
+  # shellcheck disable=SC2086
+  set -- $selection_line
+  if [ "$preseed_glob_was_disabled" = false ]; then
+    set +f
+  fi
+  [ "$#" -gt 0 ] || return 1
+  case "$1" in
+    '#'*)
+      return 1
+      ;;
+  esac
+  [ "$#" -ge 3 ] || return 2
+
+  PRESEED_RECORD_OWNER=$1
+  PRESEED_RECORD_QUESTION=$2
+  PRESEED_RECORD_TYPE=$3
+  if [ "$#" -gt 3 ]; then
+    shift 3
+    PRESEED_RECORD_VALUE=$*
+  else
+    PRESEED_RECORD_VALUE=
+  fi
+  return 0
+}
+
+append_debconf_communicate_commands() {
+  selection_line=$1
+  command_file=$2
+
+  if preseed_parse_selection_fields "$selection_line"; then
+    :
+  else
+    parse_status=$?
+    [ "$parse_status" -eq 1 ] && return 1
+    installer_fatal "malformed preseed answer record; expected owner question type [value]"
+  fi
+
+  case "$PRESEED_RECORD_TYPE" in
+    seen)
+      case "$PRESEED_RECORD_VALUE" in
+        true|false) ;;
+        *)
+          installer_fatal "invalid debconf seen value for ${PRESEED_RECORD_QUESTION}: ${PRESEED_RECORD_VALUE:-empty}"
+          ;;
+      esac
+      printf 'FSET %s seen %s\n' "$PRESEED_RECORD_QUESTION" "$PRESEED_RECORD_VALUE" >>"$command_file"
+      ;;
+    *)
+      printf 'SET %s %s\n' "$PRESEED_RECORD_QUESTION" "$PRESEED_RECORD_VALUE" >>"$command_file"
+      printf 'FSET %s seen true\n' "$PRESEED_RECORD_QUESTION" >>"$command_file"
+      ;;
+  esac
+  return 0
+}
+
+apply_answers_file() {
+  path=$1
+  debconf_err_file=
+  [ -r "$path" ] || installer_fatal "answer file is not readable: ${path}"
+  if command -v debconf-set-selections >/dev/null 2>&1; then
+    debconf_err_file="$(installer_runtime_log_dir)/debconf-set-selections.err"
+    debconf-set-selections "$path" 2>"$debconf_err_file" || {
+      debconf_status=$?
+      installer_error "debconf-set-selections failed with status ${debconf_status} for ${path}"
+      if [ -s "$debconf_err_file" ]; then
+        sed 's/^/[debconf-set-selections] /' "$debconf_err_file" >&2 || true
+      fi
+      if debconf-set-selections -c "$path" 2>"$debconf_err_file"; then
+        installer_error "debconf-set-selections --checkonly succeeded for ${path}; runtime apply failed after syntax validation"
+      else
+        debconf_check_status=$?
+        installer_error "debconf-set-selections --checkonly failed with status ${debconf_check_status} for ${path}"
+        if [ -s "$debconf_err_file" ]; then
+          sed 's/^/[debconf-set-selections:checkonly] /' "$debconf_err_file" >&2 || true
+        fi
+      fi
+      rm -f "$debconf_err_file"
+      return "$debconf_status"
+    }
+    rm -f "$debconf_err_file"
+    return 0
+  fi
+  command -v debconf-communicate >/dev/null 2>&1 || {
+    installer_fatal "neither debconf-set-selections nor debconf-communicate is available to apply ${path}"
+  }
+
+  temp_log_dir=$(installer_runtime_temp_log_dir)
+  install -d -m 0700 "$temp_log_dir"
+  debconf_cmd_file="${temp_log_dir}/debconf-communicate.$$.commands"
+  debconf_out_file="${temp_log_dir}/debconf-communicate.$$.out"
+  rm -f "$debconf_cmd_file" "$debconf_out_file"
+  : >"$debconf_cmd_file"
+  chmod 0600 "$debconf_cmd_file" 2>/dev/null || true
+
+  answer_count=0
+  skipped_count=0
+  logical_line=
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *\\)
+        line=${line%\\}
+        logical_line="${logical_line:+$logical_line }$line"
+        continue
+        ;;
+      *)
+        logical_line="${logical_line:+$logical_line }$line"
+        ;;
+    esac
+    if append_debconf_communicate_commands "$logical_line" "$debconf_cmd_file"; then
+      answer_count=$((answer_count + 1))
+    else
+      skipped_count=$((skipped_count + 1))
+    fi
+    logical_line=
+  done <"$path"
+
+  if [ -n "$logical_line" ]; then
+    if append_debconf_communicate_commands "$logical_line" "$debconf_cmd_file"; then
+      answer_count=$((answer_count + 1))
+    else
+      skipped_count=$((skipped_count + 1))
+    fi
+  fi
+
+  installer_info "applying ${answer_count} preseed answer records through debconf-communicate fallback; skipped=${skipped_count}"
+  if [ "$answer_count" -eq 0 ]; then
+    rm -f "$debconf_cmd_file" "$debconf_out_file"
+    return 0
+  fi
+  if debconf-communicate <"$debconf_cmd_file" >"$debconf_out_file" 2>&1; then
+    debconf_status=0
+  else
+    debconf_status=$?
+  fi
+  if [ "$debconf_status" -ne 0 ] || grep -E -q '^[1-9][0-9]*[[:space:]]' "$debconf_out_file" 2>/dev/null; then
+    installer_error "debconf-communicate fallback failed while applying ${path} (status ${debconf_status})"
+    if [ -s "$debconf_out_file" ]; then
+      installer_redact_log_stream <"$debconf_out_file" | sed 's/^/[debconf-communicate] /' >&2 || true
+    fi
+    rm -f "$debconf_cmd_file" "$debconf_out_file"
+    return 1
+  fi
+  rm -f "$debconf_cmd_file" "$debconf_out_file"
+}
+
+append_unique_words() {
+  var_name=$1
+  shift
+  eval "current_words=\${$var_name:-}"
+  for word in "$@"; do
+    [ -n "$word" ] || continue
+    case " ${current_words} " in
+      *" ${word} "*) ;;
+      *) current_words="${current_words:+$current_words }${word}" ;;
+    esac
+  done
+  eval "$var_name=\$current_words"
+}
+
+append_unique_word_list() {
+  var_name=$1
+  list_words=$2
+  for word in $list_words; do
+    append_unique_words "$var_name" "$word"
+  done
+}
+
+preseed_fragment_cache_token() {
+  printf '%s' "$1" | tr '/.' '__'
+}
+
+preseed_fragment_cache_path() {
+  rel_path=$1
+  cache_token=$(preseed_fragment_cache_token "$rel_path")
+
+  case "$rel_path" in
+    classes/*) printf '%s/classes/%s\n' "$CACHE_DIR" "$cache_token" ;;
+    *) printf '%s/%s\n' "$CACHE_DIR" "$cache_token" ;;
+  esac
+}
+
+ensure_cached_preseed_fragment() {
+  rel_path=$1
+  cached_path=$(preseed_fragment_cache_path "$rel_path")
+
+  if [ ! -s "$cached_path" ]; then
+    installer_fetch_file "$seed_base" "$rel_path" "$cached_path" 0600
+  fi
+  printf '%s\n' "$cached_path"
+}
+
+validate_single_line_token() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[![:print:]]*|*[[:space:]]*)
+      installer_fatal "${label} must be a single printable token"
+      ;;
+  esac
+}
+
+validate_hostname_component() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-]*|.*|*.|*..*)
+      installer_fatal "${label} must contain only hostname-safe labels"
+      ;;
+  esac
+}
+
+validate_word_list() {
+  label=$1
+  value=$2
+  count=0
+
+  for word in $value; do
+    validate_single_line_token "${label} entry" "$word"
+    count=$((count + 1))
+  done
+
+  [ "$count" -ge 1 ] || installer_fatal "${label} must contain at least one token"
+}
+
+answer_value() {
+  for answer_key in "$@"; do
+    value=$(installer_cmdline_value "$answer_key" 2>/dev/null || true)
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+
+  for answer_key in "$@"; do
+    value=$(installer_debconf_value "$answer_key" 2>/dev/null || true)
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+validate_ipv4_address() {
+  label=$1
+  value=$2
+  old_ifs=$IFS
+
+  case "$value" in
+    ''|*[!0123456789.]*|.*|*.|*..*)
+      installer_fatal "${label} must be an IPv4 dotted-quad address"
+      ;;
+  esac
+
+  IFS=.
+  # shellcheck disable=SC2086
+  set -- $value
+  IFS=$old_ifs
+
+  [ "$#" -eq 4 ] || installer_fatal "${label} must contain four IPv4 octets"
+  for octet in "$@"; do
+    case "$octet" in
+      ''|*[!0123456789]*|????*)
+        installer_fatal "${label} contains an invalid IPv4 octet"
+        ;;
+    esac
+    [ "$octet" -le 255 ] || installer_fatal "${label} octet is outside 0-255"
+  done
+}
+
+validate_ipv4_address_list() {
+  label=$1
+  value=$2
+  count=0
+
+  case "$value" in
+    *','*) installer_fatal "${label} must use spaces between IPv4 addresses, not commas" ;;
+  esac
+
+  for address in $value; do
+    count=$((count + 1))
+    validate_ipv4_address "${label} entry" "$address"
+  done
+
+  [ "$count" -ge 1 ] || installer_fatal "${label} must contain at least one IPv4 address"
+  [ "$count" -le 3 ] || installer_fatal "${label} must contain no more than three IPv4 addresses"
+}
+
+validate_wifi_essid() {
+  label=$1
+  value=$2
+
+  validate_single_line_token "$label" "$value"
+  [ "${#value}" -le 32 ] || installer_fatal "${label} must be 32 characters or shorter"
+}
+
+validate_wifi_security_type() {
+  label=$1
+  value=$2
+
+  [ "$value" = wpa ] || installer_fatal "${label} must be 'wpa'"
+}
+
+validate_wifi_wpa() {
+  label=$1
+  value=$2
+  length=${#value}
+
+  validate_single_line_token "$label" "$value"
+  if [ "$length" -ge 8 ] && [ "$length" -le 63 ]; then
+    return 0
+  fi
+  case "$value" in
+    *[!0123456789ABCDEFabcdef]*)
+      installer_fatal "${label} must be 8-63 printable characters or a 64-character hexadecimal PSK"
+      ;;
+  esac
+  [ "$length" -eq 64 ] || installer_fatal "${label} must be 8-63 printable characters or a 64-character hexadecimal PSK"
+}
+
+selected_wifi_addon() {
+  installer_selected_class_reference_is_selected addon/wifi 2>/dev/null
+}
+
+selected_dualboot_addon() {
+  installer_selected_class_reference_is_selected addon/dualboot 2>/dev/null
+}
+
+validate_positive_integer() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!0123456789]*)
+      installer_fatal "${label} must be a positive integer"
+      ;;
+    0)
+      installer_fatal "${label} must be greater than zero"
+      ;;
+  esac
+}
+
+validate_dualboot_cmdline_contract() {
+  dualboot_efi_value=$(installer_cmdline_value dualboot_efi 2>/dev/null || true)
+  dualboot_debian_value=$(installer_cmdline_value dualboot_debian 2>/dev/null || true)
+
+  if [ "$DUALBOOT_ENABLED" = true ]; then
+    [ -n "$dualboot_efi_value" ] || installer_fatal "classes=...,dualboot requires dualboot_efi=<integer> on the kernel cmdline"
+    [ -n "$dualboot_debian_value" ] || installer_fatal "classes=...,dualboot requires dualboot_debian=<integer> on the kernel cmdline"
+    validate_positive_integer dualboot_efi "$dualboot_efi_value"
+    validate_positive_integer dualboot_debian "$dualboot_debian_value"
+    [ "$dualboot_efi_value" -lt "$dualboot_debian_value" ] || installer_fatal "dualboot_efi must be lower than dualboot_debian"
+  elif [ -n "$dualboot_efi_value" ] || [ -n "$dualboot_debian_value" ]; then
+    installer_fatal "dualboot_efi and dualboot_debian require classes=...,dualboot"
+  fi
+}
+
+static_network_requested() {
+  [ "$NETWORK_MODE" = static ] || [ "$WIFI_ADDON_SELECTED" = true ]
+}
+
+read_network_domain_answer() {
+  domain_value=$(answer_value netcfg/get_domain domain 2>/dev/null || true)
+  [ -n "$domain_value" ] || return 0
+  validate_hostname_component "netcfg/get_domain" "$domain_value"
+  SYSTEM_DOMAIN=$domain_value
+}
+
+read_static_network_answers() {
+  static_network_requested || return 0
+
+  STATIC_IP_ADDRESS=$(answer_value netcfg/get_ipaddress ip 2>/dev/null || true)
+  STATIC_NETMASK=$(answer_value netcfg/get_netmask netmask 2>/dev/null || true)
+  STATIC_GATEWAY=$(answer_value netcfg/get_gateway gateway 2>/dev/null || true)
+  STATIC_NAMESERVERS=$(answer_value netcfg/get_nameservers nameservers dns 2>/dev/null || true)
+  if [ -z "$STATIC_NAMESERVERS" ]; then
+    STATIC_NAMESERVERS=${STATIC_NAMESERVERS_DEFAULT:-}
+  fi
+}
+
+read_wifi_answers() {
+  [ "$WIFI_ADDON_SELECTED" = true ] || return 0
+
+  WIFI_ESSID=$(answer_value netcfg/wireless_essid wireless_essid wifi_essid ssid 2>/dev/null || true)
+  WIFI_ESSID_AGAIN=$(answer_value netcfg/wireless_essid_again wireless_essid_again wifi_essid_again 2>/dev/null || true)
+  WIFI_SECURITY_TYPE=$(answer_value netcfg/wireless_security_type wireless_security_type 2>/dev/null || true)
+  WIFI_WPA=$(answer_value netcfg/wireless_wpa wireless_wpa wifi_wpa 2>/dev/null || true)
+
+  [ -n "$WIFI_ESSID_AGAIN" ] || WIFI_ESSID_AGAIN=$WIFI_ESSID
+  [ -n "$WIFI_SECURITY_TYPE" ] || WIFI_SECURITY_TYPE=wpa
+}
+
+validate_static_network_answers() {
+  static_network_requested || return 0
+
+  validate_ipv4_address STATIC_IP_ADDRESS "$STATIC_IP_ADDRESS"
+  validate_ipv4_address STATIC_NETMASK "$STATIC_NETMASK"
+  validate_ipv4_address STATIC_GATEWAY "$STATIC_GATEWAY"
+  if [ -n "$STATIC_NAMESERVERS" ]; then
+    validate_ipv4_address_list STATIC_NAMESERVERS "$STATIC_NAMESERVERS"
+  fi
+}
+
+validate_wifi_answers() {
+  [ "$WIFI_ADDON_SELECTED" = true ] || return 0
+
+  validate_wifi_essid WIFI_ESSID "$WIFI_ESSID"
+  validate_wifi_essid WIFI_ESSID_AGAIN "$WIFI_ESSID_AGAIN"
+  validate_wifi_security_type WIFI_SECURITY_TYPE "$WIFI_SECURITY_TYPE"
+  if [ -n "$WIFI_WPA" ]; then
+    validate_wifi_wpa WIFI_WPA "$WIFI_WPA"
+  else
+    installer_warn "addon/wifi selected without a non-empty netcfg/wireless_wpa value; d-i will still need the WPA passphrase"
+  fi
+}
+
+write_wifi_answers() {
+  [ "$WIFI_ADDON_SELECTED" = true ] || return 0
+
+  printf 'd-i netcfg/wireless_show_essids select Enter ESSID manually\n'
+  printf 'd-i netcfg/wireless_show_essids seen true\n'
+  printf 'd-i netcfg/wireless_adhoc_managed select Infrastructure (Managed) network\n'
+  printf 'd-i netcfg/wireless_adhoc_managed seen true\n'
+  printf 'd-i netcfg/wireless_essid string %s\n' "$WIFI_ESSID"
+  printf 'd-i netcfg/wireless_essid seen true\n'
+  printf 'd-i netcfg/wireless_essid_again string %s\n' "$WIFI_ESSID_AGAIN"
+  printf 'd-i netcfg/wireless_essid_again seen true\n'
+  printf 'd-i netcfg/wireless_security_type select %s\n' "$WIFI_SECURITY_TYPE"
+  printf 'd-i netcfg/wireless_security_type seen true\n'
+  printf 'd-i netcfg/wireless_wep string\n'
+  printf 'd-i netcfg/wireless_wep seen true\n'
+  if [ -n "$WIFI_WPA" ]; then
+    printf 'd-i netcfg/wireless_wpa string %s\n' "$WIFI_WPA"
+    printf 'd-i netcfg/wireless_wpa seen true\n'
+  fi
+}
+
+write_static_network_answers() {
+  static_network_requested || return 0
+
+  printf 'd-i netcfg/use_autoconfig boolean false\n'
+  printf 'd-i netcfg/use_autoconfig seen true\n'
+  printf 'd-i netcfg/disable_autoconfig boolean true\n'
+  printf 'd-i netcfg/disable_autoconfig seen true\n'
+  printf 'd-i netcfg/disable_dhcp boolean true\n'
+  printf 'd-i netcfg/disable_dhcp seen true\n'
+  printf 'd-i netcfg/dhcp_options select Configure network manually\n'
+  printf 'd-i netcfg/dhcp_options seen true\n'
+  printf 'd-i netcfg/get_ipaddress string %s\n' "$STATIC_IP_ADDRESS"
+  printf 'd-i netcfg/get_ipaddress seen true\n'
+  printf 'd-i netcfg/get_netmask string %s\n' "$STATIC_NETMASK"
+  printf 'd-i netcfg/get_netmask seen true\n'
+  printf 'd-i netcfg/get_gateway string %s\n' "$STATIC_GATEWAY"
+  printf 'd-i netcfg/get_gateway seen true\n'
+  if [ -n "$STATIC_NAMESERVERS" ]; then
+    printf 'd-i netcfg/get_nameservers string %s\n' "$STATIC_NAMESERVERS"
+    printf 'd-i netcfg/get_nameservers seen true\n'
+  fi
+  printf 'd-i netcfg/confirm_static boolean true\n'
+  printf 'd-i netcfg/confirm_static seen true\n'
+}
+
+write_include_list() {
+  include_file=$1
+  install -d -m 0700 "$(dirname "$include_file")"
+  installer_selected_class_paths | sed '/^[[:space:]]*$/d' >"$include_file"
+  chmod 0600 "$include_file"
+}
+
+selected_fragment_applies_to_detected_hardware() {
+  rel_path=$1
+  nvidia_fragment=classes/class-addon/nvidia.cfg
+
+  case "$rel_path" in
+    "$nvidia_fragment")
+      installer_nvidia_gpu_detected
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+append_debconf_word_list() {
+  question=$1
+  var_name=$2
+  value=$(installer_debconf_value "$question" || true)
+
+  [ -n "$value" ] || return 0
+  append_unique_word_list "$var_name" "$value"
+}
+
+secure_boot_boot_chain_packages_for_selected_arch() {
+  arch_class=${INSTALLER_ARCH_CLASS:-$(installer_selected_class_for_purpose arch 2>/dev/null || true)}
+
+  case "$arch_class" in
+    amd64)
+      printf '%s\n' "grub-efi-amd64 grub-efi-amd64-signed shim-signed shim-helpers-amd64-signed"
+      ;;
+    arm64)
+      printf '%s\n' "grub-efi-arm64 grub-efi-arm64-signed shim-signed shim-helpers-arm64-signed"
+      ;;
+    *)
+      installer_fatal "unsupported arch class for Secure Boot packages: ${arch_class:-unset}"
+      ;;
+  esac
+}
+
+parse_preseed_record() {
+  line=$1
+
+  if preseed_parse_selection_fields "$line"; then
+    owner=$PRESEED_RECORD_OWNER
+    question=$PRESEED_RECORD_QUESTION
+    value_type=$PRESEED_RECORD_TYPE
+    value=$PRESEED_RECORD_VALUE
+  else
+    parse_status=$?
+    [ "$parse_status" -eq 1 ] && return 0
+    installer_fatal "malformed preseed fragment record; expected owner question type [value]"
+  fi
+
+  case "$owner:$question:$value_type" in
+    d-i:pkgsel/include:string)
+      append_unique_word_list PKGSEL_INCLUDE "$value"
+      ;;
+    d-i:anna/choose_modules:multiselect)
+      append_unique_word_list ANNA_CHOOSE_MODULES "$value"
+      ;;
+    tasksel:*)
+      installer_fatal "tasksel is disabled; class fragments must not define ${question}"
+      ;;
+  esac
+}
+
+parse_preseed_fragment() {
+  path=$1
+  logical_line=
+  [ -r "$path" ] || installer_fatal "preseed fragment is not readable: ${path}"
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *\\)
+        line=${line%\\}
+        logical_line="${logical_line:+$logical_line }$line"
+        continue
+        ;;
+      *)
+        logical_line="${logical_line:+$logical_line }$line"
+        parse_preseed_record "$logical_line"
+        logical_line=
+        ;;
+    esac
+  done <"$path"
+
+  [ -z "$logical_line" ] || parse_preseed_record "$logical_line"
+}
+
+word_list_contains() {
+  words=$1
+  needle=$2
+
+  case " ${words} " in
+    *" ${needle} "*) return 0 ;;
+  esac
+  return 1
+}
+
+validate_policy_subset() {
+  label=$1
+  subset_words=$2
+  superset_words=$3
+
+  for word in $subset_words; do
+    word_list_contains "$superset_words" "$word" || installer_fatal "${label} references package missing from d-i pkgsel/include: ${word}"
+  done
+}
+
+validate_class_policy() {
+  [ -n "$PKGSEL_INCLUDE" ] || installer_fatal "selected classes resolved an empty d-i pkgsel/include package set"
+  validate_policy_subset secure_boot_boot_chain_packages "$SECURE_BOOT_BOOT_CHAIN_PACKAGES" "$PKGSEL_INCLUDE"
+  validate_policy_subset secure_boot_support_packages "$SECURE_BOOT_SUPPORT_PACKAGES" "$PKGSEL_INCLUDE"
+}
+
+write_class_policy_env() {
+  policy_file=$1
+  secure_boot_target_packages=
+
+  append_unique_word_list secure_boot_target_packages "$SECURE_BOOT_BOOT_CHAIN_PACKAGES"
+  append_unique_word_list secure_boot_target_packages "$SECURE_BOOT_SUPPORT_PACKAGES"
+
+  {
+    printf '# Generated by scripts/preseed/answers.sh from selected installer class fragments\n'
+    printf 'INSTALLER_PKGSEL_INCLUDE=%s\n' "$(installer_shell_quote "$PKGSEL_INCLUDE")"
+    printf 'INSTALLER_SECURE_BOOT_BOOT_CHAIN_PACKAGES=%s\n' "$(installer_shell_quote "$SECURE_BOOT_BOOT_CHAIN_PACKAGES")"
+    printf 'INSTALLER_SECURE_BOOT_SUPPORT_PACKAGES=%s\n' "$(installer_shell_quote "$SECURE_BOOT_SUPPORT_PACKAGES")"
+    printf 'INSTALLER_SECURE_BOOT_TARGET_PACKAGES=%s\n' "$(installer_shell_quote "$secure_boot_target_packages")"
+  } >"$policy_file"
+  chmod 0600 "$policy_file"
+}
+
+collect_selected_fragments() {
+  merged_file=$1
+  : >"$merged_file"
+  while IFS= read -r rel_path || [ -n "$rel_path" ]; do
+    [ -n "$rel_path" ] || continue
+    if ! selected_fragment_applies_to_detected_hardware "$rel_path"; then
+      installer_warn "skipping ${rel_path}: addon/nvidia was selected but no NVIDIA PCI display adapter was detected"
+      continue
+    fi
+    cached_path=$(ensure_cached_preseed_fragment "$rel_path")
+    parse_preseed_fragment "$cached_path"
+    grep -E -v '^d-i[[:space:]]+(anna/choose_modules|pkgsel/include)[[:space:]]+' "$cached_path" >>"$merged_file" || true
+    printf '\n' >>"$merged_file"
+  done <"$INCLUDE_LIST_FILE"
+  chmod 0600 "$merged_file"
+}
+
+parse_base_answer_fragment() {
+  rel_path=$1
+  cached_path=$(ensure_cached_preseed_fragment "$rel_path")
+  parse_preseed_fragment "$cached_path"
+}
+
+fragment_pkgsel_include_words() {
+  path=$1
+  [ -r "$path" ] || installer_fatal "preseed fragment is not readable for pkgsel extraction: ${path}"
+
+  logical=
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *\\)
+        line=${line%\\}
+        logical="${logical:+$logical }$line"
+        continue
+        ;;
+      *)
+        logical="${logical:+$logical }$line"
+        ;;
+    esac
+    if preseed_parse_selection_fields "$logical"; then
+      case "$PRESEED_RECORD_OWNER:$PRESEED_RECORD_QUESTION:$PRESEED_RECORD_TYPE" in
+        d-i:pkgsel/include:string)
+          for word in $PRESEED_RECORD_VALUE; do
+            [ -n "$word" ] || continue
+            printf '%s\n' "$word"
+          done
+          ;;
+      esac
+    else
+      parse_status=$?
+      [ "$parse_status" -eq 1 ] || installer_fatal "malformed preseed fragment record while extracting pkgsel/include"
+    fi
+    logical=
+  done <"$path"
+
+  if [ -n "$logical" ]; then
+    if preseed_parse_selection_fields "$logical"; then
+      case "$PRESEED_RECORD_OWNER:$PRESEED_RECORD_QUESTION:$PRESEED_RECORD_TYPE" in
+        d-i:pkgsel/include:string)
+          for word in $PRESEED_RECORD_VALUE; do
+            [ -n "$word" ] || continue
+            printf '%s\n' "$word"
+          done
+          ;;
+      esac
+    else
+      parse_status=$?
+      [ "$parse_status" -eq 1 ] || installer_fatal "malformed trailing preseed fragment record while extracting pkgsel/include"
+    fi
+  fi
+}
+
+fragment_pkgsel_include_word_list() {
+  output=
+  while IFS= read -r word || [ -n "$word" ]; do
+    [ -n "$word" ] || continue
+    output="${output:+$output }$word"
+  done <<EOF
+$(fragment_pkgsel_include_words "$1")
+EOF
+  printf '%s\n' "$output"
+}
+
+validate_fragment_pkgsel_subset() {
+  label=$1
+  rel_path=$2
+  superset_words=$3
+  cached_path=$(ensure_cached_preseed_fragment "$rel_path")
+
+  subset_words=$(fragment_pkgsel_include_word_list "$cached_path")
+  [ -n "$subset_words" ] || return 0
+  validate_policy_subset "$label" "$subset_words" "$superset_words"
+}
+
+validate_selected_fragment_pkgsel_subsets() {
+  validate_fragment_pkgsel_subset "base apt pkgsel/include" "fragments/apt.cfg" "$PKGSEL_INCLUDE"
+  while IFS= read -r rel_path || [ -n "$rel_path" ]; do
+    [ -n "$rel_path" ] || continue
+    selected_fragment_applies_to_detected_hardware "$rel_path" || continue
+    validate_fragment_pkgsel_subset "selected fragment pkgsel/include (${rel_path})" "$rel_path" "$PKGSEL_INCLUDE"
+  done <"$INCLUDE_LIST_FILE"
+}
+
+write_answers_file() {
+  answers_file=$1
+  merged_file=$2
+  [ -r "$merged_file" ] || installer_fatal "merged preseed fragment file is not readable: ${merged_file}"
+  install -d -m 0700 "$(dirname "$answers_file")"
+  cat "$merged_file" >"$answers_file"
+
+  {
+    printf '# Generated by scripts/preseed/answers.sh from selected preseed cfg fragments\n'
+    printf '# Runtime overrides are appended after the class fragments so host- and cmdline-derived values win.\n'
+    printf 'd-i anna/choose_modules multiselect %s\n' "$ANNA_CHOOSE_MODULES"
+    printf 'd-i anna/choose_modules seen true\n'
+    printf 'd-i pkgsel/include string %s\n' "$PKGSEL_INCLUDE"
+    printf 'd-i pkgsel/include seen true\n'
+    printf 'd-i netcfg/get_hostname string %s\n' "$SYSTEM_HOSTNAME"
+    printf 'd-i netcfg/get_hostname seen true\n'
+    printf 'd-i netcfg/hostname string %s\n' "$SYSTEM_HOSTNAME"
+    printf 'd-i netcfg/hostname seen true\n'
+    printf 'd-i netcfg/get_domain string %s\n' "$SYSTEM_DOMAIN"
+    printf 'd-i netcfg/get_domain seen true\n'
+    write_wifi_answers
+    if [ "$DUALBOOT_ENABLED" != true ]; then
+      printf 'd-i grub-installer/only_debian boolean true\n'
+      printf 'd-i grub-installer/only_debian seen true\n'
+      printf 'd-i grub-installer/with_other_os boolean false\n'
+      printf 'd-i grub-installer/with_other_os seen true\n'
+      printf 'd-i grub-installer/enable_os_prober_otheros_yes boolean false\n'
+      printf 'd-i grub-installer/enable_os_prober_otheros_yes seen true\n'
+      printf 'd-i grub-installer/enable_os_prober_otheros_no boolean true\n'
+      printf 'd-i grub-installer/enable_os_prober_otheros_no seen true\n'
+    fi
+    printf 'd-i grub-installer/force-efi-extra-removable boolean false\n'
+    printf 'd-i grub-installer/force-efi-extra-removable seen true\n'
+    printf 'd-i grub-installer/update-nvram boolean true\n'
+    printf 'd-i grub-installer/update-nvram seen true\n'
+    printf 'd-i grub-installer/skip boolean false\n'
+    printf 'd-i grub-installer/skip seen true\n'
+    write_static_network_answers
+  } >>"$answers_file"
+  chmod 0600 "$answers_file"
+}
+
+usage() {
+  echo "usage: ${0##*/} {apply|prepare-context|render|show-host} [seed-base]" >&2
+  exit 1
+}
+
+render_answers_file() {
+  MERGED_FRAGMENT_FILE="${CACHE_DIR}/preseed.fragments.cfg"
+  append_debconf_word_list anna/choose_modules ANNA_CHOOSE_MODULES
+  append_debconf_word_list pkgsel/include PKGSEL_INCLUDE
+  parse_base_answer_fragment "fragments/apt.cfg"
+  collect_selected_fragments "$MERGED_FRAGMENT_FILE"
+  validate_selected_fragment_pkgsel_subsets
+  validate_class_policy
+  HOST_POLICY_ENV="${STATE_DIR}/selected-host.env"
+  if [ ! -s "$HOST_POLICY_ENV" ]; then
+    installer_fetch_host_env "$seed_base" "$HOST_PROFILE" "$HOST_POLICY_ENV" 0600
+  fi
+  # shellcheck disable=SC1090,SC1091
+  . "$HOST_POLICY_ENV"
+  read_network_domain_answer
+  if selected_dualboot_addon; then
+    DUALBOOT_ENABLED=true
+  fi
+  validate_dualboot_cmdline_contract
+  case "$NETWORK_MODE" in
+    static|dhcp) ;;
+    *)
+      installer_fatal "unsupported network mode: ${NETWORK_MODE}"
+      ;;
+  esac
+  read_wifi_answers
+  read_static_network_answers
+  validate_hostname_component SYSTEM_DOMAIN "$SYSTEM_DOMAIN"
+  validate_wifi_answers
+  validate_static_network_answers
+  validate_word_list ANNA_CHOOSE_MODULES "$ANNA_CHOOSE_MODULES"
+  validate_word_list PKGSEL_INCLUDE "$PKGSEL_INCLUDE"
+  installer_info "preseed answers classes raw: ${INSTALLER_CLASSES_RAW:-unset}"
+  installer_info "preseed answers selected class refs: ${INSTALLER_SELECTED_CLASS_REFS:-unset}"
+  installer_info "preseed answers anna modules: ${ANNA_CHOOSE_MODULES}"
+  installer_info "preseed answers pkgsel/include: ${PKGSEL_INCLUDE}"
+  installer_info "preseed answers secure boot boot-chain packages: ${SECURE_BOOT_BOOT_CHAIN_PACKAGES}"
+  installer_info "preseed answers secure boot support packages: ${SECURE_BOOT_SUPPORT_PACKAGES}"
+  installer_append_log_category apt apt_config info apt "planned mirror=trixie security=enabled updates=enabled backports=enabled local_repos=sid,forky,xanmod upgrade=safe-upgrade" || true
+  installer_append_log_category package package_install info pkgsel "planned pkgsel/include=${PKGSEL_INCLUDE}" || true
+  installer_append_log_category bootloader bootloader info grub "planned dualboot_class=${DUALBOOT_ENABLED} update_nvram=true force_extra_removable=false" || true
+  installer_ensure_system_identity
+  write_class_policy_env "$POLICY_ENV_FILE"
+  answers_file="${STATE_DIR}/preseed.answers.cfg"
+  write_answers_file "$answers_file" "$MERGED_FRAGMENT_FILE"
+  installer_info "rendered preseed answers file: ${answers_file}"
+  printf '%s\n' "$answers_file"
+}
+
+RUNTIME_DIR=$(installer_runtime_dir)
+CACHE_DIR=$(installer_runtime_cache_dir)
+STATE_DIR=$(installer_runtime_state_dir)
+install -d -m 0700 "$CACHE_DIR/classes" "$STATE_DIR" "$(installer_runtime_log_dir)"
+INCLUDE_LIST_FILE="${STATE_DIR}/preseed-includes.list"
+POLICY_ENV_FILE=$(installer_class_policy_env_path)
+
+seed_base=$(installer_seed_base "${2:-}")
+case "${1:-}" in
+  prepare-context)
+    installer_write_context "$seed_base" >/dev/null
+    ;;
+  *)
+    installer_ensure_context_loaded "$seed_base"
+    ;;
+esac
+installer_load_context_if_present || true
+
+HOST_PROFILE=${INSTALLER_HOST_PROFILE:-$(installer_resolve_host_profile "" 2>/dev/null || true)}
+[ -n "$HOST_PROFILE" ] || installer_fatal "selected host profile is unavailable in installer context"
+
+write_include_list "$INCLUDE_LIST_FILE"
+
+ANNA_CHOOSE_MODULES=
+NETWORK_MODE=${INSTALLER_NETWORK_CLASS:-$(installer_selected_class_for_purpose network 2>/dev/null || true)}
+[ -n "$NETWORK_MODE" ] || installer_fatal "selected network class is unavailable in installer context"
+DUALBOOT_ENABLED=false
+WIFI_ADDON_SELECTED=false
+if selected_wifi_addon; then
+  WIFI_ADDON_SELECTED=true
+fi
+WIFI_ESSID=
+WIFI_ESSID_AGAIN=
+WIFI_SECURITY_TYPE=
+WIFI_WPA=
+STATIC_IP_ADDRESS=
+STATIC_NETMASK=
+STATIC_GATEWAY=
+STATIC_NAMESERVERS=
+PKGSEL_INCLUDE=
+SECURE_BOOT_BOOT_CHAIN_PACKAGES=$(secure_boot_boot_chain_packages_for_selected_arch)
+SECURE_BOOT_SUPPORT_PACKAGES="cryptsetup efibootmgr mokutil sbsigntool openssl kmod util-linux util-linux-extra xz-utils zstd"
+
+case "${1:-}" in
+  apply)
+    answers_file=$(render_answers_file)
+    apply_answers_file "$answers_file"
+    installer_log "applied dynamic preseed answers for ${HOST_PROFILE} from classes=${INSTALLER_CLASSES_RAW}"
+    ;;
+  prepare-context)
+    MERGED_FRAGMENT_FILE="${CACHE_DIR}/preseed.fragments.cfg"
+    collect_selected_fragments "$MERGED_FRAGMENT_FILE"
+    write_class_policy_env "$POLICY_ENV_FILE"
+    ;;
+  render)
+    answers_file=$(render_answers_file)
+    installer_log "rendered dynamic preseed answers for ${HOST_PROFILE} from classes=${INSTALLER_CLASSES_RAW}"
+    printf '%s\n' "$answers_file"
+    ;;
+  show-host)
+    printf '%s\n' "$HOST_PROFILE"
+    ;;
+  *)
+    usage
+    ;;
+esac

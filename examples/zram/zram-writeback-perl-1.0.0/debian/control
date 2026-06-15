@@ -1,0 +1,16 @@
+Source: zram-writeback
+Section: admin
+Priority: optional
+Maintainer: Local Administrator <root@localhost>
+Build-Depends: debhelper-compat (= 13), perl
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://docs.kernel.org/admin-guide/blockdev/zram.html
+
+Package: zram-writeback
+Architecture: all
+Depends: ${misc:Depends}, ${perl:Depends}, perl, systemd | systemd-tmpfiles, kmod, util-linux
+Description: pressure-aware zram recompression and writeback controller
+ Perl implementation for configuring and operating zram swap with lz4 primary
+ compression, lzo-rle and zstd recompression tiers, idle tracking, writeback
+ budgets and PSI-aware policy decisions.

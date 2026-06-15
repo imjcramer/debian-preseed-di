@@ -1,0 +1,79 @@
+.TH ZRAM-WRITEBACK 8 "2026-06-01" "zram-writeback 1.0.0" "System Administration"
+.SH NAME
+zram-writeback \- pressure-aware zram recompression and writeback controller
+.SH SYNOPSIS
+.B zram-writeback
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B zram-writeback
+configures and operates a zram swap device using a primary hot-path compressor,
+secondary recompression algorithms, idle-page tracking, writeback budgets and
+memory PSI based policy transitions.
+.PP
+The default policy uses lz4 as the primary compressor, lzo-rle for idle reusable
+pages, zstd for huge idle pages, and a second zstd priority for huge non-idle
+pages under pressure.
+.SH COMMANDS
+.TP
+.B validate
+Validate configuration and warn about missing runtime zram sysfs attributes.
+.TP
+.B setup
+Configure zram sysfs attributes, mkswap and swapon.
+.TP
+.B run-pass
+Run one policy pass.
+.TP
+.B daemon
+Run policy passes in a foreground loop suitable for systemd.
+.TP
+.B budget-reset
+Reset the zram writeback_limit budget.
+.TP
+.B status
+Print JSON status, pressure state and zram metrics.
+.TP
+.B reset
+Reset the zram device. Requires --force-reset if active swap is detected.
+.SH OPTIONS
+.TP
+.BI "--config " PATH
+Use an alternate configuration file. Default is /etc/zram-writeback.conf.
+.TP
+.B --dry-run
+Log sysfs writes and commands without executing them.
+.TP
+.B --verbose
+Enable additional logging.
+.TP
+.B --force-reset
+Allow setup/reset to swapoff and reset an initialized zram device.
+.TP
+.BI "--state " STATE
+Override policy state for run-pass. Valid states are normal, pressure and emergency.
+.TP
+.BI "--interval " SEC
+Daemon loop interval in seconds.
+.SH FILES
+.TP
+.I /etc/zram-writeback.conf
+Main policy configuration.
+.TP
+.I /etc/default/zram-writeback
+Environment file for systemd units.
+.TP
+.I /run/lock/zram-writeback-zram0.lock
+Default per-device lock.
+.TP
+.I /var/lib/zram-writeback/budget.state
+Emergency budget state.
+.SH SECURITY
+The writeback backing device may contain swapped memory and should be a dedicated
+encrypted partition on systems that handle secrets. Do not share the backing
+partition with a filesystem.
+.SH SEE ALSO
+.BR swapon (8),
+.BR mkswap (8),
+.BR systemd.service (5),
+.BR systemd.timer (5)

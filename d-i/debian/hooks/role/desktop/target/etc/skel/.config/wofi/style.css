@@ -1,0 +1,97 @@
+@define-color bg #08111f;
+@define-color bg_alt #101d33;
+@define-color bg_hover #1b2c44;
+@define-color glow rgba(236, 184, 96, 0.16);
+@define-color border rgba(236, 184, 96, 0.28);
+@define-color border_strong rgba(236, 184, 96, 0.72);
+@define-color text #f5efe3;
+@define-color muted #aeb7c6;
+@define-color amber #ecb860;
+@define-color amber_bold #f29f67;
+@define-color mint #9fd2bf;
+@define-color rose #f6a09a;
+
+window {
+  margin: 0;
+  padding: 20px;
+  border: 1px solid @border_strong;
+  border-radius: 28px;
+  background:
+    linear-gradient(135deg, rgba(18, 30, 50, 0.96), rgba(8, 17, 31, 0.98)),
+    rgba(8, 17, 31, 0.98);
+  color: @text;
+  font-family: "Noto Sans", "Noto Color Emoji", "Font Awesome 6 Free";
+  font-size: 15px;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.56),
+    0 0 0 10px rgba(12, 16, 23, 0.18);
+}
+
+#outer-box {
+  padding: 4px;
+}
+
+#inner-box {
+  padding: 2px;
+}
+
+#input {
+  margin: 0 0 16px 0;
+  padding: 15px 18px;
+  border: 1px solid @border;
+  border-radius: 18px;
+  background:
+    linear-gradient(90deg, rgba(16, 29, 51, 0.96), rgba(27, 44, 68, 0.88));
+  color: #ffffff;
+  caret-color: @amber;
+  box-shadow: 0 0 0 4px @glow;
+}
+
+#input:focus {
+  border-color: @border_strong;
+}
+
+#entry {
+  margin: 4px 0;
+  padding: 13px 15px;
+  border: 1px solid transparent;
+  border-radius: 17px;
+  color: @text;
+}
+
+#entry:hover {
+  background-color: @bg_hover;
+  border-color: @border;
+}
+
+#entry:selected {
+  background: linear-gradient(135deg, @amber, @amber_bold 56%, #f5b37a);
+  border-color: rgba(255, 255, 255, 0.42);
+  color: #08111f;
+  box-shadow: 0 10px 30px rgba(236, 184, 96, 0.24);
+}
+
+#img {
+  margin-right: 14px;
+  border-radius: 12px;
+}
+
+#text {
+  color: inherit;
+}
+
+#scroll {
+  margin: 0;
+}
+
+scrollbar {
+  border: none;
+  background: transparent;
+}
+
+scrollbar slider {
+  min-width: 7px;
+  min-height: 40px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, @amber, @amber_bold);
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Synchronize Fruux calendar and task collections
+ConditionPathExists=%h/.config/vdirsyncer/config
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/labwc-calendar sync --quiet
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=5min

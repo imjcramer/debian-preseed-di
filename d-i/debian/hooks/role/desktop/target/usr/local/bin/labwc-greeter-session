@@ -1,0 +1,61 @@
+#!/bin/sh
+set -eu
+umask 077
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+greeter_uid=$(id -u)
+greeter_runtime_parent=
+if [ -n "${XDG_RUNTIME_DIR:-}" ] &&
+   [ -d "${XDG_RUNTIME_DIR}" ] &&
+   [ -w "${XDG_RUNTIME_DIR}" ]; then
+  greeter_runtime_parent=$XDG_RUNTIME_DIR
+else
+  greeter_runtime_parent=${TMPDIR:-/tmp}
+fi
+
+greeter_session_root=$(mktemp -d "${greeter_runtime_parent}/labwc-greeter.${greeter_uid}.XXXXXX")
+cleanup_greeter_session_root() {
+  rm -rf -- "${greeter_session_root}"
+}
+trap cleanup_greeter_session_root EXIT HUP INT TERM
+
+install -d -m 0700 \
+  "${greeter_session_root}/home" \
+  "${greeter_session_root}/cache" \
+  "${greeter_session_root}/state" \
+  "${greeter_session_root}/config" \
+  "${greeter_session_root}/data" \
+  "${greeter_session_root}/tmp" \
+  "${greeter_session_root}/gnupg"
+
+export HOME="${greeter_session_root}/home"
+export XDG_CACHE_HOME="${greeter_session_root}/cache"
+export XDG_STATE_HOME="${greeter_session_root}/state"
+export XDG_CONFIG_HOME="${greeter_session_root}/config"
+export XDG_DATA_HOME="${greeter_session_root}/data"
+export TMPDIR="${greeter_session_root}/tmp"
+export GNUPGHOME="${greeter_session_root}/gnupg"
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP="${LABWC_GREETER_CURRENT_DESKTOP:-cage}"
+export XDG_SESSION_DESKTOP="${LABWC_GREETER_SESSION_DESKTOP:-cage}"
+export DESKTOP_SESSION="${LABWC_GREETER_DESKTOP_SESSION:-cage}"
+export LIBSEAT_BACKEND=seatd
+export GDK_BACKEND=wayland
+export GTK_A11Y="${GTK_A11Y:-none}"
+export NO_AT_BRIDGE="${NO_AT_BRIDGE:-1}"
+export GIO_USE_VFS=local
+export GVFS_DISABLE_FUSE=1
+
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+  export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
+fi
+
+session_command=${LABWC_DESKTOP_SESSION_COMMAND:-/usr/local/bin/labwc-session}
+exec /usr/bin/cage -s -m last -- /usr/bin/gtkgreet -s /etc/greetd/gtkgreet.css -c "$session_command"

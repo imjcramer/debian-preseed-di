@@ -1,0 +1,11 @@
+[storage]
+driver = "overlay"
+graphroot = "__PODBIN_STATE_ROOT__/storage"
+imagestore = "__PODBIN_STATE_ROOT__/imagestore"
+runroot = "__PODBIN_STATE_ROOT__/runroot"
+
+[storage.options]
+additionalimagestores = []
+
+[storage.options.overlay]
+mount_program = "/usr/bin/fuse-overlayfs"

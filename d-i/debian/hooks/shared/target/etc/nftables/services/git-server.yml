@@ -1,0 +1,27 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: git-server
+  description: Git SSH server overlay using SSH transport.
+  merge_priority: 50
+services:
+  git_ssh:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 22
+    allow:
+      ipv4:
+      - 10.8.0.0/24
+      ipv6:
+      - fd00:8::/64
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    sensitive: true
+    rate_limit: 20/minute burst 40 packets

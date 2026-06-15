@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# Managed by debian-preseed-di.
+# initramfs-tools checks the root filesystem unconditionally before mountroot().
+# For Btrfs roots that is the wrong policy: decide at checkfs() call time so we
+# always skip only the Btrfs root check while preserving every other fsck call.
+
+checkfs() {
+  case "${2:-}:${3:-}" in
+    root:btrfs|/:btrfs)
+      log_warning_msg "Skipping initramfs fsck for Btrfs root filesystem."
+      return 0
+      ;;
+  esac
+
+  while ! _checkfs_once "$@"; do
+    panic "The $2 filesystem on $1 requires a manual fsck"
+  done
+}

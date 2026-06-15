@@ -1,0 +1,32 @@
+// Managed by debian-preseed-di.
+// Restrict pkexec to active local sudo users; non-admin users fail closed.
+
+(function() {
+    var ADMIN_GROUP = "sudo";
+
+    function activeLocal(subject) {
+        if (subject.active !== true) {
+            return false;
+        }
+        return subject.local === true ||
+            (typeof subject.seat === "string" && subject.seat.length > 0);
+    }
+
+    function adminOnly(subject) {
+        if (!activeLocal(subject)) {
+            return polkit.Result.NO;
+        }
+        if (!subject.isInGroup(ADMIN_GROUP)) {
+            return polkit.Result.NO;
+        }
+        return polkit.Result.AUTH_ADMIN;
+    }
+
+    polkit.addRule(function(action, subject) {
+        if (action.id === "org.freedesktop.policykit.exec") {
+            return adminOnly(subject);
+        }
+
+        return polkit.Result.NOT_HANDLED;
+    });
+})();

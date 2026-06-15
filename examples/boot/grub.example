@@ -1,0 +1,26 @@
+set seed=http://192.0.2.10:8080/d-i/debian/preseed.cfg
+
+menuentry 'Debian Trixie LAN Install (desktop auto hardware)' {
+    linux /install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,desktop,standard,dhcp ---
+    initrd /install.amd/initrd.gz
+}
+
+menuentry 'Debian Trixie LAN Install (desktop with SSH server)' {
+    linux /install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,desktop,standard,dhcp,ssh ---
+    initrd /install.amd/initrd.gz
+}
+
+menuentry 'Debian Trixie LAN Install (desktop with NVIDIA addon)' {
+    linux /install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,desktop,standard,dhcp,nvidia ---
+    initrd /install.amd/initrd.gz
+}
+
+menuentry 'Debian Trixie LAN Install (desktop forcing eMMC storage)' {
+    linux /install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,desktop,standard,dhcp,disk/emmc ---
+    initrd /install.amd/initrd.gz
+}
+
+menuentry 'Debian Trixie LAN Install (server web role)' {
+    linux /install.amd/vmlinuz auto=true priority=critical locale=en_US.UTF-8 language=en country=US url=${seed} classes=prod,server,enhanced,dhcp,web ---
+    initrd /install.amd/initrd.gz
+}

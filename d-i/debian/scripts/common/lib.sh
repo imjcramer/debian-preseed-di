@@ -1,0 +1,3554 @@
+#!/bin/sh
+
+installer_runtime_dir() {
+  printf '%s\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_runtime_state_dir() {
+  printf '%s/state\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_runtime_cache_dir() {
+  printf '%s/cache\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_runtime_seed_cache_dir() {
+  printf '%s/cache/seed\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_runtime_log_dir() {
+  printf '%s\n' "${INSTALLER_LOG_DIR:-${INSTALLER_PRESEED_LOG_DIR:-/tmp/preseed-logs}}"
+}
+
+installer_runtime_temp_log_dir() {
+  printf '%s/tmp\n' "${INSTALLER_LOG_DIR:-${INSTALLER_PRESEED_LOG_DIR:-/tmp/preseed-logs}}"
+}
+
+installer_target_log_dir() {
+  printf '%s/var/lib/preseed/logs/installer\n' "${INSTALLER_TARGET_DIR:-/target}"
+}
+
+installer_target_log_root_dir() {
+  printf '%s/var/lib/preseed/logs\n' "${INSTALLER_TARGET_DIR:-/target}"
+}
+
+installer_runtime_bootstrap_dir() {
+  printf '%s/bootstrap\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_bootstrap_seed_url_path() {
+  printf '%s/bootstrap/seed.url\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_bootstrap_seed_file_path() {
+  printf '%s/bootstrap/seed.file\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_bootstrap_helper_path() {
+  printf '%s/bootstrap/preseed-bootstrap-entry.sh\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_bootstrap_lib_path() {
+  printf '%s/bootstrap/bootstrap.sh\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_bootstrap_seed_meta_path() {
+  printf '%s/bootstrap/seed.meta\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_phase_bootstrap_log_path() {
+  phase_name=$1
+  phase_log_dir=${INSTALLER_LOG_DIR:-${INSTALLER_PRESEED_LOG_DIR:-/tmp/preseed-logs}}
+  case "$phase_name" in
+    prepare-context|apply|early) printf '%s/02-preseed.log\n' "$phase_log_dir" ;;
+    partman) printf '%s/05-partman.log\n' "$phase_log_dir" ;;
+    late) printf '%s/09-late.log\n' "$phase_log_dir" ;;
+    *) printf '%s/%s.log\n' "$phase_log_dir" "$phase_name" ;;
+  esac
+}
+
+installer_context_env_path() {
+  printf '%s/state/context.env\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_class_policy_env_path() {
+  printf '%s/state/class-policy.env\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_load_context_if_present() {
+  context_env=$(installer_context_env_path)
+  [ -r "$context_env" ] || return 1
+  # shellcheck disable=SC1090
+  . "$context_env"
+}
+
+installer_class_list_has_debug() {
+  installer_debug_class_list=${1:-}
+
+  for installer_debug_token in $(printf '%s\n' "$installer_debug_class_list" | tr ';,' '  '); do
+    case "$installer_debug_token" in
+      debug|debug/debug|debug:debug|debug.debug)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+installer_debug_class_selected() {
+  installer_class_list_has_debug "${INSTALLER_SELECTED_CLASS_REFS:-}" && return 0
+  installer_class_list_has_debug "${INSTALLER_SELECTED_CLASSES:-}" && return 0
+  installer_class_list_has_debug "${INSTALLER_CLASSES_RAW:-${CLASSES:-}}" && return 0
+
+  context_env=$(installer_context_env_path)
+  if [ -r "$context_env" ]; then
+    # shellcheck disable=SC1090
+    . "$context_env"
+    installer_class_list_has_debug "${INSTALLER_SELECTED_CLASS_REFS:-}" && return 0
+    installer_class_list_has_debug "${INSTALLER_SELECTED_CLASSES:-}" && return 0
+    installer_class_list_has_debug "${INSTALLER_CLASSES_RAW:-${CLASSES:-}}" && return 0
+  fi
+
+  classes_cache=$(installer_classes_raw_cache_path 2>/dev/null || true)
+  if [ -r "$classes_cache" ]; then
+    cached_classes=$(cat "$classes_cache" 2>/dev/null || true)
+    installer_class_list_has_debug "$cached_classes" && return 0
+  fi
+
+  cmdline_classes=$(installer_cmdline_value classes 2>/dev/null || true)
+  if [ -z "$cmdline_classes" ]; then
+    cmdline_classes=$(installer_cmdline_value auto-install/classes 2>/dev/null || true)
+  fi
+  installer_class_list_has_debug "$cmdline_classes"
+}
+
+installer_logging_enabled() {
+  case "${INSTALLER_DEBUG_LOGS+x}" in
+    x)
+      installer_bool_is_true "$INSTALLER_DEBUG_LOGS"
+      return "$?"
+      ;;
+  esac
+  installer_debug_class_selected
+}
+
+installer_export_logging_policy() {
+  if installer_logging_enabled; then
+    INSTALLER_DEBUG_LOGS=1
+    INSTALLER_LOG_LEVEL=debug
+  else
+    INSTALLER_DEBUG_LOGS=0
+    INSTALLER_LOG_LEVEL=none
+  fi
+  export INSTALLER_DEBUG_LOGS INSTALLER_LOG_LEVEL
+}
+
+installer_log_tag() {
+  if [ -n "${INSTALLER_LOG_TAG:-}" ]; then
+    printf '%s\n' "$INSTALLER_LOG_TAG"
+    return 0
+  fi
+
+  script_name=${0##*/}
+  [ -n "$script_name" ] || script_name=installer
+  printf '%s\n' "$script_name"
+}
+
+installer_log_timestamp() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf '%s\n' unknown-time
+}
+
+installer_log_epoch() {
+  date -u '+%s' 2>/dev/null || printf '\n'
+}
+
+installer_log_level_canonical() {
+  case "${1:-info}" in
+    debug|DEBUG) printf '%s\n' debug ;;
+    info|INFO) printf '%s\n' info ;;
+    warn|WARN|warning|WARNING) printf '%s\n' warning ;;
+    error|ERROR|fatal|FATAL) printf '%s\n' error ;;
+    none|NONE) printf '%s\n' none ;;
+    *) printf '%s\n' info ;;
+  esac
+}
+
+installer_log_level_is_valid() {
+  case "${1:-info}" in
+    debug|DEBUG|info|INFO|warn|WARN|warning|WARNING|error|ERROR|none|NONE)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+installer_log_level_value() {
+  case "$(installer_log_level_canonical "$1")" in
+    debug) printf '%s\n' 10 ;;
+    info) printf '%s\n' 20 ;;
+    warning) printf '%s\n' 30 ;;
+    error) printf '%s\n' 40 ;;
+    none) printf '%s\n' 99 ;;
+  esac
+}
+
+installer_log_should_emit() {
+  requested_level=$(installer_log_level_canonical "$1")
+  installer_logging_enabled || return 1
+  active_level=$(installer_log_level_canonical "${INSTALLER_LOG_LEVEL:-debug}")
+
+  [ "$active_level" != none ] || return 1
+  requested_value=$(installer_log_level_value "$requested_level")
+  active_value=$(installer_log_level_value "$active_level")
+  [ "$requested_value" -ge "$active_value" ]
+}
+
+installer_emit_console_error() {
+  installer_console_level=$(installer_log_level_canonical "${1:-error}")
+  shift
+  printf '%s stage=%s level=%s component=%s %s\n' \
+    "$(installer_log_timestamp)" \
+    "$(installer_log_stage)" \
+    "$installer_console_level" \
+    "$(installer_log_tag)" \
+    "$*" >&2
+}
+
+installer_validate_log_level() {
+  installer_log_level_is_valid "${1:-info}" || installer_fatal "installer log level must be debug, info, warning, error, or none"
+}
+
+installer_debug() {
+  installer_log_record debug "$*"
+}
+
+installer_stage_valid() {
+  case "${1:-}" in
+    boot|preseed_loaded|network_configured|disk_discovery|partman_start|partman_done|base_install_start|base_install_done|apt_config|package_install|bootloader|late_command|target_customization|first_boot|post_install_validation)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+installer_stage_from_tag() {
+  case "${1:-}" in
+    class-auto|early-dispatch) printf '%s\n' boot ;;
+    preseed-*|d-i-early) printf '%s\n' preseed_loaded ;;
+    partman-layout|partman-*) printf '%s\n' partman_start ;;
+    base-installer-*) printf '%s\n' base_install_start ;;
+    apt-*|apt) printf '%s\n' apt_config ;;
+    bootloader|grub|secure-boot) printf '%s\n' bootloader ;;
+    late-command|late-*) printf '%s\n' late_command ;;
+    finish-install-*|finish-install) printf '%s\n' post_install_validation ;;
+    firstboot|first-boot) printf '%s\n' first_boot ;;
+    *) printf '%s\n' "${INSTALLER_LOG_STAGE:-preseed_loaded}" ;;
+  esac
+}
+
+installer_log_stage() {
+  if installer_stage_valid "${INSTALLER_LOG_STAGE:-}"; then
+    printf '%s\n' "$INSTALLER_LOG_STAGE"
+    return 0
+  fi
+  installer_stage_from_tag "$(installer_log_tag)"
+}
+
+installer_log_category_name() {
+  category=$1
+
+  case "$category" in
+    boot) printf '%s\n' 01-boot.log ;;
+    preseed) printf '%s\n' 02-preseed.log ;;
+    network) printf '%s\n' 03-network.log ;;
+    disk) printf '%s\n' 04-disk.log ;;
+    partman) printf '%s\n' 05-partman.log ;;
+    apt) printf '%s\n' 06-apt.log ;;
+    package) printf '%s\n' 07-packages.log ;;
+    bootloader) printf '%s\n' 08-bootloader.log ;;
+    late) printf '%s\n' 09-late.log ;;
+    desktop) printf '%s\n' 10-desktop.log ;;
+    firstboot) printf '%s\n' 20-firstboot.log ;;
+    *) return 1 ;;
+  esac
+}
+
+installer_log_stage_for_category() {
+  category=$1
+
+  case "$category" in
+    boot) printf '%s\n' boot ;;
+    preseed) printf '%s\n' preseed_loaded ;;
+    network) printf '%s\n' network_configured ;;
+    disk) printf '%s\n' disk_discovery ;;
+    partman) printf '%s\n' partman_start ;;
+    apt) printf '%s\n' apt_config ;;
+    package) printf '%s\n' package_install ;;
+    bootloader) printf '%s\n' bootloader ;;
+    late) printf '%s\n' late_command ;;
+    desktop) printf '%s\n' target_customization ;;
+    firstboot) printf '%s\n' first_boot ;;
+    *) printf '%s\n' post_install_validation ;;
+  esac
+}
+
+installer_log_category_file() {
+  category=$1
+  category_log_name=$(installer_log_category_name "$category") || return 1
+  printf '%s/%s\n' "$(installer_runtime_log_dir)" "$category_log_name"
+}
+
+installer_append_log_category() {
+  category=$1
+  stage=$2
+  level=$3
+  component=$4
+  shift 4
+
+  level=$(installer_log_level_canonical "$level")
+  installer_log_should_emit "$level" || return 0
+  installer_stage_valid "$stage" || stage=preseed_loaded
+  category_log_path=$(installer_log_category_file "$category") || return 1
+  install -d -m 0700 "$(dirname "$category_log_path")"
+  printf '%s stage=%s level=%s component=%s %s\n' \
+    "$(installer_log_timestamp)" \
+    "$stage" \
+    "$level" \
+    "$component" \
+    "$*" >>"$category_log_path"
+}
+
+installer_append_log_category_file() {
+  category=$1
+  stage=$2
+  level=$3
+  component=$4
+  source_file=$5
+
+  level=$(installer_log_level_canonical "$level")
+  installer_log_should_emit "$level" || return 0
+  [ -s "$source_file" ] || return 0
+  installer_stage_valid "$stage" || stage=preseed_loaded
+  category_log_path=$(installer_log_category_file "$category") || return 1
+  install -d -m 0700 "$(dirname "$category_log_path")"
+  log_timestamp=$(installer_log_timestamp)
+  while IFS= read -r log_line || [ -n "$log_line" ]; do
+    [ -n "$log_line" ] || continue
+    printf '%s stage=%s level=%s component=%s %s\n' \
+      "$log_timestamp" \
+      "$stage" \
+      "$level" \
+      "$component" \
+      "$log_line"
+  done <"$source_file" >>"$category_log_path"
+}
+
+installer_log_record() {
+  log_level=$1
+  shift
+  log_level=$(installer_log_level_canonical "$log_level")
+  if ! installer_log_should_emit "$log_level"; then
+    [ "$log_level" = error ] || return 0
+    installer_emit_console_error "$log_level" "$*"
+    return 0
+  fi
+  printf '%s stage=%s level=%s component=%s %s\n' \
+    "$(installer_log_timestamp)" \
+    "$(installer_log_stage)" \
+    "$log_level" \
+    "$(installer_log_tag)" \
+    "$*" >&2
+}
+
+installer_log() {
+  installer_log_message=$*
+  case "$installer_log_message" in
+    "info: "*) installer_log_record info "${installer_log_message#info: }" ;;
+    "warn: "*) installer_log_record warning "${installer_log_message#warn: }" ;;
+    "warning: "*) installer_log_record warning "${installer_log_message#warning: }" ;;
+    "error: "*) installer_log_record error "${installer_log_message#error: }" ;;
+    "fatal: "*) installer_log_record error "${installer_log_message#fatal: }" ;;
+    "debug: "*) installer_log_record debug "${installer_log_message#debug: }" ;;
+    *) installer_log_record info "$installer_log_message" ;;
+  esac
+}
+
+installer_info() {
+  installer_log_record info "$*"
+}
+
+installer_warn() {
+  installer_log_record warning "$*"
+}
+
+installer_error() {
+  installer_log_record error "$*"
+}
+
+installer_trim_whitespace() {
+  printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+# shellcheck disable=SC2034 # Exposes INSTALLER_MOUNT_* fields for callers.
+installer_mounts_find_record() {
+  installer_mountpoint=$1
+  installer_mounts_file=${2:-/proc/mounts}
+  INSTALLER_MOUNT_SOURCE=
+  INSTALLER_MOUNT_POINT=
+  INSTALLER_MOUNT_FSTYPE=
+  INSTALLER_MOUNT_OPTIONS=
+
+  [ -r "$installer_mounts_file" ] || return 1
+	  while IFS=' ' read -r mount_source mount_point mount_fstype mount_options _mount_rest || [ -n "${mount_source:-}" ]; do
+	    [ "$mount_point" = "$installer_mountpoint" ] || continue
+	    INSTALLER_MOUNT_SOURCE=$mount_source
+	    INSTALLER_MOUNT_POINT=$mount_point
+	    INSTALLER_MOUNT_FSTYPE=$mount_fstype
+    INSTALLER_MOUNT_OPTIONS=$mount_options
+    return 0
+  done <"$installer_mounts_file"
+  return 1
+}
+
+installer_mounts_has_mountpoint() {
+  installer_mounts_find_record "$1" "${2:-/proc/mounts}" >/dev/null 2>&1
+}
+
+installer_mount_source_for_mountpoint() {
+  installer_mounts_find_record "$1" "${2:-/proc/mounts}" || return 1
+  printf '%s\n' "$INSTALLER_MOUNT_SOURCE"
+}
+
+installer_target_is_mounted() {
+  [ -d /target ] || return 1
+  installer_mounts_has_mountpoint /target /proc/mounts
+}
+
+installer_escape_sed_replacement() {
+  printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
+}
+
+installer_replace_placeholder_in_file() {
+  installer_placeholder_file=$1
+  installer_placeholder=$2
+  installer_placeholder_value=$3
+  installer_placeholder_tmp="${installer_placeholder_file}.replace.$$"
+  installer_escaped_placeholder_value=$(installer_escape_sed_replacement "$installer_placeholder_value")
+
+  sed "s|${installer_placeholder}|${installer_escaped_placeholder_value}|g" \
+    "$installer_placeholder_file" >"$installer_placeholder_tmp" || {
+      rm -f "$installer_placeholder_tmp"
+      return 1
+    }
+  mv "$installer_placeholder_tmp" "$installer_placeholder_file"
+}
+
+installer_apply_scalar_placeholders() {
+  installer_placeholder_src=$1
+  installer_placeholder_dest=$2
+  installer_placeholder_script="${installer_placeholder_dest}.sed.$$"
+  shift 2
+
+  [ $(( $# % 2 )) -eq 0 ] || installer_fatal "placeholder replacement arguments must be name/value pairs"
+  : >"$installer_placeholder_script" || {
+    rm -f "$installer_placeholder_script"
+    return 1
+  }
+  while [ "$#" -gt 1 ]; do
+    installer_placeholder_name=$1
+    installer_placeholder_value=$2
+    shift 2
+    installer_escaped_placeholder_value=$(installer_escape_sed_replacement "$installer_placeholder_value")
+    printf 's|__INSTALLER_%s__|%s|g\n' \
+      "$installer_placeholder_name" \
+      "$installer_escaped_placeholder_value" >>"$installer_placeholder_script" || {
+        rm -f "$installer_placeholder_script"
+        return 1
+      }
+  done
+  sed -f "$installer_placeholder_script" "$installer_placeholder_src" >"$installer_placeholder_dest" || {
+    rm -f "$installer_placeholder_script" "$installer_placeholder_dest"
+    return 1
+  }
+  rm -f "$installer_placeholder_script"
+}
+
+installer_copy_path_with_mode() {
+  copy_src_path=$1
+  copy_dest_path=$2
+  copy_mode=$3
+  copy_label=${4:-file}
+  copy_parent_dir=$(dirname "$copy_dest_path")
+  copy_tmp_path="${copy_dest_path}.tmp.$$"
+  copy_err_path="${copy_tmp_path}.copy.log"
+
+  if [ "$copy_src_path" = "$copy_dest_path" ]; then
+    chmod "$copy_mode" "$copy_dest_path" 2>/dev/null || true
+    return 0
+  fi
+
+  [ -d "$copy_parent_dir" ] || install -d -m 0700 "$copy_parent_dir"
+  rm -f "$copy_tmp_path" "$copy_err_path"
+  if cp "$copy_src_path" "$copy_tmp_path" >"$copy_err_path" 2>&1; then
+    copy_status=0
+  else
+    copy_status=$?
+  fi
+  if [ "$copy_status" -ne 0 ]; then
+    installer_error "failed to copy ${copy_label} from ${copy_src_path} to ${copy_dest_path} (status ${copy_status})"
+    [ -s "$copy_err_path" ] && sed 's/^/[cp] /' "$copy_err_path" >&2
+    rm -f "$copy_tmp_path" "$copy_err_path"
+    return 1
+  fi
+  rm -f "$copy_err_path"
+  [ -s "$copy_tmp_path" ] || installer_fatal "copied ${copy_label} is empty: ${copy_src_path}"
+  mv "$copy_tmp_path" "$copy_dest_path"
+  chmod "$copy_mode" "$copy_dest_path"
+}
+
+installer_log_path_is_numbered() {
+  installer_check_log_path=$1
+  installer_check_log_name=${installer_check_log_path##*/}
+
+  case "$installer_check_log_name" in
+    [0-9]*-*) return 0 ;;
+  esac
+  return 1
+}
+
+installer_log_sequence_file() {
+  installer_sequence_log_dir=$1
+  printf '%s/.log-sequence\n' "$installer_sequence_log_dir"
+}
+
+installer_next_log_sequence() {
+  installer_sequence_log_dir=$1
+  installer_sequence_path=$(installer_log_sequence_file "$installer_sequence_log_dir")
+  installer_sequence_tmp="${installer_sequence_path}.tmp.$$"
+  installer_current_sequence=0
+
+  [ -d "$installer_sequence_log_dir" ] || install -d -m 0700 "$installer_sequence_log_dir"
+  if [ -r "$installer_sequence_path" ]; then
+    installer_current_sequence=$(cat "$installer_sequence_path" 2>/dev/null || printf '0\n')
+  fi
+  case "$installer_current_sequence" in
+    ''|*[!0-9]*) installer_current_sequence=0 ;;
+  esac
+
+  installer_next_sequence=$((installer_current_sequence + 1))
+  printf '%s\n' "$installer_next_sequence" >"$installer_sequence_tmp"
+  mv "$installer_sequence_tmp" "$installer_sequence_path"
+  chmod 0600 "$installer_sequence_path" 2>/dev/null || true
+  printf '%s\n' "$installer_next_sequence"
+}
+
+installer_log_dir_for_path() {
+  installer_dir_path=$1
+  printf '%s\n' "$(dirname "$installer_dir_path")"
+}
+
+installer_basename_for_path() {
+  installer_base_path=$1
+  printf '%s\n' "${installer_base_path##*/}"
+}
+
+installer_runtime_log_path_requested() {
+  requested_log_path=$1
+  runtime_log_dir=$(installer_runtime_log_dir)
+
+  case "$requested_log_path" in
+    "${runtime_log_dir}/"*) return 0 ;;
+  esac
+  return 1
+}
+
+installer_resolve_runtime_log_path() {
+  requested_log_path=$1
+  printf '%s\n' "$requested_log_path"
+}
+
+installer_runtime_temp_log_path() {
+  temp_log_name=$1
+  if installer_logging_enabled; then
+    temp_log_dir=$(installer_runtime_temp_log_dir)
+  else
+    temp_log_dir="$(installer_runtime_state_dir)/tmp"
+  fi
+  install -d -m 0700 "$temp_log_dir" 2>/dev/null || true
+  printf '%s/%s-%s\n' "$temp_log_dir" "$$" "$temp_log_name"
+}
+
+installer_resolve_target_log_path() {
+  requested_target_log_path=$1
+  INSTALLER_RESOLVED_TARGET_LOG_PATH=
+
+  [ -n "$requested_target_log_path" ] || return 1
+  if installer_log_path_is_numbered "$requested_target_log_path"; then
+    INSTALLER_RESOLVED_TARGET_LOG_PATH=$requested_target_log_path
+    return 0
+  fi
+
+  if [ -n "${INSTALLER_LOG_TARGET_FILE_RESOLVED:-}" ] && \
+     [ "${INSTALLER_LOG_TARGET_FILE:-}" = "$requested_target_log_path" ]
+  then
+    INSTALLER_RESOLVED_TARGET_LOG_PATH=$INSTALLER_LOG_TARGET_FILE_RESOLVED
+    return 0
+  fi
+
+  target_log_dir=$(installer_log_dir_for_path "$requested_target_log_path")
+  target_log_name=$(installer_basename_for_path "$requested_target_log_path")
+  target_log_seq=$(installer_next_log_sequence "$target_log_dir")
+  resolved_target_log_path="${target_log_dir}/${target_log_seq}-${target_log_name}"
+
+  if [ "${INSTALLER_LOG_TARGET_FILE:-}" = "$requested_target_log_path" ]; then
+    INSTALLER_LOG_TARGET_FILE_RESOLVED=$resolved_target_log_path
+  fi
+
+  INSTALLER_RESOLVED_TARGET_LOG_PATH=$resolved_target_log_path
+  return 0
+}
+
+installer_copy_log_to_target() {
+  log_path=$1
+  target_log_file=$2
+
+  installer_logging_enabled || return 0
+  [ -s "$log_path" ] || return 0
+  [ -n "$target_log_file" ] || return 0
+  installer_target_is_mounted || return 0
+
+  if installer_log_path_is_numbered "$log_path" && \
+     ! installer_log_path_is_numbered "$target_log_file"
+  then
+    resolved_target_log_file="$(installer_log_dir_for_path "$target_log_file")/$(installer_basename_for_path "$log_path")"
+  else
+    installer_resolve_target_log_path "$target_log_file" || return 0
+    resolved_target_log_file=$INSTALLER_RESOLVED_TARGET_LOG_PATH
+  fi
+  installer_copy_path_with_mode "$log_path" "$resolved_target_log_file" 0600 "installer log"
+}
+
+installer_persist_log_file() {
+  log_path=$1
+  target_log_file=$2
+
+  # Runtime logs are archived once at the end of the installer flow.  Keep this
+  # compatibility entrypoint as a no-op so phase hooks do not create partial
+  # target-side log copies before finish-install runs.
+  [ -n "$log_path" ] || return 0
+  [ -n "$target_log_file" ] || return 0
+  return 0
+}
+
+installer_init_log_file() {
+  log_path=$1
+  target_log_file=${2:-}
+  log_context=${3:-${0##*/}}
+  log_tag=${4:-}
+  log_stage=${5:-}
+  log_path=$(installer_resolve_runtime_log_path "$log_path")
+
+  installer_export_logging_policy
+  if ! installer_logging_enabled; then
+    INSTALLER_LOG_PATH=
+    INSTALLER_LOG_TARGET_FILE=
+    INSTALLER_LOG_TARGET_FILE_RESOLVED=
+    INSTALLER_LOG_CONTEXT=$log_context
+    INSTALLER_LOG_FINALIZED=0
+    INSTALLER_LOG_START_EPOCH=$(installer_log_epoch)
+    [ -n "$log_tag" ] && INSTALLER_LOG_TAG=$log_tag
+    if [ -n "$log_stage" ]; then
+      INSTALLER_LOG_STAGE=$log_stage
+    else
+      INSTALLER_LOG_STAGE=$(installer_stage_from_tag "$(installer_log_tag)")
+    fi
+    return 0
+  fi
+
+  log_dir=$(dirname "$log_path")
+
+  [ -d "$log_dir" ] || install -d -m 0700 "$log_dir" 2>/dev/null || true
+  : >>"$log_path" || installer_fatal "unable to initialize log file: ${log_path}"
+  chmod 0600 "$log_path" 2>/dev/null || true
+
+  # shellcheck disable=SC2034 # Exposed for phase hooks sourced after logging setup.
+  INSTALLER_LOG_PATH=$log_path
+  INSTALLER_LOG_TARGET_FILE=$target_log_file
+  INSTALLER_LOG_TARGET_FILE_RESOLVED=
+  INSTALLER_LOG_CONTEXT=$log_context
+  INSTALLER_LOG_FINALIZED=0
+  INSTALLER_LOG_START_EPOCH=$(installer_log_epoch)
+  if [ -n "$log_tag" ]; then
+    INSTALLER_LOG_TAG=$log_tag
+  fi
+  if [ -n "$log_stage" ]; then
+    INSTALLER_LOG_STAGE=$log_stage
+  else
+    INSTALLER_LOG_STAGE=$(installer_stage_from_tag "$(installer_log_tag)")
+  fi
+
+  exec >>"$log_path" 2>&1
+  installer_info "starting ${INSTALLER_LOG_CONTEXT}"
+  return 0
+}
+
+installer_init_stderr_log_file() {
+  log_path=$1
+  target_log_file=${2:-}
+  log_context=${3:-${0##*/}}
+  log_tag=${4:-}
+  log_stage=${5:-}
+  log_path=$(installer_resolve_runtime_log_path "$log_path")
+
+  installer_export_logging_policy
+  if ! installer_logging_enabled; then
+    INSTALLER_LOG_PATH=
+    INSTALLER_LOG_TARGET_FILE=
+    INSTALLER_LOG_TARGET_FILE_RESOLVED=
+    INSTALLER_LOG_CONTEXT=$log_context
+    INSTALLER_LOG_FINALIZED=0
+    INSTALLER_LOG_START_EPOCH=$(installer_log_epoch)
+    [ -n "$log_tag" ] && INSTALLER_LOG_TAG=$log_tag
+    if [ -n "$log_stage" ]; then
+      INSTALLER_LOG_STAGE=$log_stage
+    else
+      INSTALLER_LOG_STAGE=$(installer_stage_from_tag "$(installer_log_tag)")
+    fi
+    return 0
+  fi
+
+  log_dir=$(dirname "$log_path")
+
+  [ -d "$log_dir" ] || install -d -m 0700 "$log_dir" 2>/dev/null || true
+  : >>"$log_path" || installer_fatal "unable to initialize log file: ${log_path}"
+  chmod 0600 "$log_path" 2>/dev/null || true
+
+  # shellcheck disable=SC2034 # Exposed for phase hooks sourced after logging setup.
+  INSTALLER_LOG_PATH=$log_path
+  INSTALLER_LOG_TARGET_FILE=$target_log_file
+  INSTALLER_LOG_TARGET_FILE_RESOLVED=
+  INSTALLER_LOG_CONTEXT=$log_context
+  INSTALLER_LOG_FINALIZED=0
+  INSTALLER_LOG_START_EPOCH=$(installer_log_epoch)
+  if [ -n "$log_tag" ]; then
+    INSTALLER_LOG_TAG=$log_tag
+  fi
+  if [ -n "$log_stage" ]; then
+    INSTALLER_LOG_STAGE=$log_stage
+  else
+    INSTALLER_LOG_STAGE=$(installer_stage_from_tag "$(installer_log_tag)")
+  fi
+
+  exec 2>>"$log_path"
+  installer_info "starting ${INSTALLER_LOG_CONTEXT}"
+  return 0
+}
+
+installer_finalize_log() {
+  exit_code=${1:-0}
+
+  if [ "${INSTALLER_LOG_FINALIZED:-0}" -eq 1 ]; then
+    return 0
+  fi
+  INSTALLER_LOG_FINALIZED=1
+
+  log_context=${INSTALLER_LOG_CONTEXT:-${0##*/}}
+  log_duration=
+  if [ -n "${INSTALLER_LOG_START_EPOCH:-}" ]; then
+    log_end_epoch=$(installer_log_epoch)
+    case "$log_end_epoch:${INSTALLER_LOG_START_EPOCH:-}" in
+      [0-9]*:[0-9]*)
+        log_duration=" duration_seconds=$((log_end_epoch - INSTALLER_LOG_START_EPOCH))"
+        ;;
+    esac
+  fi
+  if [ "$exit_code" -eq 0 ]; then
+    installer_info "completed ${log_context}${log_duration}"
+  else
+    installer_error "${log_context} exited with status ${exit_code}${log_duration}"
+  fi
+
+  if installer_bool_is_true "${INSTALLER_ARCHIVE_LOGS_ON_FINALIZE:-false}"; then
+    installer_archive_logs_to_target || true
+  fi
+}
+
+installer_fatal() {
+  installer_log_record error "$*"
+  exit 1
+}
+
+installer_shell_quote() {
+  printf "'%s'" "$(printf '%s' "${1-}" | sed "s/'/'\\\\''/g")"
+}
+
+installer_cmdline() {
+  if [ -n "${INSTALLER_CMDLINE:-}" ]; then
+    printf '%s\n' "$INSTALLER_CMDLINE"
+    return 0
+  fi
+  if [ "${INSTALLER_CMDLINE_CACHE_READY:-0}" -eq 1 ]; then
+    printf '%s\n' "$INSTALLER_CMDLINE_CACHE"
+    return 0
+  fi
+  if [ -r /proc/cmdline ]; then
+    INSTALLER_CMDLINE_CACHE=$(cat /proc/cmdline)
+    INSTALLER_CMDLINE_CACHE_READY=1
+    printf '%s\n' "$INSTALLER_CMDLINE_CACHE"
+    return 0
+  fi
+  INSTALLER_CMDLINE_CACHE=
+  INSTALLER_CMDLINE_CACHE_READY=1
+  printf '\n'
+}
+
+installer_cmdline_value() {
+  key=$1
+  for arg in $(installer_cmdline); do
+    case "$arg" in
+      "$key"=*)
+        printf '%s\n' "${arg#*=}"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+installer_cmdline_seed_reference_pair() {
+  if [ "${INSTALLER_CMDLINE_SEED_PAIR_READY:-0}" -eq 1 ]; then
+    return 0
+  fi
+
+  INSTALLER_CMDLINE_SEED_URL_BASE=
+  INSTALLER_CMDLINE_SEED_FILE_BASE=
+
+  for arg in $(installer_cmdline); do
+    case "$arg" in
+      preseed/url=*|url=*)
+        [ -n "$INSTALLER_CMDLINE_SEED_URL_BASE" ] || INSTALLER_CMDLINE_SEED_URL_BASE=${arg#*=}
+        ;;
+      preseed/file=*|file=*)
+        [ -n "$INSTALLER_CMDLINE_SEED_FILE_BASE" ] || INSTALLER_CMDLINE_SEED_FILE_BASE=${arg#*=}
+        ;;
+    esac
+  done
+  INSTALLER_CMDLINE_SEED_PAIR_READY=1
+}
+
+installer_cmdline_seed_base() {
+  installer_cmdline_seed_reference_pair
+  if installer_choose_seed_base_from_pair \
+    "${INSTALLER_CMDLINE_SEED_URL_BASE:-}" \
+    "${INSTALLER_CMDLINE_SEED_FILE_BASE:-}" \
+    "kernel cmdline"
+  then
+    printf '%s\n' "$INSTALLER_RESOLVED_SEED_BASE"
+    return 0
+  fi
+  return 1
+}
+
+installer_debconf_value() {
+  question=$1
+  value=
+
+  if command -v debconf-get >/dev/null 2>&1; then
+    value=$(debconf-get "$question" 2>/dev/null || true)
+    case "$value" in
+      "$question":\ *) value=${value#"$question": } ;;
+      "$question":*) value=${value#"$question":} ;;
+    esac
+    value=$(printf '%s\n' "$value" | sed -n '1{s/\r$//;p;q;}')
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value"
+    return 0
+  fi
+
+  if command -v debconf-communicate >/dev/null 2>&1; then
+    response=$(printf 'GET %s\n' "$question" | debconf-communicate 2>/dev/null || true)
+    case "$response" in
+      0\ *) value=${response#0 } ;;
+      *) value= ;;
+    esac
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value"
+    return 0
+  fi
+
+  return 1
+}
+
+installer_seed_debconf_value() {
+  owner=$1
+  question=$2
+  value_type=$3
+  value=$4
+
+  if command -v debconf-set-selections >/dev/null 2>&1; then
+    {
+      printf '%s %s %s %s\n' "$owner" "$question" "$value_type" "$value"
+      printf '%s %s seen true\n' "$owner" "$question"
+    } | debconf-set-selections >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  if command -v debconf-communicate >/dev/null 2>&1; then
+    {
+      printf 'SET %s %s\n' "$question" "$value"
+      printf 'FSET %s seen true\n' "$question"
+    } | debconf-communicate >/dev/null 2>&1 || true
+  fi
+}
+
+installer_bool_is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+  esac
+  return 1
+}
+
+installer_bool_is_false() {
+  case "${1:-}" in
+    0|false|FALSE|no|NO|off|OFF) return 0 ;;
+  esac
+  return 1
+}
+
+installer_read_first_line() {
+  [ -r "$1" ] || return 1
+  IFS= read -r installer_line_value <"$1" || return 1
+  printf '%s' "$installer_line_value"
+}
+
+installer_pci_has_display_vendor() {
+  wanted_vendor=$1
+
+  case "$wanted_vendor" in
+    0x[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+    *) installer_fatal "PCI vendor id must be a four-digit hex value with 0x prefix: ${wanted_vendor:-unset}" ;;
+  esac
+
+  for dev_path in /sys/bus/pci/devices/*; do
+    [ -d "$dev_path" ] || continue
+    [ -r "$dev_path/vendor" ] || continue
+    [ -r "$dev_path/class" ] || continue
+
+    dev_vendor=$(installer_read_first_line "$dev_path/vendor" 2>/dev/null || true)
+    dev_class=$(installer_read_first_line "$dev_path/class" 2>/dev/null || true)
+    [ -n "$dev_vendor" ] || continue
+    [ -n "$dev_class" ] || continue
+    case "$dev_class" in
+      0x03*)
+        [ "$dev_vendor" = "$wanted_vendor" ] && return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+installer_nvidia_gpu_detected() {
+  installer_pci_has_display_vendor 0x10de
+}
+
+installer_log_required_files() {
+  printf '%s\n' \
+    01-boot.log \
+    02-preseed.log \
+    03-network.log \
+    04-disk.log \
+    05-partman.log \
+    06-apt.log \
+    07-packages.log \
+    08-bootloader.log \
+    09-late.log \
+    10-desktop.log
+}
+
+installer_ensure_log_files() {
+  installer_logging_enabled || return 0
+  log_root=$(installer_runtime_log_dir)
+  install -d -m 0700 "$log_root"
+}
+
+installer_prepare_target_log_dirs() {
+  installer_logging_enabled || return 0
+  installer_target_is_mounted || return 0
+  target_log_root=$(installer_target_log_root_dir)
+  target_log_dir=$(installer_target_log_dir)
+
+  install -d -m 0700 "$target_log_root" "$target_log_dir"
+}
+
+installer_missing_log_record() {
+  log_name=$1
+  category=${log_name#*-}
+  category=${category%.log}
+  case "$category" in
+    packages) category=package ;;
+    *) ;;
+  esac
+  stage=$(installer_log_stage_for_category "$category")
+
+  installer_log_should_emit warning || return 0
+  printf '%s stage=%s level=warning component=log-archive log_file=%s status=not-created message=%s\n' \
+    "$(installer_log_timestamp)" \
+    "$stage" \
+    "$log_name" \
+    "stage did not emit installer log records before final archive"
+}
+
+installer_log_redacted_cmdline() {
+  redacted_cmdline=
+  for cmdline_arg in $(installer_cmdline); do
+    case "$cmdline_arg" in
+      fruux_username=*|fruux_password=*|netcfg/wireless_wpa=*|wireless_wpa=*|wifi_wpa=*|*[Pp][Aa][Ss][Ss]*=*|*[Ss][Ee][Cc][Rr][Ee][Tt]*=*|*[Tt][Oo][Kk][Ee][Nn]*=*|*[Kk][Ee][Yy]*=*)
+        cmdline_arg=${cmdline_arg%%=*}=REDACTED
+        ;;
+    esac
+    redacted_cmdline="${redacted_cmdline:+$redacted_cmdline }$cmdline_arg"
+  done
+  printf '%s\n' "$redacted_cmdline"
+}
+
+installer_log_boot_context() {
+  installer_ensure_log_files
+  installer_append_log_category boot boot info boot "kernel_cmdline=$(installer_log_redacted_cmdline)"
+  installer_append_log_category boot boot info boot "kernel_release=$(uname -r 2>/dev/null || printf unknown)"
+  installer_append_log_category boot boot info boot "machine=$(uname -m 2>/dev/null || printf unknown)"
+  if [ -d /sys/firmware/efi ]; then
+    installer_append_log_category boot boot info boot "boot_mode=UEFI"
+  else
+    installer_append_log_category boot boot info boot "boot_mode=BIOS"
+  fi
+  if [ -r /etc/debian_version ]; then
+    installer_append_log_category boot boot info boot "installer_debian_version=$(cat /etc/debian_version 2>/dev/null || printf unknown)"
+  fi
+  if [ -n "${INSTALLER_SELECTED_CLASS_REFS:-}" ]; then
+    installer_append_log_category boot boot info classes "selected=${INSTALLER_SELECTED_CLASS_REFS}"
+  fi
+  if [ -n "${INSTALLER_HOST_PROFILE:-}" ]; then
+    installer_append_log_category boot boot info classes "host_profile=${INSTALLER_HOST_PROFILE} host_family=${INSTALLER_HOST_FAMILY:-unset} hook_family=${INSTALLER_HOOK_FAMILY:-unset}"
+  fi
+}
+
+installer_log_network_context() {
+  installer_ensure_log_files
+  installer_append_log_category network network_configured info network "hostname=$(hostname 2>/dev/null || printf unknown)"
+  if command -v ip >/dev/null 2>&1; then
+    ip -o link show 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] || continue
+      installer_append_log_category network network_configured info link "$line"
+    done
+    ip -o addr show 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] || continue
+      installer_append_log_category network network_configured info address "$line"
+    done
+    ip route show 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] || continue
+      installer_append_log_category network network_configured info route "$line"
+    done
+  fi
+  if [ -r /etc/resolv.conf ]; then
+    while IFS=' ' read -r resolver_key nameserver _resolver_rest || [ -n "${resolver_key:-}" ]; do
+      [ "$resolver_key" = "nameserver" ] || continue
+      [ -n "$nameserver" ] || continue
+      installer_append_log_category network network_configured info dns "nameserver=${nameserver}"
+    done </etc/resolv.conf
+  fi
+}
+
+installer_log_disk_context() {
+  installer_ensure_log_files
+  for disk_sys_path in /sys/block/*; do
+    [ -d "$disk_sys_path" ] || continue
+    disk_name=${disk_sys_path##*/}
+    case "$disk_name" in
+      loop*|ram*|dm-*|md*) continue ;;
+    esac
+    disk_size=$(cat "$disk_sys_path/size" 2>/dev/null || printf unknown)
+    disk_removable=$(cat "$disk_sys_path/removable" 2>/dev/null || printf unknown)
+    disk_model=$(cat "$disk_sys_path/device/model" 2>/dev/null || printf unknown)
+    disk_serial=$(cat "$disk_sys_path/device/serial" 2>/dev/null || printf unknown)
+    installer_append_log_category disk disk_discovery info disk "device=/dev/${disk_name} sectors=${disk_size} removable=${disk_removable} model=${disk_model} serial=${disk_serial}"
+  done
+  if [ -n "${DEV_INSTALL_DISK:-}" ]; then
+    installer_append_log_category disk disk_discovery info selected "install_disk=${DEV_INSTALL_DISK}"
+  fi
+}
+
+installer_log_preseed_context() {
+  installer_ensure_log_files
+  installer_append_log_category preseed preseed_loaded info preseed "timestamp=$(installer_log_timestamp)"
+  installer_append_log_category preseed preseed_loaded info preseed "seed_source=${INSTALLER_SEED_BASE:-${SEED_BASE:-unknown}}"
+  installer_append_log_category preseed preseed_loaded info preseed "hostname=${SYSTEM_HOSTNAME:-$(hostname 2>/dev/null || printf unknown)}"
+  if command -v ip >/dev/null 2>&1; then
+    ip -o addr show scope global 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] || continue
+      installer_append_log_category preseed preseed_loaded info address "$line"
+    done
+  fi
+}
+
+installer_log_category_for_target_command() {
+  target_label=$1
+  case "$target_label" in
+    *apt\ metadata*|*APT\ metadata*|*apt\ preferences*|*APT\ preferences*|*apt\ work*|*APT\ work*)
+      printf '%s\n' apt
+      return 0
+      ;;
+    *package*|*Package*|*pkgsel*|*dpkg*|*DKMS*|*dkms*)
+      printf '%s\n' package
+      return 0
+      ;;
+    *apt*|*APT*)
+      printf '%s\n' apt
+      return 0
+      ;;
+    *GRUB*|*grub*|*Secure\ Boot*|*boot*|*Boot*|*EFI*|*efi*|*shim*|*MOK*|*mok*|*kernel*|*Kernel*|*initramfs*)
+      printf '%s\n' bootloader
+      return 0
+      ;;
+    *Labwc*|*labwc*|*desktop*|*Desktop*|*greetd*|*waybar*|*wofi*|*mako*|*kanshi*|*thunar*)
+      printf '%s\n' desktop
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+installer_log_target_command_output() {
+  category=$1
+  stage=$2
+  component=$3
+  output_file=$4
+
+  [ -s "$output_file" ] || return 0
+
+  max_lines=${INSTALLER_COMMAND_LOG_MAX_LINES:-80}
+  case "$max_lines" in
+    ''|*[!0-9]*) max_lines=80 ;;
+  esac
+  [ "$max_lines" -gt 0 ] || return 0
+
+  output_lines=$(wc -l <"$output_file" 2>/dev/null || printf '0')
+  output_lines=${output_lines##* }
+  case "$output_lines" in
+    ''|*[!0-9]*) output_lines=0 ;;
+  esac
+
+  source_stream=$output_file
+  temp_stream=
+  if [ "$output_lines" -gt "$max_lines" ] && command -v tail >/dev/null 2>&1; then
+    installer_append_log_category "$category" "$stage" info "$component" "output_truncated=true original_lines=${output_lines} kept_tail_lines=${max_lines}" || true
+    temp_stream=$(installer_runtime_temp_log_path target-command-tail.log)
+    tail -n "$max_lines" "$output_file" >"$temp_stream" 2>/dev/null || {
+      rm -f "$temp_stream"
+      temp_stream=
+    }
+    [ -n "$temp_stream" ] && source_stream=$temp_stream
+  fi
+
+  installer_redact_log_stream <"$source_stream" | while IFS= read -r output_line || [ -n "$output_line" ]; do
+    installer_append_log_category "$category" "$stage" info "$component" "$output_line" || true
+  done
+
+  if [ -n "$temp_stream" ]; then
+    rm -f "$temp_stream"
+  fi
+}
+
+installer_live_log_max_bytes() {
+  live_log_max_bytes=${INSTALLER_LIVE_LOG_MAX_BYTES:-4194304}
+  case "$live_log_max_bytes" in
+    ''|*[!0-9]*) live_log_max_bytes=4194304 ;;
+  esac
+  printf '%s\n' "$live_log_max_bytes"
+}
+
+installer_live_installer_log_files() {
+  printf '%s\n' \
+    /var/log/syslog \
+    /var/log/messages \
+    /var/log/partman \
+    /var/log/debootstrap.log \
+    /var/log/installer/syslog \
+    /var/log/installer/partman \
+    /var/log/installer/status \
+    /var/log/installer/hardware-summary
+}
+
+installer_safe_log_filename() {
+  printf '%s\n' "$1" | sed 's|^/||; s|/|_|g; s|[^A-Za-z0-9._-]|_|g'
+}
+
+installer_redact_log_stream() {
+  sed \
+    -e 's/\([Pp][Aa][Ss][Ss][^=[:space:]]*[= ][= ]*\)[^[:space:]]*/\1REDACTED/g' \
+    -e 's/\([Ss][Ee][Cc][Rr][Ee][Tt][^=[:space:]]*[= ][= ]*\)[^[:space:]]*/\1REDACTED/g' \
+    -e 's/\([Tt][Oo][Kk][Ee][Nn][^=[:space:]]*[= ][= ]*\)[^[:space:]]*/\1REDACTED/g' \
+    -e 's/\([Ww][Pp][Aa][^=[:space:]]*[= ][= ]*\)[^[:space:]]*/\1REDACTED/g'
+}
+
+installer_archive_live_installer_logs_to_target() {
+  installer_logging_enabled || return 0
+  target_log_dir=$(installer_target_log_dir)
+  live_log_dir="${target_log_dir}/debian-installer"
+  max_bytes=$(installer_live_log_max_bytes)
+
+  installer_target_is_mounted || return 0
+  install -d -m 0700 "$live_log_dir"
+
+  while IFS= read -r live_log || [ -n "$live_log" ]; do
+    [ -n "$live_log" ] || continue
+    [ -s "$live_log" ] || continue
+    safe_name=$(installer_safe_log_filename "$live_log")
+    tmp_log="${live_log_dir}/${safe_name}.tmp.$$"
+    dst_log="${live_log_dir}/${safe_name}"
+    live_log_size=$(wc -c <"$live_log" 2>/dev/null | tr -d ' ' || printf '0')
+    case "$live_log_size" in
+      ''|*[!0-9]*) live_log_size=0 ;;
+    esac
+
+    if [ "$live_log_size" -gt "$max_bytes" ] && command -v tail >/dev/null 2>&1; then
+      {
+        printf '# truncated_to_last_bytes=%s original_bytes=%s source=%s\n' "$max_bytes" "$live_log_size" "$live_log"
+        tail -c "$max_bytes" "$live_log"
+      } | installer_redact_log_stream >"$tmp_log" 2>/dev/null || {
+        rm -f "$tmp_log"
+        installer_warn "failed to archive live installer log ${live_log}"
+        continue
+      }
+    else
+      installer_redact_log_stream <"$live_log" >"$tmp_log" 2>/dev/null || {
+        rm -f "$tmp_log"
+        installer_warn "failed to archive live installer log ${live_log}"
+        continue
+      }
+    fi
+    chmod 0600 "$tmp_log" 2>/dev/null || true
+    mv "$tmp_log" "$dst_log"
+  done <<EOF
+$(installer_live_installer_log_files)
+EOF
+}
+
+installer_archive_logs_to_target() {
+  archive_mode=${1:-move}
+  installer_logging_enabled || return 0
+  target_log_dir=$(installer_target_log_dir)
+  log_root=$(installer_runtime_log_dir)
+
+  case "$archive_mode" in
+    copy|move) ;;
+    *) archive_mode=move ;;
+  esac
+
+  installer_target_is_mounted || return 0
+  installer_ensure_log_files
+  installer_prepare_target_log_dirs
+
+  while IFS= read -r log_name || [ -n "$log_name" ]; do
+    [ -n "$log_name" ] || continue
+    src_log="${log_root}/${log_name}"
+    dst_log="${target_log_dir}/${log_name}"
+    tmp_log="${dst_log}.tmp.$$"
+
+    if [ -s "$src_log" ]; then
+      if cp "$src_log" "$tmp_log" 2>/dev/null; then
+        chmod 0600 "$tmp_log" 2>/dev/null || true
+        mv "$tmp_log" "$dst_log"
+        [ "$archive_mode" = copy ] || rm -f "$src_log"
+      else
+        rm -f "$tmp_log"
+        installer_warn "failed to archive ${src_log} to ${dst_log}"
+      fi
+    else
+      installer_missing_log_record "$log_name" >"$tmp_log"
+      chmod 0600 "$tmp_log" 2>/dev/null || true
+      mv "$tmp_log" "$dst_log"
+      [ "$archive_mode" = copy ] || rm -f "$src_log" 2>/dev/null || true
+    fi
+  done <<EOF
+$(installer_log_required_files)
+EOF
+
+  for src_log in "$log_root"/*.log; do
+    [ -f "$src_log" ] || continue
+    [ ! -L "$src_log" ] || continue
+    log_name=${src_log##*/}
+    dst_log="${target_log_dir}/${log_name}"
+    tmp_log="${dst_log}.tmp.$$"
+    if installer_redact_log_stream <"$src_log" >"$tmp_log" 2>/dev/null; then
+      chmod 0600 "$tmp_log" 2>/dev/null || true
+      mv "$tmp_log" "$dst_log"
+      [ "$archive_mode" = copy ] || rm -f "$src_log"
+    else
+      rm -f "$tmp_log"
+      installer_warn "failed to archive extra runtime log ${src_log} to ${dst_log}"
+    fi
+  done
+
+  if [ -d "$(installer_runtime_temp_log_dir)" ]; then
+    install -d -m 0700 "${target_log_dir}/tmp"
+    for tmp_src in "$(installer_runtime_temp_log_dir)"/*; do
+      [ -f "$tmp_src" ] || continue
+      tmp_dst="${target_log_dir}/tmp/${tmp_src##*/}"
+      if cp "$tmp_src" "$tmp_dst" 2>/dev/null; then
+        chmod 0600 "$tmp_dst" 2>/dev/null || true
+        [ "$archive_mode" = copy ] || rm -f "$tmp_src"
+      fi
+    done
+  fi
+
+  installer_archive_live_installer_logs_to_target || true
+}
+
+installer_random_hostname_suffix() {
+  raw=$(LC_ALL=C tr -dc '0-9' </dev/urandom | dd bs=3 count=1 2>/dev/null || true)
+  case "$raw" in
+    [0-9][0-9][0-9]) printf '%s\n' "$raw" ;;
+    *) installer_fatal "unable to generate hostname suffix" ;;
+  esac
+}
+
+installer_ensure_system_identity() {
+  : "${SYSTEM_PREFIX:?SYSTEM_PREFIX must be set}"
+  : "${SYSTEM_DOMAIN:?SYSTEM_DOMAIN must be set}"
+  case "$SYSTEM_PREFIX" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]*)
+      installer_fatal "SYSTEM_PREFIX must contain only ASCII letters and digits"
+      ;;
+  esac
+  case "$SYSTEM_DOMAIN" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-]*|.*|*.|*..*)
+      installer_fatal "SYSTEM_DOMAIN must contain only hostname-safe labels"
+      ;;
+  esac
+  if [ -z "${SYSTEM_HOSTNAME:-}" ]; then
+    SYSTEM_HOSTNAME="${SYSTEM_PREFIX}-$(installer_random_hostname_suffix)"
+  fi
+  case "$SYSTEM_HOSTNAME" in
+    "${SYSTEM_PREFIX}"-[0-9][0-9][0-9]) ;;
+    *) installer_fatal "SYSTEM_HOSTNAME must match SYSTEM_PREFIX-###" ;;
+  esac
+}
+
+installer_seed_source_type() {
+  case "${1:-}" in
+    /*) printf '%s\n' file ;;
+    *) printf '%s\n' url ;;
+  esac
+}
+
+installer_trim_seed_base() {
+  seed_base=$1
+
+  while [ "${#seed_base}" -gt 1 ]; do
+    case "$seed_base" in
+      */) seed_base=${seed_base%/} ;;
+      *) break ;;
+    esac
+  done
+  printf '%s\n' "$seed_base"
+}
+
+installer_assign_normalized_seed_base() {
+  output_var_name=$1
+  seed_base=$2
+  seed_type=$3
+
+  seed_base=${seed_base%%\?*}
+  case "$seed_base" in
+    */*.cfg) seed_base=${seed_base%/*} ;;
+  esac
+  seed_base=$(installer_trim_seed_base "$seed_base")
+
+  case "$seed_type" in
+    file)
+      case "$seed_base" in
+        /*) ;;
+        *) installer_fatal "installation file base must be an absolute path: ${seed_base:-unset}" ;;
+      esac
+      case "$seed_base" in
+        *..*|*//*)
+          installer_fatal "installation file base contains unsupported traversal: $seed_base"
+          ;;
+      esac
+      ;;
+    url)
+      [ -n "$seed_base" ] || installer_fatal "installation URL base is empty"
+      ;;
+    *)
+      installer_fatal "unsupported installation source type: $seed_type"
+      ;;
+  esac
+
+  eval "$output_var_name=\$seed_base"
+}
+
+installer_normalize_seed_base() {
+  normalized_seed_base=
+  installer_assign_normalized_seed_base normalized_seed_base "$1" "$2"
+  printf '%s\n' "$normalized_seed_base"
+}
+
+installer_persist_seed_source() {
+  seed_base=$1
+  seed_type=$(installer_seed_source_type "$seed_base")
+  seed_url_path=$(installer_bootstrap_seed_url_path)
+  seed_file_path=$(installer_bootstrap_seed_file_path)
+
+  install -d -m 0700 "$(installer_runtime_bootstrap_dir)"
+
+  case "$seed_type" in
+    file)
+      SEED_FILE_BASE=$(installer_normalize_seed_base "$seed_base" file)
+      SEED_URL_BASE=
+      printf '%s\n' "$SEED_FILE_BASE" >"$seed_file_path"
+      rm -f "$seed_url_path"
+      ;;
+    url)
+      SEED_URL_BASE=$(installer_normalize_seed_base "$seed_base" url)
+      SEED_FILE_BASE=
+      printf '%s\n' "$SEED_URL_BASE" >"$seed_url_path"
+      rm -f "$seed_file_path"
+      ;;
+    *)
+      installer_fatal "unsupported installation source type: $seed_type"
+      ;;
+  esac
+}
+
+installer_choose_seed_base_from_pair() {
+  url_seed_base=$1
+  file_seed_base=$2
+  seed_label=$3
+
+  if [ -n "$url_seed_base" ] && [ -n "$file_seed_base" ]; then
+    installer_fatal "${seed_label} defines both URL and file seed sources"
+  fi
+  if [ -n "$url_seed_base" ]; then
+    installer_assign_normalized_seed_base INSTALLER_RESOLVED_SEED_BASE "$url_seed_base" url
+    return 0
+  fi
+  if [ -n "$file_seed_base" ]; then
+    installer_assign_normalized_seed_base INSTALLER_RESOLVED_SEED_BASE "$file_seed_base" file
+    return 0
+  fi
+
+  INSTALLER_RESOLVED_SEED_BASE=
+  return 1
+}
+
+installer_persisted_seed_base() {
+  persisted_seed_url_base=
+  persisted_seed_file_base=
+  persisted_seed_url_path=$(installer_bootstrap_seed_url_path)
+  persisted_seed_file_path=$(installer_bootstrap_seed_file_path)
+
+  if [ -f "$persisted_seed_url_path" ]; then
+    persisted_seed_url_base=$(cat "$persisted_seed_url_path")
+  fi
+  if [ -f "$persisted_seed_file_path" ]; then
+    persisted_seed_file_base=$(cat "$persisted_seed_file_path")
+  fi
+
+  installer_choose_seed_base_from_pair "$persisted_seed_url_base" "$persisted_seed_file_base" "persisted installer state"
+}
+
+installer_seed_base() {
+  seed_base=${1:-}
+  if [ -n "$seed_base" ]; then
+    seed_type=$(installer_seed_source_type "$seed_base")
+    installer_normalize_seed_base "$seed_base" "$seed_type"
+    return 0
+  fi
+  if [ "${INSTALLER_SEED_BASE_CACHE_READY:-0}" -eq 1 ]; then
+    printf '%s\n' "$INSTALLER_SEED_BASE_CACHE"
+    return 0
+  fi
+
+  if installer_choose_seed_base_from_pair "${SEED_URL_BASE:-}" "${SEED_FILE_BASE:-}" "runtime seed state"; then
+    INSTALLER_SEED_BASE_CACHE=$INSTALLER_RESOLVED_SEED_BASE
+    INSTALLER_SEED_BASE_CACHE_READY=1
+    printf '%s\n' "$INSTALLER_SEED_BASE_CACHE"
+    return 0
+  fi
+  if installer_choose_seed_base_from_pair "${INSTALLER_SEED_URL_BASE:-}" "${INSTALLER_SEED_FILE_BASE:-}" "installer context seed state"; then
+    INSTALLER_SEED_BASE_CACHE=$INSTALLER_RESOLVED_SEED_BASE
+    INSTALLER_SEED_BASE_CACHE_READY=1
+    printf '%s\n' "$INSTALLER_SEED_BASE_CACHE"
+    return 0
+  fi
+  if [ -n "${INSTALLER_SEED_BASE:-}" ]; then
+    INSTALLER_SEED_BASE_CACHE=$(installer_normalize_seed_base "${INSTALLER_SEED_BASE}" "$(installer_seed_source_type "${INSTALLER_SEED_BASE}")")
+    INSTALLER_SEED_BASE_CACHE_READY=1
+    printf '%s\n' "$INSTALLER_SEED_BASE_CACHE"
+    return 0
+  fi
+  if cmdline_seed_base=$(installer_cmdline_seed_base); then
+    INSTALLER_SEED_BASE_CACHE=$cmdline_seed_base
+    INSTALLER_SEED_BASE_CACHE_READY=1
+    printf '%s\n' "$INSTALLER_SEED_BASE_CACHE"
+    return 0
+  fi
+  if installer_persisted_seed_base; then
+    INSTALLER_SEED_BASE_CACHE=$INSTALLER_RESOLVED_SEED_BASE
+    INSTALLER_SEED_BASE_CACHE_READY=1
+    printf '%s\n' "$INSTALLER_SEED_BASE_CACHE"
+    return 0
+  fi
+
+installer_fatal "installation preseed URL or file path not found in kernel cmdline, installer context, runtime state, or persisted installer state"
+}
+
+installer_seed_url_base() {
+  installer_seed_base "${1:-}"
+}
+
+installer_current_seed_base() {
+  installer_seed_base ""
+}
+
+installer_validate_relative_seed_path() {
+  seed_relative_path=$1
+
+  case "$seed_relative_path" in
+    ''|/*|../*|*/..|*../*|*//*)
+      installer_fatal "seed source path must stay relative to the seed base: ${seed_relative_path:-unset}"
+      ;;
+  esac
+}
+
+installer_file_safe_token() {
+  printf '%s\n' "$(printf '%s' "${1:-seed}" | sed 's/[^A-Za-z0-9._-]/_/g')"
+}
+
+installer_repo_env_relpath() {
+  printf '%s\n' repo.env
+}
+
+installer_repo_env_path() {
+  printf '%s/bootstrap/repo.env\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_repo_env_dir_vars() {
+  installer_repo_env_vars_path=$1
+  sed -n 's/^\(DIR_[A-Z0-9_]*\)=.*/\1/p' "$installer_repo_env_vars_path"
+}
+
+installer_validate_repo_dir_value() {
+  installer_repo_validate_var=$1
+  installer_repo_validate_value=$2
+
+  case "$installer_repo_validate_value" in
+    ''|/*|../*|*/..|*../*|*//*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*)
+      installer_fatal "${installer_repo_validate_var} must be a safe repository-relative directory path: ${installer_repo_validate_value:-unset}"
+      ;;
+  esac
+}
+
+installer_repo_dir_input_is_var() {
+  case "${1:-}" in
+    DIR_[ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]*)
+      case "$1" in
+        *[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]*) return 1 ;;
+      esac
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+installer_loaded_repo_dir_value() {
+  # Keep this explicit mapping aligned with the slim repo.env contract.
+  case "${1:-}" in
+    DIR_HOSTS_SERVICES) printf '%s\n' "${DIR_HOSTS_SERVICES:-}" ;;
+    DIR_HOSTS_PROFILES) printf '%s\n' "${DIR_HOSTS_PROFILES:-}" ;;
+    DIR_HOSTS_SHARED) printf '%s\n' "${DIR_HOSTS_SHARED:-}" ;;
+    DIR_HOOKS_HARDWARE_ARCH) printf '%s\n' "${DIR_HOOKS_HARDWARE_ARCH:-}" ;;
+    DIR_HOOKS_HARDWARE_BLACKLIST) printf '%s\n' "${DIR_HOOKS_HARDWARE_BLACKLIST:-}" ;;
+    DIR_HOOKS_HARDWARE_CPU) printf '%s\n' "${DIR_HOOKS_HARDWARE_CPU:-}" ;;
+    DIR_HOOKS_HARDWARE_DISK) printf '%s\n' "${DIR_HOOKS_HARDWARE_DISK:-}" ;;
+    DIR_HOOKS_HARDWARE_GPU) printf '%s\n' "${DIR_HOOKS_HARDWARE_GPU:-}" ;;
+    DIR_HOOKS_ROLE_DESKTOP) printf '%s\n' "${DIR_HOOKS_ROLE_DESKTOP:-}" ;;
+    DIR_HOOKS_ROLE_SERVER) printf '%s\n' "${DIR_HOOKS_ROLE_SERVER:-}" ;;
+    DIR_HOOKS_SERVICES_GITLAB) printf '%s\n' "${DIR_HOOKS_SERVICES_GITLAB:-}" ;;
+    DIR_HOOKS_SHARED_APT_SETUP_GENERATORS) printf '%s\n' "${DIR_HOOKS_SHARED_APT_SETUP_GENERATORS:-}" ;;
+    DIR_HOOKS_SHARED_BASE_STAGE_D) printf '%s\n' "${DIR_HOOKS_SHARED_BASE_STAGE_D:-}" ;;
+    DIR_HOOKS_SHARED_D_I) printf '%s\n' "${DIR_HOOKS_SHARED_D_I:-}" ;;
+    DIR_HOOKS_SHARED_FINISH_INSTALL_D) printf '%s\n' "${DIR_HOOKS_SHARED_FINISH_INSTALL_D:-}" ;;
+    DIR_HOOKS_SHARED_PARTMAN) printf '%s\n' "${DIR_HOOKS_SHARED_PARTMAN:-}" ;;
+    DIR_HOOKS_SHARED_PARTMAN_FINISH_D) printf '%s\n' "${DIR_HOOKS_SHARED_PARTMAN_FINISH_D:-}" ;;
+    DIR_HOOKS_SHARED_TARGET) printf '%s\n' "${DIR_HOOKS_SHARED_TARGET:-}" ;;
+    DIR_SCRIPTS_COMMON) printf '%s\n' "${DIR_SCRIPTS_COMMON:-}" ;;
+    DIR_SCRIPTS_DESKTOP) printf '%s\n' "${DIR_SCRIPTS_DESKTOP:-}" ;;
+    DIR_SCRIPTS_EARLY) printf '%s\n' "${DIR_SCRIPTS_EARLY:-}" ;;
+    DIR_SCRIPTS_FIRSTBOOT) printf '%s\n' "${DIR_SCRIPTS_FIRSTBOOT:-}" ;;
+    DIR_SCRIPTS_INITRAMFS) printf '%s\n' "${DIR_SCRIPTS_INITRAMFS:-}" ;;
+    DIR_SCRIPTS_LATE) printf '%s\n' "${DIR_SCRIPTS_LATE:-}" ;;
+    DIR_SCRIPTS_PARTMAN) printf '%s\n' "${DIR_SCRIPTS_PARTMAN:-}" ;;
+    DIR_SCRIPTS_PRESEED) printf '%s\n' "${DIR_SCRIPTS_PRESEED:-}" ;;
+    DIR_SCRIPTS_RUNTIME) printf '%s\n' "${DIR_SCRIPTS_RUNTIME:-}" ;;
+    *) return 1 ;;
+  esac
+}
+
+installer_validate_repo_env() {
+  installer_repo_validate_env_path=${1:-$(installer_repo_env_path)}
+
+  [ -r "$installer_repo_validate_env_path" ] || installer_fatal "repository path environment is not readable: $installer_repo_validate_env_path"
+  while IFS= read -r installer_repo_validate_dir_var || [ -n "$installer_repo_validate_dir_var" ]; do
+    [ -n "$installer_repo_validate_dir_var" ] || continue
+    installer_repo_validate_dir_value=$(installer_loaded_repo_dir_value "$installer_repo_validate_dir_var" 2>/dev/null || true)
+    installer_validate_repo_dir_value "$installer_repo_validate_dir_var" "$installer_repo_validate_dir_value"
+  done <<EOF
+$(installer_repo_env_dir_vars "$installer_repo_validate_env_path")
+EOF
+}
+
+installer_ensure_repo_env() {
+  installer_repo_env_seed_base=${1:-}
+
+  if [ "${INSTALLER_REPO_ENV_READY:-0}" -eq 1 ]; then
+    return 0
+  fi
+
+  installer_repo_env_file=$(installer_repo_env_path)
+  if [ -n "${INSTALLER_SOURCE_ROOT:-}" ]; then
+    installer_repo_env_source="${INSTALLER_SOURCE_ROOT%/}/$(installer_repo_env_relpath)"
+    [ -r "$installer_repo_env_source" ] || installer_fatal "repository path environment is not readable: ${installer_repo_env_source}"
+    installer_repo_env_file=$installer_repo_env_source
+  else
+    [ -n "$installer_repo_env_seed_base" ] || installer_repo_env_seed_base=$(installer_current_seed_base)
+    if [ ! -s "$installer_repo_env_file" ]; then
+      installer_fetch_seed_path "$installer_repo_env_seed_base" "$(installer_repo_env_relpath)" "$installer_repo_env_file" 0600
+    fi
+  fi
+  # shellcheck disable=SC1090
+  . "$installer_repo_env_file"
+  installer_validate_repo_env "$installer_repo_env_file"
+  INSTALLER_REPO_ENV_READY=1
+}
+
+installer_repo_dir_value() {
+  installer_repo_dir_name=$1
+  installer_repo_dir_value=
+  installer_repo_dir_path=
+
+  if ! installer_repo_dir_input_is_var "$installer_repo_dir_name"; then
+    installer_repo_dir_path=$installer_repo_dir_name
+    installer_validate_repo_dir_value repository_path "$installer_repo_dir_path"
+    printf '%s\n' "$installer_repo_dir_path"
+    return 0
+  fi
+
+  if [ "${INSTALLER_REPO_ENV_READY:-0}" -ne 1 ]; then
+    installer_ensure_repo_env ""
+  fi
+  installer_repo_dir_value=$(installer_loaded_repo_dir_value "$installer_repo_dir_name" 2>/dev/null || true)
+  [ -n "$installer_repo_dir_value" ] || installer_fatal "repository directory variable is unset: $installer_repo_dir_name"
+  installer_validate_repo_dir_value "$installer_repo_dir_name" "$installer_repo_dir_value"
+  printf '%s\n' "$installer_repo_dir_value"
+}
+
+installer_repo_join_var() {
+  installer_repo_join_dir=$1
+  installer_repo_join_leaf=${2:-}
+  installer_repo_join_base=$(installer_repo_dir_value "$installer_repo_join_dir")
+
+  case "$installer_repo_join_leaf" in
+    '') printf '%s\n' "$installer_repo_join_base" ;;
+    /*|../*|*/..|*../*|*//*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*)
+      installer_fatal "unsafe repository path suffix for ${installer_repo_join_dir}: ${installer_repo_join_leaf:-unset}"
+      ;;
+    *) printf '%s/%s\n' "$installer_repo_join_base" "$installer_repo_join_leaf" ;;
+  esac
+}
+
+installer_repo_resolve_prefix() {
+  installer_repo_resolve_source=$1
+  installer_repo_resolve_prefix_path=$2
+  installer_repo_resolve_base=$3
+  installer_repo_resolve_base_leaf=${4:-}
+  installer_repo_resolve_leaf=
+
+  case "$installer_repo_resolve_source" in
+    "$installer_repo_resolve_prefix_path")
+      installer_repo_resolve_leaf=$installer_repo_resolve_base_leaf
+      ;;
+    "$installer_repo_resolve_prefix_path"/*)
+      installer_repo_resolve_leaf=${installer_repo_resolve_source#"$installer_repo_resolve_prefix_path"/}
+      case "$installer_repo_resolve_base_leaf" in
+        '')
+          ;;
+        *)
+          installer_repo_resolve_leaf="${installer_repo_resolve_base_leaf}/${installer_repo_resolve_leaf}"
+          ;;
+      esac
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  installer_repo_join_var "$installer_repo_resolve_base" "$installer_repo_resolve_leaf"
+}
+
+installer_repo_resolve_mapped_path() {
+  installer_repo_mapped_source=$1
+
+  # repo.env carries only stable directory roots. Keep suffixes literal here so
+  # callers can use repo.env-backed prefixes without a second synthetic DIR_*
+  # expansion layer.
+  while IFS='|' read -r installer_repo_map_prefix installer_repo_map_base installer_repo_map_leaf || [ -n "$installer_repo_map_prefix" ]; do
+    [ -n "$installer_repo_map_prefix" ] || continue
+    if installer_repo_resolve_prefix \
+      "$installer_repo_mapped_source" \
+      "$installer_repo_map_prefix" \
+      "$installer_repo_map_base" \
+      "$installer_repo_map_leaf"
+    then
+      return 0
+    fi
+  done <<'EOF'
+hosts/profiles|DIR_HOSTS_PROFILES|
+hosts/services|DIR_HOSTS_SERVICES|
+hosts/shared|DIR_HOSTS_SHARED|
+hooks/shared/apt-setup/generators|DIR_HOOKS_SHARED_APT_SETUP_GENERATORS|generators
+hooks/shared/base-stage.d|DIR_HOOKS_SHARED_BASE_STAGE_D|
+hooks/shared/d-i|DIR_HOOKS_SHARED_D_I|
+hooks/shared/finish-install.d|DIR_HOOKS_SHARED_FINISH_INSTALL_D|
+hooks/shared/partman/finish.d|DIR_HOOKS_SHARED_PARTMAN_FINISH_D|
+hooks/shared/partman|DIR_HOOKS_SHARED_PARTMAN|
+hooks/shared/target|DIR_HOOKS_SHARED_TARGET|
+hooks/hardware/arch|DIR_HOOKS_HARDWARE_ARCH|
+hooks/hardware/blacklist|DIR_HOOKS_HARDWARE_BLACKLIST|
+hooks/hardware/cpu|DIR_HOOKS_HARDWARE_CPU|
+hooks/hardware/disk|DIR_HOOKS_HARDWARE_DISK|
+hooks/hardware/gpu|DIR_HOOKS_HARDWARE_GPU|
+hooks/role/desktop|DIR_HOOKS_ROLE_DESKTOP|
+hooks/role/server|DIR_HOOKS_ROLE_SERVER|
+hooks/services/gitlab|DIR_HOOKS_SERVICES_GITLAB|
+scripts/common|DIR_SCRIPTS_COMMON|
+scripts/desktop|DIR_SCRIPTS_DESKTOP|
+scripts/early|DIR_SCRIPTS_EARLY|
+scripts/firstboot|DIR_SCRIPTS_FIRSTBOOT|
+scripts/initramfs|DIR_SCRIPTS_INITRAMFS|
+scripts/late|DIR_SCRIPTS_LATE|
+scripts/partman|DIR_SCRIPTS_PARTMAN|
+scripts/preseed|DIR_SCRIPTS_PRESEED|
+scripts/runtime|DIR_SCRIPTS_RUNTIME|
+ssh|ssh|
+EOF
+
+  return 1
+}
+
+installer_repo_resolve_path() {
+  repo_source_path=$1
+
+  case "$repo_source_path" in
+    "$(installer_repo_env_relpath)"|classes/*|fragments/*)
+      printf '%s\n' "$repo_source_path"
+      return 0
+      ;;
+  esac
+
+  if installer_repo_resolve_mapped_path "$repo_source_path"; then
+    return 0
+  fi
+
+  printf '%s\n' "$repo_source_path"
+}
+
+installer_validate_apt_preference_token() {
+  pref_token=$1
+  pref_label=${2:-apt preferences}
+
+  case "$pref_token" in
+    *.pref) pref_name=$pref_token ;;
+    *) pref_name="${pref_token}.pref" ;;
+  esac
+  case "$pref_name" in
+    ''|.*|*/*|*..*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._+-]*|*.tmp|*.bak|*.save|*.distUpgrade)
+      installer_fatal "unsafe apt preference name in ${pref_label}: ${pref_token:-unset}"
+      ;;
+    *.pref) ;;
+    *)
+      installer_fatal "apt preference name in ${pref_label} must resolve to a .pref file: ${pref_token:-unset}"
+      ;;
+  esac
+  [ "${#pref_name}" -le 128 ] || installer_fatal "apt preference name in ${pref_label} is too long: $pref_name"
+  printf '%s\n' "$pref_name"
+}
+
+installer_emit_apt_preference_names() {
+  pref_config=$1
+  pref_label=${2:-apt preferences}
+  pref_line_breaks=$(printf '%s' "$pref_config" | wc -l | tr -d '[:space:]')
+  case "$pref_line_breaks" in
+    0) ;;
+    ''|*[!0-9]*)
+      installer_fatal "unable to validate ${pref_label} line count"
+      ;;
+    *)
+      installer_fatal "${pref_label} must be a single comma- or space-separated line"
+      ;;
+  esac
+  pref_tokens=$(printf '%s' "$pref_config" | tr ',' ' ')
+  pref_seen=' '
+
+  for pref_token in $pref_tokens; do
+    pref_name=$(installer_validate_apt_preference_token "$pref_token" "$pref_label")
+    case "$pref_seen" in
+      *" $pref_name "*) continue ;;
+    esac
+    pref_seen="${pref_seen}${pref_name} "
+    printf '%s\n' "$pref_name"
+  done
+}
+
+installer_normalize_apt_preferences_config() {
+  pref_config=$1
+  pref_label=${2:-apt preferences}
+  pref_normalized=
+
+  while IFS= read -r pref_name || [ -n "$pref_name" ]; do
+    [ -n "$pref_name" ] || continue
+    pref_token=${pref_name%.pref}
+    pref_normalized="${pref_normalized:+$pref_normalized,}$pref_token"
+  done <<EOF
+$(installer_emit_apt_preference_names "$pref_config" "$pref_label")
+EOF
+  printf '%s\n' "$pref_normalized"
+}
+
+installer_selected_apt_preferences_config() {
+  pref_override=
+  pref_seen=' '
+  while IFS= read -r class_ref || [ -n "$class_ref" ]; do
+    [ -n "$class_ref" ] || continue
+    installer_class_token_parts "$class_ref" >/dev/null
+    group_name=${INSTALLER_CLASS_TOKEN_GROUP:-}
+    class_name=$INSTALLER_CLASS_TOKEN_NAME
+    [ -n "$group_name" ] || continue
+    pref_value=$(installer_class_meta_value "" "$group_name" "$class_name" debian_apt_preferences)
+    [ -n "$pref_value" ] || continue
+    pref_label="class ${group_name}/${class_name} debian_apt_preferences"
+    while IFS= read -r pref_name || [ -n "$pref_name" ]; do
+      [ -n "$pref_name" ] || continue
+      case "$pref_seen" in
+        *" $pref_name "*) continue ;;
+      esac
+      pref_seen="${pref_seen}${pref_name} "
+      pref_token=${pref_name%.pref}
+      pref_override="${pref_override:+$pref_override,}$pref_token"
+    done <<EOF
+$(installer_emit_apt_preference_names "$pref_value" "$pref_label")
+EOF
+  done <<EOF
+$(installer_selected_class_refs 2>/dev/null || true)
+EOF
+
+  [ -n "$pref_override" ] || return 1
+  printf '%s\n' "$pref_override"
+}
+
+installer_apt_preferences_config() {
+  installer_ensure_repo_env ""
+  installer_load_context_if_present || true
+
+  if pref_override=$(installer_selected_apt_preferences_config 2>/dev/null); then
+    printf '%s\n' "$pref_override"
+    return 0
+  fi
+
+  printf '%s\n' "$(installer_normalize_apt_preferences_config "${DEBIAN_APT_PREFERENCES:-}" DEBIAN_APT_PREFERENCES)"
+}
+
+installer_configured_apt_preferences() {
+  installer_emit_apt_preference_names "$(installer_apt_preferences_config)" "effective apt preferences"
+}
+
+installer_seed_cache_key() {
+  seed_cache_base=$1
+  seed_cache_type=$(installer_seed_source_type "$seed_cache_base")
+  seed_cache_norm=$(installer_normalize_seed_base "$seed_cache_base" "$seed_cache_type")
+  printf '%s/%s\n' \
+    "$(installer_file_safe_token "$seed_cache_type")" \
+    "$(installer_file_safe_token "$seed_cache_norm")"
+}
+
+installer_seed_cache_path() {
+  seed_cache_base=$1
+  seed_cache_source_path=$2
+
+  installer_validate_relative_seed_path "$seed_cache_source_path"
+  printf '%s/%s/%s\n' \
+    "$(installer_runtime_seed_cache_dir)" \
+    "$(installer_seed_cache_key "$seed_cache_base")" \
+    "$seed_cache_source_path"
+}
+
+installer_fetch_url() {
+  fetch_url_seed_url_base=$1
+  fetch_url_source_path=$2
+  fetch_url_dest_path=$3
+  fetch_url_mode=$4
+  fetch_url_tmp_path="${fetch_url_dest_path}.tmp.$$"
+  fetch_url_err_path="${fetch_url_tmp_path}.wget.log"
+  fetch_url_parent_dir=$(dirname "$fetch_url_dest_path")
+
+  [ -d "$fetch_url_parent_dir" ] || install -d -m 0700 "$fetch_url_parent_dir"
+  rm -f "$fetch_url_tmp_path"
+  rm -f "$fetch_url_err_path"
+  installer_info "fetching ${fetch_url_source_path} from ${fetch_url_seed_url_base}"
+  if wget --no-verbose --tries=3 --timeout=30 -O "$fetch_url_tmp_path" "$fetch_url_seed_url_base/$fetch_url_source_path" >"$fetch_url_err_path" 2>&1; then
+    fetch_url_status=0
+  else
+    fetch_url_status=$?
+  fi
+  if [ "$fetch_url_status" -ne 0 ]; then
+    installer_error "failed to fetch ${fetch_url_source_path} from ${fetch_url_seed_url_base} (status ${fetch_url_status})"
+    [ -s "$fetch_url_err_path" ] && sed 's/^/[wget] /' "$fetch_url_err_path" >&2
+    rm -f "$fetch_url_tmp_path" "$fetch_url_err_path"
+    return 1
+  fi
+  rm -f "$fetch_url_err_path"
+  [ -s "$fetch_url_tmp_path" ] || installer_fatal "downloaded file is empty: $fetch_url_source_path"
+  mv "$fetch_url_tmp_path" "$fetch_url_dest_path"
+  chmod "$fetch_url_mode" "$fetch_url_dest_path"
+}
+
+installer_copy_seed_file() {
+  copy_seed_file_base=$1
+  copy_seed_source_path=$2
+  copy_seed_dest_path=$3
+  copy_seed_mode=$4
+  copy_seed_tmp_path="${copy_seed_dest_path}.tmp.$$"
+  copy_seed_err_path="${copy_seed_tmp_path}.copy.log"
+  copy_seed_parent_dir=$(dirname "$copy_seed_dest_path")
+  copy_seed_full_path="${copy_seed_file_base%/}/$copy_seed_source_path"
+
+  installer_validate_relative_seed_path "$copy_seed_source_path"
+  [ -d "$copy_seed_parent_dir" ] || install -d -m 0700 "$copy_seed_parent_dir"
+  rm -f "$copy_seed_tmp_path"
+  rm -f "$copy_seed_err_path"
+  installer_info "copying ${copy_seed_source_path} from ${copy_seed_file_base}"
+  if cp "$copy_seed_full_path" "$copy_seed_tmp_path" >"$copy_seed_err_path" 2>&1; then
+    copy_seed_status=0
+  else
+    copy_seed_status=$?
+  fi
+  if [ "$copy_seed_status" -ne 0 ]; then
+    installer_error "failed to copy ${copy_seed_source_path} from ${copy_seed_file_base} (status ${copy_seed_status})"
+    [ -s "$copy_seed_err_path" ] && sed 's/^/[cp] /' "$copy_seed_err_path" >&2
+    rm -f "$copy_seed_tmp_path" "$copy_seed_err_path"
+    return 1
+  fi
+  rm -f "$copy_seed_err_path"
+  [ -s "$copy_seed_tmp_path" ] || installer_fatal "copied seed file is empty: $copy_seed_source_path"
+  mv "$copy_seed_tmp_path" "$copy_seed_dest_path"
+  chmod "$copy_seed_mode" "$copy_seed_dest_path"
+}
+
+installer_fetch_seed_path() {
+  fetch_seed_base=$1
+  fetch_seed_source_path=$2
+  fetch_seed_dest_path=$3
+  fetch_seed_mode=$4
+
+  case "$fetch_seed_source_path" in
+    "$(installer_repo_env_relpath)") ;;
+    *)
+      installer_ensure_repo_env "$fetch_seed_base"
+      fetch_seed_source_path=$(installer_repo_resolve_path "$fetch_seed_source_path")
+      ;;
+  esac
+
+  fetch_seed_type=$(installer_seed_source_type "$fetch_seed_base")
+  fetch_seed_cache_path=$(installer_seed_cache_path "$fetch_seed_base" "$fetch_seed_source_path")
+
+  if [ ! -s "$fetch_seed_cache_path" ]; then
+    installer_info "seed cache miss for ${fetch_seed_source_path}; retrieving from ${fetch_seed_base}"
+    case "$fetch_seed_type" in
+      file)
+        installer_copy_seed_file "$fetch_seed_base" "$fetch_seed_source_path" "$fetch_seed_cache_path" 0600
+        ;;
+      url)
+        installer_fetch_url "$fetch_seed_base" "$fetch_seed_source_path" "$fetch_seed_cache_path" 0600
+        ;;
+      *)
+        installer_fatal "unsupported installation source type: $fetch_seed_type"
+        ;;
+    esac
+  else
+    installer_info "seed cache hit for ${fetch_seed_source_path}"
+  fi
+
+  installer_copy_path_with_mode "$fetch_seed_cache_path" "$fetch_seed_dest_path" "$fetch_seed_mode" "cached seed file ${fetch_seed_source_path}"
+}
+
+installer_fetch_file() {
+  fetch_file_seed_base=$1
+  fetch_file_source_path=$2
+  fetch_file_dest_path=$3
+  fetch_file_mode=${4:-0600}
+
+  installer_fetch_seed_path "$fetch_file_seed_base" "$fetch_file_source_path" "$fetch_file_dest_path" "$fetch_file_mode" || installer_fatal "failed to fetch $fetch_file_source_path"
+}
+
+installer_profile_shared_family() {
+  profile_name=$1
+
+  if [ -n "${INSTALLER_HOST_PROFILE:-}" ] && [ "$profile_name" = "${INSTALLER_HOST_PROFILE}" ] && [ -n "${INSTALLER_HOST_FAMILY:-}" ]; then
+    printf '%s\n' "${INSTALLER_HOST_FAMILY}"
+    return 0
+  fi
+
+  case "$profile_name" in
+    *-*) printf '%s\n' "${profile_name%%-*}" ;;
+    *) return 1 ;;
+  esac
+}
+
+installer_profile_shared_families() {
+  profile_name=$1
+  installer_profile_shared_family "$profile_name"
+}
+
+installer_profile_variant() {
+  profile_name=$1
+
+  case "$profile_name" in
+    *-*) printf '%s\n' "${profile_name#*-}" ;;
+    *) return 1 ;;
+  esac
+}
+
+installer_validate_profile_component() {
+  component_label=$1
+  component_value=$2
+
+  case "$component_value" in
+    ''|*[!A-Za-z0-9_-]*)
+      installer_fatal "${component_label} contains an invalid profile path component: ${component_value:-unset}"
+      ;;
+  esac
+}
+
+installer_profile_layout_family() {
+  profile_name=$1
+  profile_family=${2:-}
+
+  if [ -z "$profile_family" ]; then
+    profile_family=$(installer_profile_shared_family "$profile_name" 2>/dev/null || true)
+  fi
+
+  if [ -n "${INSTALLER_HOST_PROFILE:-}" ] &&
+    [ "$profile_name" = "${INSTALLER_HOST_PROFILE}" ] &&
+    [ -n "${INSTALLER_HOOK_FAMILY:-}" ]; then
+    profile_family=$INSTALLER_HOOK_FAMILY
+  fi
+
+  case "$profile_family" in
+    btrfs|vm) printf 'btrfs\n' ;;
+    f2fs) printf 'f2fs\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+installer_fetch_composite_env_paths() {
+  composite_seed_base=$1
+  composite_dest_path=$2
+  composite_mode=$3
+  shift 3
+  composite_fetched_any=false
+  composite_fetched_paths=
+
+  install -d -m 0700 "$(dirname "$composite_dest_path")"
+  : >"$composite_dest_path"
+  for composite_candidate in "$@"; do
+    [ -n "$composite_candidate" ] || continue
+    composite_part_dest="${composite_dest_path}.part.$$"
+    if ! installer_fetch_seed_path "$composite_seed_base" "$composite_candidate" "$composite_part_dest" "$composite_mode"; then
+      rm -f "$composite_part_dest"
+      installer_fatal "failed to fetch required host env ${composite_candidate} into ${composite_dest_path}"
+    fi
+    cat "$composite_part_dest" >>"$composite_dest_path"
+    printf '\n' >>"$composite_dest_path"
+    rm -f "$composite_part_dest"
+    composite_fetched_any=true
+    composite_fetched_paths="${composite_fetched_paths:+$composite_fetched_paths }$composite_candidate"
+  done
+
+  [ "$composite_fetched_any" = true ] || installer_fatal "failed to fetch host env into $composite_dest_path"
+  chmod "$composite_mode" "$composite_dest_path"
+  installer_info "fetched host env ${composite_dest_path} from:${composite_fetched_paths:+ ${composite_fetched_paths}}"
+}
+
+installer_fetch_host_env() {
+  host_seed_base=$1
+  host_profile=$2
+  host_dest_path=$3
+  host_mode=${4:-0600}
+  host_family=$(installer_profile_shared_family "$host_profile" 2>/dev/null || true)
+  host_variant=$(installer_profile_variant "$host_profile" 2>/dev/null || true)
+
+  [ -n "$host_family" ] || installer_fatal "unable to derive host family from profile: ${host_profile:-unset}"
+  [ -n "$host_variant" ] || installer_fatal "unable to derive host variant from profile: ${host_profile:-unset}"
+  installer_validate_profile_component "host family" "$host_family"
+  installer_validate_profile_component "host variant" "$host_variant"
+
+  host_layout_family=$(installer_profile_layout_family "$host_profile" "$host_family" 2>/dev/null || true)
+  [ -n "$host_layout_family" ] || installer_fatal "unable to derive layout family from profile: ${host_profile:-unset}"
+  installer_validate_profile_component "host layout family" "$host_layout_family"
+
+  installer_fetch_composite_env_paths \
+    "$host_seed_base" \
+    "$host_dest_path" \
+    "$host_mode" \
+    "$(installer_repo_join_var DIR_HOSTS_PROFILES "${host_family}/${host_variant}.env")" \
+    "$(installer_repo_join_var DIR_HOSTS_SHARED identity.env)" \
+    "$(installer_repo_join_var DIR_HOSTS_SHARED runtime.env)" \
+    "$(installer_repo_join_var DIR_HOSTS_SHARED "${host_variant}.env")" \
+    "$(installer_repo_join_var DIR_HOSTS_SHARED layout.env)" \
+    "$(installer_repo_join_var DIR_HOSTS_SHARED "layout-${host_layout_family}.env")" \
+    "$(installer_repo_join_var DIR_HOSTS_SHARED boot.env)"
+}
+
+installer_fetch_account_env() {
+  account_seed_base=$1
+  account_dest_path=$2
+  account_mode=${3:-0600}
+
+  installer_fetch_seed_path \
+    "$account_seed_base" \
+    "$(installer_repo_join_var DIR_HOSTS_SHARED account.env)" \
+    "$account_dest_path" \
+    "$account_mode" || installer_fatal "failed to fetch account env"
+}
+
+installer_classes_conf_relpath() {
+  printf '%s\n' "classes/CLASSES.conf"
+}
+
+installer_classes_conf_cache_path() {
+  printf '%s/cache/classes.conf\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_ensure_classes_conf_path() {
+  if [ -n "${INSTALLER_CLASSES_CONF_PATH_CACHE:-}" ] && [ -r "$INSTALLER_CLASSES_CONF_PATH_CACHE" ]; then
+    return 0
+  fi
+
+  conf_relpath=$(installer_classes_conf_relpath)
+
+  if [ -n "${INSTALLER_SOURCE_ROOT:-}" ]; then
+    conf_path="${INSTALLER_SOURCE_ROOT%/}/${conf_relpath}"
+    [ -r "$conf_path" ] || installer_fatal "class config is not readable: ${conf_path}"
+    INSTALLER_CLASSES_CONF_PATH_CACHE=$conf_path
+    return 0
+  fi
+
+  conf_path=$(installer_classes_conf_cache_path)
+  if [ ! -s "$conf_path" ]; then
+    seed_base=$(installer_seed_base "")
+    installer_fetch_file "$seed_base" "$conf_relpath" "$conf_path" 0600
+  fi
+  INSTALLER_CLASSES_CONF_PATH_CACHE=$conf_path
+}
+
+installer_classes_conf_path() {
+  installer_ensure_classes_conf_path
+  printf '%s\n' "$INSTALLER_CLASSES_CONF_PATH_CACHE"
+}
+
+installer_classes_cache_name_token() {
+  printf '%s' "$1" | tr -c 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789' '_'
+}
+
+installer_classes_section_var_name() {
+  printf 'INSTALLER_CLASSES_SECTION__%s\n' "$(installer_classes_cache_name_token "$1")"
+}
+
+installer_classes_value_var_name() {
+  printf 'INSTALLER_CLASSES_VALUE__%s__%s\n' \
+    "$(installer_classes_cache_name_token "$1")" \
+    "$(installer_classes_cache_name_token "$2")"
+}
+
+installer_classes_cache_ensure() {
+  if [ "${INSTALLER_CLASSES_CACHE_READY:-0}" -eq 1 ]; then
+    return 0
+  fi
+
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  ini_cr=$(printf '\r')
+  current_section=
+  INSTALLER_CLASSES_SECTION_NAMES=
+  INSTALLER_CLASSES_GROUP_NAMES_TEXT=
+  INSTALLER_CLASSES_CLASS_RECORDS_TEXT=
+
+  while IFS= read -r ini_line || [ -n "$ini_line" ]; do
+    case "$ini_line" in
+      *"$ini_cr") ini_line=${ini_line%"$ini_cr"} ;;
+    esac
+    case "$ini_line" in
+      ''|'#'*|';'*) continue ;;
+      \[*\])
+        current_section=${ini_line#\[}
+        current_section=${current_section%\]}
+        [ -n "$current_section" ] || continue
+        INSTALLER_CLASSES_SECTION_NAMES="${INSTALLER_CLASSES_SECTION_NAMES:+$INSTALLER_CLASSES_SECTION_NAMES }$current_section"
+        section_var=$(installer_classes_section_var_name "$current_section")
+        eval "$section_var=1"
+        case "$current_section" in
+          group.*)
+            INSTALLER_CLASSES_GROUP_NAMES_TEXT="${INSTALLER_CLASSES_GROUP_NAMES_TEXT:+$INSTALLER_CLASSES_GROUP_NAMES_TEXT }${current_section#group.}"
+            ;;
+          class.*)
+            INSTALLER_CLASSES_CLASS_RECORDS_TEXT="${INSTALLER_CLASSES_CLASS_RECORDS_TEXT:+$INSTALLER_CLASSES_CLASS_RECORDS_TEXT }${current_section#class.}"
+            ;;
+        esac
+        ;;
+      *=*)
+        [ -n "$current_section" ] || continue
+        value_var=$(installer_classes_value_var_name "$current_section" "${ini_line%%=*}")
+        eval "$value_var=$(installer_shell_quote "${ini_line#*=}")"
+        ;;
+    esac
+  done <"$conf_path"
+
+  INSTALLER_CLASSES_CACHE_READY=1
+}
+
+installer_ini_get_generic() {
+  ini_file=$1
+  ini_section=$2
+  ini_key=$3
+  ini_cr=$(printf '\r')
+
+  installer_in_section=false
+  while IFS= read -r ini_line || [ -n "$ini_line" ]; do
+    case "$ini_line" in
+      *"$ini_cr") ini_line=${ini_line%"$ini_cr"} ;;
+    esac
+    case "$ini_line" in
+      ''|'#'*|';'*) continue ;;
+      \[*\])
+        ini_section_name=${ini_line#\[}
+        ini_section_name=${ini_section_name%\]}
+        if [ "$ini_section_name" = "$ini_section" ]; then
+          installer_in_section=true
+        else
+          installer_in_section=false
+        fi
+        continue
+        ;;
+    esac
+    [ "$installer_in_section" = true ] || continue
+    case "$ini_line" in
+      *=*)
+        current_key=${ini_line%%=*}
+        [ "$current_key" = "$ini_key" ] || continue
+        printf '%s\n' "${ini_line#*=}"
+        return 0
+        ;;
+      esac
+  done <"$ini_file"
+}
+
+installer_ini_get() {
+  ini_file=$1
+  ini_section=$2
+  ini_key=$3
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+
+  if [ "$ini_file" = "$conf_path" ]; then
+    installer_classes_cache_ensure
+    value_var=$(installer_classes_value_var_name "$ini_section" "$ini_key")
+    value_is_set=
+    eval "value_is_set=\${$value_var+x}"
+    [ "$value_is_set" = x ] || return 1
+    eval "printf '%s\n' \"\${$value_var}\""
+    return 0
+  fi
+
+  installer_ini_get_generic "$ini_file" "$ini_section" "$ini_key"
+}
+
+installer_ini_has_section_generic() {
+  ini_file=$1
+  ini_section=$2
+  ini_cr=$(printf '\r')
+
+  while IFS= read -r ini_line || [ -n "$ini_line" ]; do
+    case "$ini_line" in
+      *"$ini_cr") ini_line=${ini_line%"$ini_cr"} ;;
+    esac
+    case "$ini_line" in
+      ''|'#'*|';'*) continue ;;
+      \[*\])
+        ini_section_name=${ini_line#\[}
+        ini_section_name=${ini_section_name%\]}
+        [ "$ini_section_name" = "$ini_section" ] && return 0
+        ;;
+    esac
+  done <"$ini_file"
+  return 1
+}
+
+installer_ini_has_section() {
+  ini_file=$1
+  ini_section=$2
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+
+  if [ "$ini_file" = "$conf_path" ]; then
+    installer_classes_cache_ensure
+    section_var=$(installer_classes_section_var_name "$ini_section")
+    section_is_set=
+    eval "section_is_set=\${$section_var+x}"
+    [ "$section_is_set" = x ]
+    return $?
+  fi
+
+  installer_ini_has_section_generic "$ini_file" "$ini_section"
+}
+
+installer_ini_sections_with_prefix_generic() {
+  ini_file=$1
+  section_prefix=$2
+  ini_cr=$(printf '\r')
+
+  while IFS= read -r ini_line || [ -n "$ini_line" ]; do
+    case "$ini_line" in
+      *"$ini_cr") ini_line=${ini_line%"$ini_cr"} ;;
+    esac
+    case "$ini_line" in
+      ''|'#'*|';'*) continue ;;
+      \[*\])
+        ini_section_name=${ini_line#\[}
+        ini_section_name=${ini_section_name%\]}
+        case "$ini_section_name" in
+          "${section_prefix}"*)
+            printf '%s\n' "${ini_section_name#"$section_prefix"}"
+            ;;
+        esac
+        ;;
+    esac
+  done <"$ini_file"
+}
+
+installer_ini_sections_with_prefix() {
+  ini_file=$1
+  section_prefix=$2
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+
+  if [ "$ini_file" = "$conf_path" ]; then
+    installer_classes_cache_ensure
+    case "$section_prefix" in
+      group.)
+        for ini_section_name in $INSTALLER_CLASSES_GROUP_NAMES_TEXT; do
+          printf '%s\n' "$ini_section_name"
+        done
+        return 0
+        ;;
+      class.)
+        for ini_section_name in $INSTALLER_CLASSES_CLASS_RECORDS_TEXT; do
+          printf '%s\n' "$ini_section_name"
+        done
+        return 0
+        ;;
+    esac
+    for ini_section_name in $INSTALLER_CLASSES_SECTION_NAMES; do
+      case "$ini_section_name" in
+        "${section_prefix}"*)
+          printf '%s\n' "${ini_section_name#"$section_prefix"}"
+          ;;
+      esac
+    done
+    return 0
+  fi
+
+  installer_ini_sections_with_prefix_generic "$ini_file" "$section_prefix"
+}
+
+installer_group_required_status() {
+  group_name=$1
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  required_value=$(installer_ini_get "$conf_path" "group.${group_name}" required 2>/dev/null || true)
+  case "$required_value" in
+    1|true|TRUE|yes|YES|on|ON|required) printf '%s\n' required ;;
+    *) printf '%s\n' optional ;;
+  esac
+}
+
+installer_group_order() {
+  group_name=$1
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  order=$(installer_ini_get "$conf_path" "group.${group_name}" order 2>/dev/null || true)
+  case "$order" in
+    ''|*[!0-9]*) printf '%s\n' 1000 ;;
+    *) printf '%s\n' "$order" ;;
+  esac
+}
+
+installer_group_purpose() {
+  group_name=$1
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  installer_ini_get "$conf_path" "group.${group_name}" purpose 2>/dev/null || true
+}
+
+installer_group_source() {
+  group_name=$1
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  source_value=$(installer_ini_get "$conf_path" "group.${group_name}" source 2>/dev/null || true)
+  case "$source_value" in
+    class-auto|class-select|class-addon) printf '%s\n' "$source_value" ;;
+    '') printf '%s\n' class-select ;;
+    *) installer_fatal "group ${group_name} has invalid source value: ${source_value}" ;;
+  esac
+}
+
+installer_group_multi_status() {
+  group_name=$1
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  multi_value=$(installer_ini_get "$conf_path" "group.${group_name}" multi 2>/dev/null || true)
+  case "$multi_value" in
+    1|true|TRUE|yes|YES|on|ON|multi) printf '%s\n' multi ;;
+    *) printf '%s\n' single ;;
+  esac
+}
+
+installer_group_is_multi() {
+  [ "$(installer_group_multi_status "$1")" = multi ]
+}
+
+installer_group_context_var() {
+  group_name=$1
+  case "$group_name" in
+    ''|*[!abcdefghijklmnopqrstuvwxyz0-9-]*)
+      installer_fatal "group name contains unsupported characters: ${group_name:-unset}"
+      ;;
+  esac
+  context_group=$(printf '%s' "$group_name" | sed 'y/abcdefghijklmnopqrstuvwxyz-/ABCDEFGHIJKLMNOPQRSTUVWXYZ_/')
+  printf 'INSTALLER_%s_CLASS\n' "$context_group"
+}
+
+installer_group_names() {
+  installer_classes_cache_ensure
+  for group_name in $INSTALLER_CLASSES_GROUP_NAMES_TEXT; do
+    printf '%s\n' "$group_name"
+  done
+}
+
+installer_seed_path_exists() {
+  seed_base=$1
+  source_path=$2
+  seed_type=$(installer_seed_source_type "$seed_base")
+
+  case "$source_path" in
+    "$(installer_repo_env_relpath)") ;;
+    *) source_path=$(installer_repo_resolve_path "$source_path") ;;
+  esac
+  installer_validate_relative_seed_path "$source_path"
+
+  case "$seed_type" in
+    file)
+      [ -r "${seed_base%/}/$source_path" ]
+      ;;
+    url)
+      wget --spider --no-verbose --tries=1 --timeout=15 "$seed_base/$source_path" >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+installer_class_source_path() {
+  group_name=$1
+  class_name=$2
+  case "$(installer_group_source "$group_name")" in
+    class-auto)
+      printf 'classes/class-auto/%s/%s.cfg\n' "$group_name" "$class_name"
+      ;;
+    class-select)
+      printf 'classes/class-select/%s/%s.cfg\n' "$group_name" "$class_name"
+      ;;
+    class-addon)
+      printf 'classes/class-addon/%s.cfg\n' "$class_name"
+      ;;
+  esac
+}
+
+installer_class_meta_value() {
+  seed_base=$1
+  group_name=$2
+  class_name=$3
+  meta_key=$4
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  installer_ini_get "$conf_path" "class.${group_name}.${class_name}" "$meta_key" 2>/dev/null || true
+}
+
+installer_configured_class_records() {
+  installer_classes_cache_ensure
+  for class_record in $INSTALLER_CLASSES_CLASS_RECORDS_TEXT; do
+    printf '%s\n' "$class_record"
+  done
+}
+
+installer_validate_class_group_name() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
+      installer_fatal "${label} contains unsupported characters: ${value:-unset}"
+      ;;
+  esac
+}
+
+installer_validate_class_name() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*)
+      installer_fatal "${label} contains unsupported characters: ${value:-unset}"
+      ;;
+  esac
+}
+
+installer_validate_class_purpose() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*)
+      installer_fatal "${label} contains unsupported characters: ${value:-unset}"
+      ;;
+  esac
+}
+
+installer_class_token_parts() {
+  class_token=$1
+  INSTALLER_CLASS_TOKEN_GROUP=
+  INSTALLER_CLASS_TOKEN_NAME=
+  token_class_group=
+  token_class_name=
+
+  case "$class_token" in
+    */*)
+      token_class_group=${class_token%%/*}
+      token_class_name=${class_token#*/}
+      case "$token_class_name" in
+        */*) installer_fatal "class token contains more than one '/' separator: ${class_token}" ;;
+      esac
+      ;;
+    *:*)
+      token_class_group=${class_token%%:*}
+      token_class_name=${class_token#*:}
+      case "$token_class_name" in
+        *:*) installer_fatal "class token contains more than one ':' separator: ${class_token}" ;;
+      esac
+      ;;
+    *.*)
+      token_class_group=${class_token%%.*}
+      token_class_name=${class_token#*.}
+      case "$token_class_name" in
+        *.*) installer_fatal "class token contains more than one '.' separator: ${class_token}" ;;
+      esac
+      ;;
+    *)
+      token_class_group=
+      token_class_name=$class_token
+      ;;
+  esac
+
+  if [ -n "$token_class_group" ]; then
+    installer_validate_class_group_name "class token group" "$token_class_group"
+  fi
+  installer_validate_class_name "class token class" "$token_class_name"
+  INSTALLER_CLASS_TOKEN_GROUP=$token_class_group
+  INSTALLER_CLASS_TOKEN_NAME=$token_class_name
+  printf '%s\n' "$token_class_name"
+}
+
+installer_class_exists() {
+  seed_base=$1
+  group_name=$2
+  class_name=$3
+  class_relpath=$(installer_class_source_path "$group_name" "$class_name")
+
+  if [ -n "${INSTALLER_SOURCE_ROOT:-}" ] && [ -r "${INSTALLER_SOURCE_ROOT%/}/${class_relpath}" ]; then
+    return 0
+  fi
+  [ -n "$seed_base" ] || return 1
+  installer_seed_path_exists "$seed_base" "$class_relpath"
+}
+
+installer_class_has_manifest_record() {
+  group_name=$1
+  class_name=$2
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  installer_ini_has_section "$conf_path" "class.${group_name}.${class_name}"
+}
+
+installer_validate_helper_name() {
+  label=$1
+  value=$2
+  [ -n "$value" ] || return 0
+  case "$value" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*)
+      installer_fatal "${label} contains unsupported characters: ${value}"
+      ;;
+  esac
+}
+
+installer_validate_class_reference() {
+  label=$1
+  reference=$2
+  installer_class_token_parts "$reference" >/dev/null
+  [ -n "${INSTALLER_CLASS_TOKEN_NAME:-}" ] || installer_fatal "${label} is empty"
+}
+
+installer_validate_class_reference_list() {
+  label=$1
+  references=$2
+  for class_reference in $references; do
+    installer_validate_class_reference "$label" "$class_reference"
+  done
+}
+
+installer_validate_word_metadata() {
+  label=$1
+  words=$2
+  for word_value in $words; do
+    case "$word_value" in
+      ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+._:-]*)
+        installer_fatal "${label} contains unsupported token: ${word_value:-unset}"
+        ;;
+    esac
+  done
+}
+
+installer_validate_class_manifest() {
+  if [ "${INSTALLER_CLASS_MANIFEST_VALIDATED:-0}" -eq 1 ]; then
+    return 0
+  fi
+  installer_classes_cache_ensure
+  installer_ensure_classes_conf_path
+  conf_path=$INSTALLER_CLASSES_CONF_PATH_CACHE
+  manifest_version=$(installer_ini_get "$conf_path" manifest version 2>/dev/null || true)
+  seen_groups=' '
+  seen_purposes=' '
+  seen_classes=' '
+  group_count=0
+
+  case "$manifest_version" in
+    '') ;;
+    *[!0-9]*) installer_fatal "classes/CLASSES.conf manifest version must be numeric: ${manifest_version}" ;;
+  esac
+
+  while IFS= read -r group_name || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    installer_validate_class_group_name "class group name" "$group_name"
+    case "$seen_groups" in
+      *" ${group_name} "*) installer_fatal "duplicate class group section in classes/CLASSES.conf: ${group_name}" ;;
+    esac
+    seen_groups="${seen_groups}${group_name} "
+    group_count=$((group_count + 1))
+
+    required_value=$(installer_ini_get "$conf_path" "group.${group_name}" required 2>/dev/null || true)
+    case "$required_value" in
+      ''|0|1|true|TRUE|false|FALSE|yes|YES|no|NO|on|ON|off|OFF|required|optional) ;;
+      *) installer_fatal "group ${group_name} has invalid required value: ${required_value}" ;;
+    esac
+
+    multi_value=$(installer_ini_get "$conf_path" "group.${group_name}" multi 2>/dev/null || true)
+    case "$multi_value" in
+      ''|0|1|true|TRUE|false|FALSE|yes|YES|no|NO|on|ON|off|OFF|single|multi) ;;
+      *) installer_fatal "group ${group_name} has invalid multi value: ${multi_value}" ;;
+    esac
+
+    source_value=$(installer_ini_get "$conf_path" "group.${group_name}" source 2>/dev/null || true)
+    case "$source_value" in
+      ''|class-auto|class-select|class-addon) ;;
+      *) installer_fatal "group ${group_name} has invalid source value: ${source_value}" ;;
+    esac
+
+    order_value=$(installer_ini_get "$conf_path" "group.${group_name}" order 2>/dev/null || true)
+    case "$order_value" in
+      '') ;;
+      *[!0-9]*) installer_fatal "group ${group_name} has invalid order value: ${order_value}" ;;
+    esac
+
+    group_purpose=$(installer_group_purpose "$group_name")
+    if [ -n "$group_purpose" ]; then
+      installer_validate_class_purpose "group ${group_name} purpose" "$group_purpose"
+      case "$seen_purposes" in
+        *" ${group_purpose} "*)
+          installer_fatal "duplicate class group purpose in classes/CLASSES.conf: ${group_purpose}"
+          ;;
+      esac
+      seen_purposes="${seen_purposes}${group_purpose} "
+    fi
+  done <<EOF
+$(installer_group_names)
+EOF
+
+  [ "$group_count" -gt 0 ] || installer_fatal "classes/CLASSES.conf must define at least one [group.<name>] section"
+
+  while IFS= read -r class_record || [ -n "$class_record" ]; do
+    [ -n "$class_record" ] || continue
+    case "$class_record" in
+      *.*) ;;
+      *) installer_fatal "class section must be [class.<group>.<class>], got: class.${class_record}" ;;
+    esac
+    record_group_name=${class_record%%.*}
+    record_class_name=${class_record#*.}
+    installer_validate_class_group_name "class metadata group" "$record_group_name"
+    installer_validate_class_name "class metadata name" "$record_class_name"
+    case "$seen_groups" in
+      *" ${record_group_name} "*) ;;
+      *) installer_fatal "class ${record_group_name}/${record_class_name} references undefined class group ${record_group_name}" ;;
+    esac
+    case "$seen_classes" in
+      *" ${record_group_name}/${record_class_name} "*)
+        installer_fatal "duplicate class metadata section in classes/CLASSES.conf: ${record_group_name}/${record_class_name}"
+        ;;
+    esac
+    seen_classes="${seen_classes}${record_group_name}/${record_class_name} "
+
+    installer_validate_helper_name "class ${record_group_name}/${record_class_name} early_helper" \
+      "$(installer_class_meta_value "" "$record_group_name" "$record_class_name" early_helper)"
+    installer_validate_helper_name "class ${record_group_name}/${record_class_name} partman_helper" \
+      "$(installer_class_meta_value "" "$record_group_name" "$record_class_name" partman_helper)"
+    installer_validate_helper_name "class ${record_group_name}/${record_class_name} late_helper" \
+      "$(installer_class_meta_value "" "$record_group_name" "$record_class_name" late_helper)"
+    installer_validate_class_reference_list "class ${record_group_name}/${record_class_name} requires_classes" \
+      "$(installer_class_meta_value "" "$record_group_name" "$record_class_name" requires_classes)"
+    installer_validate_class_reference_list "class ${record_group_name}/${record_class_name} allowed_hardware_classes" \
+      "$(installer_class_meta_value "" "$record_group_name" "$record_class_name" allowed_hardware_classes)"
+    installer_normalize_apt_preferences_config \
+      "$(installer_class_meta_value "" "$record_group_name" "$record_class_name" debian_apt_preferences)" \
+      "class ${record_group_name}/${record_class_name} debian_apt_preferences" >/dev/null
+
+    class_relpath=$(installer_class_source_path "$record_group_name" "$record_class_name")
+    if [ -n "${INSTALLER_SOURCE_ROOT:-}" ] && [ ! -r "${INSTALLER_SOURCE_ROOT%/}/${class_relpath}" ]; then
+      installer_fatal "class ${record_group_name}/${record_class_name} metadata references missing fragment: ${class_relpath}"
+    fi
+  done <<EOF
+$(installer_configured_class_records)
+EOF
+  INSTALLER_CLASS_MANIFEST_VALIDATED=1
+}
+
+installer_group_for_purpose() {
+  group_purpose=$1
+  while IFS= read -r group_name || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    [ "$(installer_group_purpose "$group_name")" = "$group_purpose" ] || continue
+    printf '%s\n' "$group_name"
+    return 0
+  done <<EOF
+$(installer_group_names)
+EOF
+}
+
+installer_auto_group_from_token() {
+  token=$1
+  installer_class_token_parts "$token" >/dev/null
+  token_group=${INSTALLER_CLASS_TOKEN_GROUP:-}
+  token_name=$INSTALLER_CLASS_TOKEN_NAME
+
+  case "$token_group" in
+    arch|cpu|gpu|disk)
+      printf '%s\n' "$token_group"
+      return 0
+      ;;
+  esac
+
+  case "$token_name" in
+    amd64|arm64) printf '%s\n' arch ;;
+    amd|intel) printf '%s\n' cpu ;;
+    amd-radeon|generic|intel-uhd) printf '%s\n' gpu ;;
+    emmc|nvme|vm) printf '%s\n' disk ;;
+    *) return 1 ;;
+  esac
+}
+
+installer_word_list_contains() {
+  words=$1
+  needle=$2
+  case " ${words} " in
+    *" ${needle} "*) return 0 ;;
+  esac
+  return 1
+}
+
+installer_auto_class_tokens() {
+  seed_base=$1
+  auto_script="${RUNTIME_DIR:-$(installer_runtime_dir)}/bootstrap/class-auto.sh"
+  auto_classes="$(installer_runtime_temp_log_path class-auto.classes)"
+  auto_err="$(installer_runtime_temp_log_path class-auto.err)"
+  auto_report="$(installer_runtime_temp_log_path class-auto.report)"
+  auto_tokens_found=false
+
+  install -d -m 0700 "$(dirname "$auto_script")"
+  installer_ensure_log_files
+  installer_fetch_file "$seed_base" "$(installer_repo_join_var DIR_SCRIPTS_PRESEED class-auto.sh)" "$auto_script" 0755
+  if "$auto_script" classes >"$auto_classes" 2>"$auto_err"; then
+    :
+  else
+    auto_status=$?
+    installer_error "automatic class detection failed with status ${auto_status}"
+    [ -s "$auto_err" ] && sed 's/^/[class-auto] /' "$auto_err" >&2
+    rm -f "$auto_err" "$auto_report" "$auto_classes"
+    exit "$auto_status"
+  fi
+
+  if "$auto_script" report >"$auto_report" 2>>"$auto_err"; then
+    :
+  else
+    {
+      printf '\n=== d-i hardware detection ===\n\n'
+      printf '[AUTO CLASSES]\n'
+      sed 's/^/  /' "$auto_classes"
+      printf '\n=== end ===\n\n'
+    } >"$auto_report"
+  fi
+  [ -s "$auto_err" ] && sed 's/^/[class-auto] /' "$auto_err" >&2 || true
+  rm -f "$auto_err"
+
+  installer_append_log_category_file boot boot info class-auto "$auto_report" || true
+
+  while IFS= read -r auto_token || [ -n "$auto_token" ]; do
+    auto_token=$(installer_trim_whitespace "$auto_token")
+    [ -n "$auto_token" ] || continue
+    installer_validate_class_reference "auto-detected class" "$auto_token"
+    auto_tokens_found=true
+    printf '%s\n' "$auto_token"
+  done <"$auto_classes"
+  rm -f "$auto_report" "$auto_classes"
+
+  [ "$auto_tokens_found" = true ] || installer_fatal "automatic class detection did not emit any class tokens"
+}
+
+installer_merge_auto_classes() {
+  manual_raw=$1
+  auto_words=$2
+  merged_tokens=
+  manual_auto_groups=' '
+
+  for manual_token in $(printf '%s\n' "$manual_raw" | tr ';,' ' ' | sed '/^[[:space:]]*$/d'); do
+    [ -n "$manual_token" ] || continue
+    if manual_group=$(installer_auto_group_from_token "$manual_token" 2>/dev/null); then
+      case "$manual_auto_groups" in
+        *" ${manual_group} "*) ;;
+        *) manual_auto_groups="${manual_auto_groups}${manual_group} " ;;
+      esac
+    fi
+    case ",${merged_tokens}," in
+      *",${manual_token},"*) ;;
+      *) merged_tokens="${merged_tokens:+$merged_tokens,}${manual_token}" ;;
+    esac
+  done
+
+  for auto_token in $auto_words; do
+    [ -n "$auto_token" ] || continue
+    auto_group=$(installer_auto_group_from_token "$auto_token")
+    installer_word_list_contains "$manual_auto_groups" "$auto_group" && continue
+    case ",${merged_tokens}," in
+      *",${auto_token},"*) ;;
+      *) merged_tokens="${merged_tokens:+$merged_tokens,}${auto_token}" ;;
+    esac
+  done
+
+  printf '%s\n' "$merged_tokens"
+}
+
+installer_classes_raw() {
+  seed_base=${1:-}
+  if [ -n "${INSTALLER_CLASSES_RAW_CACHE:-}" ]; then
+    printf '%s\n' "$INSTALLER_CLASSES_RAW_CACHE"
+    return 0
+  fi
+
+  cmdline_raw=$(installer_cmdline_value classes 2>/dev/null || true)
+  if [ -z "$cmdline_raw" ]; then
+    cmdline_raw=$(installer_cmdline_value auto-install/classes 2>/dev/null || true)
+  fi
+  if [ -n "$cmdline_raw" ]; then
+    raw=$cmdline_raw
+  else
+    debconf_raw=$(installer_debconf_value auto-install/classes 2>/dev/null || true)
+    if [ -z "$debconf_raw" ]; then
+      debconf_raw=$(installer_debconf_value classes 2>/dev/null || true)
+    fi
+    raw=$debconf_raw
+  fi
+  raw_cache_path=$(installer_classes_raw_cache_path)
+  if [ -z "$raw" ] && [ -s "$raw_cache_path" ]; then
+    # Prefer current installer inputs. A persisted cache can be stale across
+    # retries or runtime reuse and must not suppress fresh auto-detected groups.
+    IFS= read -r INSTALLER_CLASSES_RAW_CACHE <"$raw_cache_path" || INSTALLER_CLASSES_RAW_CACHE=
+    if [ -n "$INSTALLER_CLASSES_RAW_CACHE" ]; then
+      printf '%s\n' "$INSTALLER_CLASSES_RAW_CACHE"
+      return 0
+    fi
+  fi
+
+  normalized_raw=$(printf '%s\n' "$raw" | sed 's/\\\([;,]\)/\1/g')
+  auto_tokens=
+  while IFS= read -r auto_token || [ -n "$auto_token" ]; do
+    [ -n "$auto_token" ] || continue
+    auto_tokens="${auto_tokens:+$auto_tokens }$auto_token"
+  done <<EOF
+$(installer_auto_class_tokens "$(installer_seed_base "$seed_base")")
+EOF
+  normalized_raw=$(installer_merge_auto_classes "$normalized_raw" "$auto_tokens")
+  [ -n "$normalized_raw" ] || installer_fatal "kernel cmdline must include classes=<class>,<class>,... for class-select values; arch/cpu/gpu/disk are auto-detected"
+  INSTALLER_CLASSES_RAW_CACHE=$normalized_raw
+  install -d -m 0700 "$(dirname "$raw_cache_path")"
+  raw_cache_tmp="${raw_cache_path}.tmp.$$"
+  printf '%s\n' "$normalized_raw" >"$raw_cache_tmp"
+  mv "$raw_cache_tmp" "$raw_cache_path"
+  chmod 0600 "$raw_cache_path" 2>/dev/null || true
+  printf '%s\n' "$normalized_raw"
+}
+
+installer_classes_lines() {
+  installer_classes_raw "${1:-}" | tr ';,' '\n' | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+installer_selected_class_records_path() {
+  printf '%s/selected-classes.tsv\n' "$(installer_runtime_state_dir)"
+}
+
+installer_runtime_install_conf_path() {
+  printf '%s/state/CLASSES.conf\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_classes_raw_cache_path() {
+  printf '%s/state/classes.raw\n' "${INSTALLER_RUNTIME_DIR:-/tmp/install-runtime}"
+}
+
+installer_resolve_class_token() {
+  seed_base=$1
+  class_token=$2
+  installer_class_token_parts "$class_token" >/dev/null
+  class_name=$INSTALLER_CLASS_TOKEN_NAME
+  requested_group=${INSTALLER_CLASS_TOKEN_GROUP:-}
+
+  if [ -n "$requested_group" ]; then
+    case "$requested_group" in
+      class-addon) requested_group=addon ;;
+    esac
+    if installer_class_exists "$seed_base" "$requested_group" "$class_name"; then
+      INSTALLER_RESOLVED_CLASS_GROUP=$requested_group
+      INSTALLER_RESOLVED_CLASS_NAME=$class_name
+      return 0
+    fi
+    if installer_class_has_manifest_record "$requested_group" "$class_name"; then
+      installer_fatal "configured installer class ${requested_group}/${class_name} is missing fragment $(installer_class_source_path "$requested_group" "$class_name")"
+    fi
+    installer_fatal "unknown installer class: ${requested_group}/${class_name}; expected readable fragment $(installer_class_source_path "$requested_group" "$class_name")"
+  fi
+
+  match_count=0
+  match_groups=
+  while IFS= read -r class_record || [ -n "$class_record" ]; do
+    [ -n "$class_record" ] || continue
+    group_name=${class_record%%.*}
+    configured_class_name=${class_record#*.}
+    [ "$configured_class_name" = "$class_name" ] || continue
+    match_count=$((match_count + 1))
+    match_groups="${match_groups:+$match_groups }$group_name"
+    matched_group=$group_name
+  done <<EOF
+$(installer_configured_class_records)
+EOF
+
+  case "$match_count" in
+    1)
+      installer_class_exists "$seed_base" "$matched_group" "$class_name" || \
+        installer_fatal "configured installer class ${matched_group}/${class_name} is missing fragment $(installer_class_source_path "$matched_group" "$class_name")"
+      INSTALLER_RESOLVED_CLASS_GROUP=$matched_group
+      INSTALLER_RESOLVED_CLASS_NAME=$class_name
+      return 0
+      ;;
+    0)
+      if installer_class_exists "$seed_base" addon "$class_name"; then
+        INSTALLER_RESOLVED_CLASS_GROUP=addon
+        INSTALLER_RESOLVED_CLASS_NAME=$class_name
+        return 0
+      fi
+      installer_fatal "unknown installer class: ${class_name}; use group/class for declared classes or add classes/class-addon/${class_name}.cfg"
+      ;;
+    *)
+      installer_fatal "class name '${class_name}' is declared in multiple groups; use group/class. Matching groups:${match_groups:+ ${match_groups}}"
+      ;;
+  esac
+}
+
+installer_resolve_selected_class_records() {
+  seed_base=$1
+  records_path=$2
+  seen_groups=' '
+  classes_raw=$(installer_classes_raw "$seed_base")
+
+  install -d -m 0700 "$(dirname "$records_path")"
+  : >"$records_path"
+
+  for class_token in $(installer_classes_lines "$seed_base"); do
+    installer_resolve_class_token "$seed_base" "$class_token"
+    group_name=$INSTALLER_RESOLVED_CLASS_GROUP
+    class_name=$INSTALLER_RESOLVED_CLASS_NAME
+    case "$seen_groups" in
+      *" ${group_name} "*)
+        installer_group_is_multi "$group_name" || installer_fatal "group '${group_name}' requires exactly one selected class"
+        ;;
+    esac
+    case "$seen_groups" in
+      *" ${group_name} "*) ;;
+      *) seen_groups="${seen_groups}${group_name} " ;;
+    esac
+    printf '%s|%s|%s\n' "$group_name" "$class_name" "$(installer_class_source_path "$group_name" "$class_name")" >>"$records_path"
+  done
+
+  while IFS= read -r group_name || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    case "$(installer_group_required_status "$group_name")" in
+      required)
+        case "$seen_groups" in
+          *" ${group_name} "*) ;;
+          *) installer_fatal "required class group '${group_name}' is missing from classes=${classes_raw}" ;;
+        esac
+        ;;
+    esac
+  done <<EOF
+$(installer_group_names)
+EOF
+
+  sort_path="${records_path}.sort.$$"
+  : >"$sort_path"
+  while IFS='|' read -r group_name class_name class_relpath || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    printf '%08d|%s|%s|%s\n' \
+      "$(installer_group_order "$group_name")" \
+      "$group_name" \
+      "$class_name" \
+      "$class_relpath" >>"$sort_path"
+  done <"$records_path"
+  sort -t'|' -k1,1n -k2,2 -k3,3 "$sort_path" | cut -d'|' -f2- >"$records_path"
+  rm -f "$sort_path"
+}
+
+installer_group_selected_class_value() {
+  group_name=$1
+  context_var=$(installer_group_context_var "$group_name")
+  eval "class_name=\${$context_var:-}"
+  if [ -n "$class_name" ]; then
+    printf '%s\n' "$class_name"
+    return 0
+  fi
+
+  records_path=$(installer_selected_class_records_path)
+  if [ -r "$records_path" ]; then
+    if installer_group_is_multi "$group_name"; then
+      class_name=
+      while IFS='|' read -r record_group record_class _record_path || [ -n "$record_group" ]; do
+        [ "$record_group" = "$group_name" ] || continue
+        class_name="${class_name:+$class_name }$record_class"
+      done <"$records_path"
+    else
+      class_name=
+      while IFS='|' read -r record_group record_class _record_path || [ -n "$record_group" ]; do
+        [ "$record_group" = "$group_name" ] || continue
+        class_name=$record_class
+        break
+      done <"$records_path"
+    fi
+    if [ -n "$class_name" ]; then
+      eval "$context_var=\$class_name"
+      printf '%s\n' "$class_name"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+installer_selected_group_names() {
+  if [ -n "${INSTALLER_SELECTED_GROUPS:-}" ]; then
+    for group_name in $INSTALLER_SELECTED_GROUPS; do
+      printf '%s\n' "$group_name"
+    done
+    return 0
+  fi
+
+  records_path=$(installer_selected_class_records_path)
+  [ -r "$records_path" ] || return 1
+  while IFS='|' read -r group_name _class_name _class_path || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    printf '%s\n' "$group_name"
+  done <"$records_path"
+}
+
+installer_selected_class_names() {
+  if [ -n "${INSTALLER_SELECTED_CLASSES:-}" ]; then
+    for class_name in $INSTALLER_SELECTED_CLASSES; do
+      printf '%s\n' "$class_name"
+    done
+    return 0
+  fi
+
+  records_path=$(installer_selected_class_records_path)
+  [ -r "$records_path" ] || return 1
+  while IFS='|' read -r _group_name class_name _class_path || [ -n "$class_name" ]; do
+    [ -n "$class_name" ] || continue
+    printf '%s\n' "$class_name"
+  done <"$records_path"
+}
+
+installer_selected_class_refs() {
+  if [ -n "${INSTALLER_SELECTED_CLASS_REFS:-}" ]; then
+    for class_ref in $INSTALLER_SELECTED_CLASS_REFS; do
+      printf '%s\n' "$class_ref"
+    done
+    return 0
+  fi
+
+  records_path=$(installer_selected_class_records_path)
+  [ -r "$records_path" ] || return 1
+  while IFS='|' read -r group_name class_name _class_path || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    printf '%s/%s\n' "$group_name" "$class_name"
+  done <"$records_path"
+}
+
+installer_selected_class_paths() {
+  records_path=$(installer_selected_class_records_path)
+  if [ -r "$records_path" ]; then
+    while IFS='|' read -r _group_name _class_name class_path || [ -n "$class_path" ]; do
+      [ -n "$class_path" ] || continue
+      printf '%s\n' "$class_path"
+    done <"$records_path"
+    return 0
+  fi
+
+  while IFS= read -r group_name || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    class_name=$(installer_group_selected_class_value "$group_name")
+    [ -n "$class_name" ] || continue
+    printf '%s\n' "$(installer_class_source_path "$group_name" "$class_name")"
+  done <<EOF
+$(installer_selected_group_names 2>/dev/null || true)
+EOF
+}
+
+installer_class_has() {
+  needle=$1
+
+  while IFS= read -r class_name || [ -n "$class_name" ]; do
+    [ -n "$class_name" ] || continue
+    [ "$class_name" = "$needle" ] && return 0
+  done <<EOF
+$(installer_selected_class_names 2>/dev/null || {
+  for raw_token in $(installer_classes_lines); do
+    token_parts=$(installer_class_token_parts "$raw_token")
+    printf '%s\n' "${token_parts#*|}"
+  done
+})
+EOF
+  return 1
+}
+
+installer_selected_class_list_has() {
+  class_list=$1
+  needle=$2
+  case " ${class_list} " in
+    *" ${needle} "*) return 0 ;;
+  esac
+  return 1
+}
+
+installer_class_reference_matches_selected() {
+  class_reference=$1
+  selected_group=$2
+  selected_class=$3
+
+  installer_class_token_parts "$class_reference" >/dev/null
+  [ "$INSTALLER_CLASS_TOKEN_NAME" = "$selected_class" ] || return 1
+  [ -z "$INSTALLER_CLASS_TOKEN_GROUP" ] || [ "$INSTALLER_CLASS_TOKEN_GROUP" = "$selected_group" ]
+}
+
+installer_class_reference_list_matches_selected() {
+  reference_list=$1
+  selected_group=$2
+  selected_class=$3
+
+  for class_reference in $reference_list; do
+    installer_class_reference_matches_selected "$class_reference" "$selected_group" "$selected_class" && return 0
+  done
+  return 1
+}
+
+installer_selected_class_reference_is_selected() {
+  class_reference=$1
+  records_path=$(installer_selected_class_records_path)
+
+  [ -r "$records_path" ] || return 1
+  while IFS='|' read -r selected_group selected_class _selected_relpath || [ -n "$selected_group" ]; do
+    [ -n "$selected_group" ] || continue
+    installer_class_reference_matches_selected "$class_reference" "$selected_group" "$selected_class" && return 0
+  done <"$records_path"
+  return 1
+}
+
+installer_selected_class_allowed_reference_matches() {
+  allowed_references=$1
+
+  for allowed_reference in $allowed_references; do
+    installer_selected_class_reference_is_selected "$allowed_reference" && return 0
+  done
+  return 1
+}
+
+installer_selected_class_for_purpose() {
+  group_purpose=$1
+  group_name=$(installer_group_for_purpose "$group_purpose" 2>/dev/null || true)
+  [ -n "$group_name" ] || return 1
+  class_name=$(installer_group_selected_class_value "$group_name")
+  [ -n "$class_name" ] || return 1
+  printf '%s\n' "$class_name"
+}
+
+installer_clear_selected_class_state() {
+  seed_base=${1:-}
+  records_path=$(installer_selected_class_records_path)
+
+  clear_groups=
+  while IFS= read -r group_name || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    case " ${clear_groups} " in
+      *" ${group_name} "*) ;;
+      *) clear_groups="${clear_groups:+$clear_groups }$group_name" ;;
+    esac
+  done <<EOF
+$(installer_group_names "$seed_base" 2>/dev/null || true)
+EOF
+  if [ -r "$records_path" ]; then
+    while IFS='|' read -r group_name _class_name _class_path || [ -n "$group_name" ]; do
+      [ -n "$group_name" ] || continue
+      case " ${clear_groups} " in
+        *" ${group_name} "*) ;;
+        *) clear_groups="${clear_groups:+$clear_groups }$group_name" ;;
+      esac
+    done <"$records_path"
+  fi
+  for group_name in $clear_groups; do
+    context_var=$(installer_group_context_var "$group_name")
+    unset "$context_var" 2>/dev/null || true
+  done
+
+  unset INSTALLER_SELECTED_GROUPS INSTALLER_SELECTED_CLASSES INSTALLER_SELECTED_CLASS_REFS \
+    INSTALLER_HOST_VARIANT INSTALLER_STORAGE_HOST_PROFILE_PREFIX \
+    INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT INSTALLER_DEFAULT_INSTALL_DISK \
+    INSTALLER_HOST_PROFILE INSTALLER_HOST_FAMILY INSTALLER_HOOK_FAMILY 2>/dev/null || true
+}
+
+installer_populate_selected_class_state() {
+  seed_base=${1:-}
+  records_path=$(installer_selected_class_records_path)
+  selected_groups=
+  selected_classes=
+  selected_class_refs=
+
+  installer_resolve_selected_class_records "$seed_base" "$records_path"
+  installer_clear_selected_class_state "$seed_base"
+
+  while IFS='|' read -r group_name class_name class_relpath || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    context_var=$(installer_group_context_var "$group_name")
+    if installer_group_is_multi "$group_name"; then
+      eval "context_current=\${$context_var:-}"
+      context_current="${context_current:+$context_current }$class_name"
+      eval "$context_var=\$context_current"
+    else
+      eval "$context_var=\$class_name"
+    fi
+    case " ${selected_groups} " in
+      *" ${group_name} "*) ;;
+      *) selected_groups="${selected_groups:+$selected_groups }$group_name" ;;
+    esac
+    selected_classes="${selected_classes:+$selected_classes }$class_name"
+    selected_class_refs="${selected_class_refs:+$selected_class_refs }${group_name}/${class_name}"
+  done <"$records_path"
+
+  INSTALLER_SELECTED_GROUPS=$selected_groups
+  INSTALLER_SELECTED_CLASSES=$selected_classes
+  INSTALLER_SELECTED_CLASS_REFS=$selected_class_refs
+
+  base_role_group=$(installer_group_for_purpose host-variant)
+  storage_group=$(installer_group_for_purpose storage)
+  [ -n "$base_role_group" ] || installer_fatal "classes config must define a host-variant group purpose"
+  [ -n "$storage_group" ] || installer_fatal "classes config must define a storage group purpose"
+
+  base_role_class=$(installer_group_selected_class_value "$base_role_group")
+  storage_class=$(installer_group_selected_class_value "$storage_group")
+
+  host_variant=$(installer_class_meta_value "$seed_base" "$base_role_group" "$base_role_class" host_variant)
+  host_profile_prefix=$(installer_class_meta_value "$seed_base" "$storage_group" "$storage_class" host_profile_prefix)
+  host_family=$(installer_class_meta_value "$seed_base" "$storage_group" "$storage_class" host_family)
+  hook_family=$(installer_class_meta_value "$seed_base" "$storage_group" "$storage_class" hook_family)
+  install_disk_candidates_default=$(installer_class_meta_value "$seed_base" "$storage_group" "$storage_class" install_disk_candidates)
+  default_install_disk=$(installer_class_meta_value "$seed_base" "$storage_group" "$storage_class" default_install_disk)
+
+  [ -n "$host_variant" ] || installer_fatal "selected class ${base_role_group}/${base_role_class} must define host_variant in classes/CLASSES.conf"
+  [ -n "$host_profile_prefix" ] || installer_fatal "selected class ${storage_group}/${storage_class} must define host_profile_prefix in classes/CLASSES.conf"
+  [ -n "$host_family" ] || installer_fatal "selected class ${storage_group}/${storage_class} must define host_family in classes/CLASSES.conf"
+  [ -n "$hook_family" ] || installer_fatal "selected class ${storage_group}/${storage_class} must define hook_family in classes/CLASSES.conf"
+  [ -n "$install_disk_candidates_default" ] || installer_fatal "selected class ${storage_group}/${storage_class} must define install_disk_candidates in classes/CLASSES.conf"
+  [ -n "$default_install_disk" ] || installer_fatal "selected class ${storage_group}/${storage_class} must define default_install_disk in classes/CLASSES.conf"
+
+  while IFS='|' read -r group_name class_name class_relpath || [ -n "$group_name" ]; do
+    [ -n "$group_name" ] || continue
+    required_classes=$(installer_class_meta_value "$seed_base" "$group_name" "$class_name" requires_classes)
+    allowed_hardware_classes=$(installer_class_meta_value "$seed_base" "$group_name" "$class_name" allowed_hardware_classes)
+    for required_class in $required_classes; do
+      installer_selected_class_reference_is_selected "$required_class" || \
+        installer_fatal "selected class ${group_name}/${class_name} requires class ${required_class}"
+    done
+    if [ -n "$allowed_hardware_classes" ]; then
+      installer_selected_class_allowed_reference_matches "$allowed_hardware_classes" || \
+        installer_fatal "selected class ${group_name}/${class_name} is only allowed with one of: ${allowed_hardware_classes}"
+    fi
+  done <"$records_path"
+
+  INSTALLER_HOST_VARIANT=$host_variant
+  INSTALLER_STORAGE_HOST_PROFILE_PREFIX=$host_profile_prefix
+  INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT=$install_disk_candidates_default
+  INSTALLER_DEFAULT_INSTALL_DISK=$default_install_disk
+  INSTALLER_HOST_PROFILE="${host_profile_prefix}-${host_variant}"
+  INSTALLER_HOST_FAMILY=$host_family
+  INSTALLER_HOOK_FAMILY=$hook_family
+}
+
+installer_write_runtime_install_conf() {
+  runtime_conf_path=$1
+  storage_group=$(installer_group_for_purpose storage 2>/dev/null || true)
+  storage_class_value=
+  if [ -n "$storage_group" ]; then
+    storage_class_value=$(installer_group_selected_class_value "$storage_group" 2>/dev/null || true)
+  fi
+
+  {
+    printf '# Generated runtime installer class config\n'
+    printf '[selected]\n'
+    printf 'classes_raw=%s\n' "$INSTALLER_CLASSES_RAW"
+    printf 'selected_groups=%s\n' "$INSTALLER_SELECTED_GROUPS"
+    printf 'selected_classes=%s\n' "$INSTALLER_SELECTED_CLASSES"
+    printf 'selected_class_refs=%s\n' "$INSTALLER_SELECTED_CLASS_REFS"
+    printf 'debug_logs=%s\n' "${INSTALLER_DEBUG_LOGS:-0}"
+    printf 'host_variant=%s\n' "$INSTALLER_HOST_VARIANT"
+    printf 'host_profile=%s\n' "$INSTALLER_HOST_PROFILE"
+    printf 'host_family=%s\n' "$INSTALLER_HOST_FAMILY"
+    printf 'hook_family=%s\n' "$INSTALLER_HOOK_FAMILY"
+    printf 'storage_host_profile_prefix=%s\n' "$INSTALLER_STORAGE_HOST_PROFILE_PREFIX"
+    printf 'storage_class=%s\n' "${INSTALLER_DISK_CLASS:-$storage_class_value}"
+    printf 'install_disk_candidates_default=%s\n' "$INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT"
+    printf 'default_install_disk=%s\n' "$INSTALLER_DEFAULT_INSTALL_DISK"
+
+    while IFS= read -r group_name || [ -n "$group_name" ]; do
+      [ -n "$group_name" ] || continue
+      class_name=$(installer_group_selected_class_value "$group_name")
+      [ -n "$class_name" ] || continue
+      printf '\n[group.%s]\n' "$group_name"
+      printf 'class=%s\n' "$class_name"
+      printf 'required=%s\n' "$(installer_group_required_status "$group_name")"
+      printf 'purpose=%s\n' "$(installer_group_purpose "$group_name")"
+    done <<EOF
+$(installer_selected_group_names 2>/dev/null || true)
+EOF
+  } >"$runtime_conf_path"
+  chmod 0600 "$runtime_conf_path"
+}
+
+installer_validate_class_set() {
+  if [ -z "${INSTALLER_CLASSES_RAW_CACHE:-}" ]; then
+    INSTALLER_CLASSES_RAW_CACHE=$(installer_classes_raw "${1:-}")
+  fi
+  installer_validate_class_manifest
+  installer_resolve_selected_class_records "${1:-}" "$(installer_selected_class_records_path)"
+}
+
+installer_resolve_install_target_defaults() {
+  if [ -z "${INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT:-}" ] || [ -z "${INSTALLER_DEFAULT_INSTALL_DISK:-}" ]; then
+    installer_load_context_if_present || true
+  fi
+
+  [ -n "${INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT:-}" ] || installer_fatal "installer storage defaults are unavailable; context generation did not populate INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT"
+  [ -n "${INSTALLER_DEFAULT_INSTALL_DISK:-}" ] || installer_fatal "installer storage defaults are unavailable; context generation did not populate INSTALLER_DEFAULT_INSTALL_DISK"
+
+  if [ -z "${INSTALL_DISK_CANDIDATES:-}" ]; then
+    INSTALL_DISK_CANDIDATES=$INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT
+  fi
+  if [ -z "${DEV_INSTALL_DISK:-}" ]; then
+    DEV_INSTALL_DISK=$INSTALLER_DEFAULT_INSTALL_DISK
+  fi
+}
+
+installer_resolve_host_profile() {
+  requested_host_profile=${1:-}
+
+  if [ -n "$requested_host_profile" ]; then
+    printf '%s\n' "$requested_host_profile"
+    return 0
+  fi
+
+  installer_load_context_if_present || true
+  [ -n "${INSTALLER_HOST_PROFILE:-}" ] || installer_fatal "HOST_PROFILE is required for installer hook dispatch"
+  printf '%s\n' "$INSTALLER_HOST_PROFILE"
+}
+
+installer_seed_class_answers() {
+  classes_raw=$1
+
+  installer_seed_debconf_value d-i auto-install/classes string "$classes_raw"
+  installer_seed_debconf_value d-i classes string "$classes_raw"
+}
+
+installer_write_context() {
+  seed_base=$1
+  runtime_dir=$(installer_runtime_dir)
+  context_env=$(installer_context_env_path)
+  runtime_install_conf=$(installer_runtime_install_conf_path)
+
+  install -d -m 0700 \
+    "$runtime_dir" \
+    "$(installer_runtime_state_dir)" \
+    "$(installer_runtime_cache_dir)" \
+    "$(installer_runtime_bootstrap_dir)"
+  installer_ensure_log_files
+
+  seed_base=$(installer_seed_base "$seed_base")
+  installer_persist_seed_source "$seed_base"
+  installer_ensure_repo_env "$seed_base"
+  classes_raw=$(installer_classes_raw "$seed_base")
+  INSTALLER_CLASSES_RAW_CACHE=$classes_raw
+  installer_validate_class_manifest
+  installer_populate_selected_class_state "$seed_base"
+  installer_export_logging_policy
+  installer_seed_class_answers "$classes_raw"
+  INSTALLER_CLASSES_RAW=$classes_raw
+  installer_write_runtime_install_conf "$runtime_install_conf"
+  installer_info "selected installer classes raw: ${classes_raw}"
+  installer_info "selected installer class refs: ${INSTALLER_SELECTED_CLASS_REFS:-}"
+  installer_info "selected installer host profile: ${INSTALLER_HOST_PROFILE:-}"
+  installer_log_boot_context
+
+  {
+    printf 'INSTALLER_SEED_URL_BASE=%s\n' "$(installer_shell_quote "${SEED_URL_BASE:-}")"
+    printf 'INSTALLER_SEED_FILE_BASE=%s\n' "$(installer_shell_quote "${SEED_FILE_BASE:-}")"
+    printf 'INSTALLER_SEED_BASE=%s\n' "$(installer_shell_quote "$seed_base")"
+    printf 'INSTALLER_SEED_SOURCE_TYPE=%s\n' "$(installer_shell_quote "$(installer_seed_source_type "$seed_base")")"
+    printf 'INSTALLER_CLASSES_RAW=%s\n' "$(installer_shell_quote "$classes_raw")"
+    printf 'CLASSES=%s\n' "$(installer_shell_quote "$classes_raw")"
+    printf 'INSTALLER_SELECTED_GROUPS=%s\n' "$(installer_shell_quote "${INSTALLER_SELECTED_GROUPS:-}")"
+    printf 'INSTALLER_SELECTED_CLASSES=%s\n' "$(installer_shell_quote "${INSTALLER_SELECTED_CLASSES:-}")"
+    printf 'INSTALLER_SELECTED_CLASS_REFS=%s\n' "$(installer_shell_quote "${INSTALLER_SELECTED_CLASS_REFS:-}")"
+    printf 'INSTALLER_DEBUG_LOGS=%s\n' "$(installer_shell_quote "${INSTALLER_DEBUG_LOGS:-0}")"
+    printf 'INSTALLER_HOST_VARIANT=%s\n' "$(installer_shell_quote "${INSTALLER_HOST_VARIANT:-}")"
+    printf 'INSTALLER_HOST_PROFILE=%s\n' "$(installer_shell_quote "${INSTALLER_HOST_PROFILE:-}")"
+    printf 'INSTALLER_HOST_FAMILY=%s\n' "$(installer_shell_quote "${INSTALLER_HOST_FAMILY:-}")"
+    printf 'INSTALLER_HOOK_FAMILY=%s\n' "$(installer_shell_quote "${INSTALLER_HOOK_FAMILY:-}")"
+    printf 'INSTALLER_STORAGE_HOST_PROFILE_PREFIX=%s\n' "$(installer_shell_quote "${INSTALLER_STORAGE_HOST_PROFILE_PREFIX:-}")"
+    printf 'INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT=%s\n' "$(installer_shell_quote "${INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT:-}")"
+    printf 'INSTALLER_DEFAULT_INSTALL_DISK=%s\n' "$(installer_shell_quote "${INSTALLER_DEFAULT_INSTALL_DISK:-}")"
+    while IFS= read -r group_name || [ -n "$group_name" ]; do
+      [ -n "$group_name" ] || continue
+      context_var=$(installer_group_context_var "$group_name")
+      class_name=$(installer_group_selected_class_value "$group_name")
+      [ -n "$class_name" ] || continue
+      printf '%s=%s\n' "$context_var" "$(installer_shell_quote "$class_name")"
+    done <<EOF
+$(installer_selected_group_names 2>/dev/null || true)
+EOF
+  } >"$context_env"
+  chmod 0600 "$context_env"
+  printf '%s\n' "$INSTALLER_HOST_PROFILE"
+}
+
+installer_load_context() {
+  context_env=$(installer_context_env_path)
+  [ -r "$context_env" ] || installer_fatal "context env is missing: ${context_env}"
+  # shellcheck disable=SC1090
+  . "$context_env"
+}
+
+installer_context_has_selected_class_state() {
+  [ -n "${INSTALLER_SELECTED_GROUPS:-}" ] || return 1
+  [ -n "${INSTALLER_SELECTED_CLASSES:-}" ] || return 1
+  [ -n "${INSTALLER_SELECTED_CLASS_REFS:-}" ] || return 1
+  [ -n "${INSTALLER_HOST_VARIANT:-}" ] || return 1
+  [ -n "${INSTALLER_HOST_PROFILE:-}" ] || return 1
+  [ -n "${INSTALLER_HOST_FAMILY:-}" ] || return 1
+  [ -n "${INSTALLER_HOOK_FAMILY:-}" ] || return 1
+  [ -n "${INSTALLER_STORAGE_HOST_PROFILE_PREFIX:-}" ] || return 1
+  [ -n "${INSTALLER_INSTALL_DISK_CANDIDATES_DEFAULT:-}" ] || return 1
+  [ -n "${INSTALLER_DEFAULT_INSTALL_DISK:-}" ] || return 1
+
+  for installer_context_group in $INSTALLER_SELECTED_GROUPS; do
+    installer_context_value=$(installer_group_selected_class_value "$installer_context_group" 2>/dev/null || true)
+    [ -n "$installer_context_value" ] || return 1
+  done
+
+  while IFS= read -r installer_context_group || [ -n "$installer_context_group" ]; do
+    [ -n "$installer_context_group" ] || continue
+    case "$(installer_group_required_status "$installer_context_group")" in
+      required)
+        installer_context_value=$(installer_group_selected_class_value "$installer_context_group" 2>/dev/null || true)
+        [ -n "$installer_context_value" ] || return 1
+        ;;
+    esac
+  done <<EOF
+$(installer_group_names)
+EOF
+
+  return 0
+}
+
+installer_ensure_context_loaded() {
+  seed_base=${1:-}
+
+  installer_load_context_if_present || true
+  if installer_context_has_selected_class_state; then
+    return 0
+  fi
+
+  resolved_seed_base=$(installer_seed_base "$seed_base")
+  installer_warn "installer class context is missing or incomplete; regenerating from ${resolved_seed_base}"
+  installer_write_context "$resolved_seed_base" >/dev/null
+  installer_load_context
+}
+
+installer_prepare_context() {
+  seed_base=$(installer_seed_base "${1:-}")
+  installer_write_context "$seed_base" >/dev/null
+  installer_load_context
+}

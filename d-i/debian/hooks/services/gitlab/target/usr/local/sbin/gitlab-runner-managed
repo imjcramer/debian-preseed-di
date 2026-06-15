@@ -1,0 +1,1148 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+shopt -s inherit_errexit 2>/dev/null || true
+
+PROG="${0##*/}"
+ENV_DIR="/etc/default/gitlab-runner"
+SHARED_ENV="${ENV_DIR}/gitlab-runner-shared.env"
+APTLY_ENV="${ENV_DIR}/gitlab-runner-aptly.env"
+BUILD_ENV="${ENV_DIR}/gitlab-runner-build.env"
+TASK_ENV="${ENV_DIR}/gitlab-runner-task.env"
+
+info() {
+  printf '%s: %s\n' "$PROG" "$*" >&2
+}
+
+die() {
+  printf '%s: %s\n' "$PROG" "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+validate_username() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "${label} has an invalid user name: ${value:-unset}"
+}
+
+validate_absolute_path() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" == /* ]] || die "${label} must be an absolute path: ${value:-unset}"
+  [[ "$value" != "/" ]] || die "${label} must not be /"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "${label} contains control characters"
+  [[ "$value" != *".."* ]] || die "${label} must not contain .."
+}
+
+validate_cache_dir_name() {
+  local value="$1"
+  [[ -n "$value" ]] || die "cache directory name must not be empty"
+  [[ "$value" != /* && "$value" != .* && "$value" != */.* && "$value" != *..* && "$value" != *//* ]] ||
+    die "invalid cache directory name: $value"
+  [[ "$value" =~ ^[A-Za-z0-9._+/-]+$ ]] || die "invalid cache directory name: $value"
+}
+
+validate_no_control_chars() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "${label} contains unsupported control characters"
+}
+
+normalize_bool() {
+  local label="$1"
+  case "${2:-}" in
+    1|true|TRUE|yes|YES|on|ON) printf 'true' ;;
+    0|false|FALSE|no|NO|off|OFF) printf 'false' ;;
+    *) die "${label} must be boolean, got: ${2:-unset}" ;;
+  esac
+}
+
+normalize_positive_int() {
+  local label="$1"
+  local value="${2:-}"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "${label} must be a positive integer, got: ${value:-unset}"
+  (( 10#$value > 0 )) || die "${label} must be greater than zero"
+  printf '%s' "$((10#$value))"
+}
+
+validate_http_url() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" =~ ^https?://[A-Za-z0-9._:-]+(/.*)?$ ]] || die "${label} must be an http or https URL"
+}
+
+validate_metrics_address() {
+  local label="$1"
+  local value="$2"
+  local host port
+  [[ "$value" == *:* ]] || die "${label} must be host:port"
+  host="${value%:*}"
+  port="${value##*:}"
+  [[ -n "$host" ]] || die "${label} host must not be empty"
+  [[ "$port" =~ ^[0-9]+$ ]] || die "${label} port must be numeric"
+  (( 10#$port >= 1 && 10#$port <= 65535 )) || die "${label} port out of range"
+}
+
+validate_spec_value() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" != *$'\t'* ]] || die "${label} must not contain tab characters"
+  validate_no_control_chars "$label" "$value"
+}
+
+set_return_file_cleanup() {
+  local cleanup_path="$1"
+  validate_absolute_path cleanup_path "$cleanup_path"
+  trap "rm -f -- $(printf '%q' "$cleanup_path"); trap - RETURN" RETURN
+}
+
+read_secret_value() {
+  local value="$1"
+  if [[ "$value" == /* ]]; then
+    [[ -e "$value" ]] || die "secret file path does not exist: $value"
+    [[ -f "$value" && -r "$value" && ! -L "$value" ]] || die "secret file path is not a readable regular file: $value"
+    [[ "$(wc -c <"$value")" -le 1048576 ]] || die "secret file too large: $value"
+    cat -- "$value"
+    return 0
+  fi
+  printf '%s' "$value"
+}
+
+load_env_file() {
+  local path="$1"
+  [[ -r "$path" ]] || die "env file is not readable: $path"
+  [[ ! -L "$path" ]] || die "env file must not be a symlink: $path"
+  # shellcheck disable=SC1090
+  . "$path"
+}
+
+load_env_file_if_readable() {
+  local path="$1"
+  [[ -e "$path" ]] || die "env file is missing: $path"
+  [[ ! -L "$path" ]] || die "env file must not be a symlink: $path"
+  [[ -r "$path" ]] || return 1
+  # shellcheck disable=SC1090
+  . "$path"
+}
+
+load_shared_env() {
+  [[ "${SHARED_ENV_LOADED:-false}" == "true" ]] && return 0
+  load_env_file "$SHARED_ENV"
+
+  validate_absolute_path GITLAB_RUNNER_ENV_DIR "${GITLAB_RUNNER_ENV_DIR:-}"
+  validate_absolute_path GITLAB_RUNNER_STATE_BASE "${GITLAB_RUNNER_STATE_BASE:-}"
+  validate_absolute_path GITLAB_RUNNER_USER_HOME_BASE "${GITLAB_RUNNER_USER_HOME_BASE:-}"
+  validate_absolute_path GITLAB_RUNNER_PODMAN_CONFIG_BASE "${GITLAB_RUNNER_PODMAN_CONFIG_BASE:-}"
+  validate_absolute_path GITLAB_RUNNER_PODMAN_STATE_BASE "${GITLAB_RUNNER_PODMAN_STATE_BASE:-}"
+  validate_absolute_path GITLAB_RUNNER_PODMAN_TMP_BASE "${GITLAB_RUNNER_PODMAN_TMP_BASE:-}"
+  [[ -n "${GITLAB_RUNNER_CACHE_DIR_NAMES:-}" ]] || die "GITLAB_RUNNER_CACHE_DIR_NAMES must not be empty"
+  [[ -n "${GITLAB_RUNNER_CONFIG_GROUP:-}" ]] || die "GITLAB_RUNNER_CONFIG_GROUP must not be empty"
+
+  SHARED_ENV_LOADED=true
+}
+
+runner_var() {
+  local id_upper="$1"
+  local key="$2"
+  eval "printf '%s' \"\${GITLAB_RUNNER_${id_upper}_${key}:-}\""
+}
+
+runner_extra_env_items() {
+  local id_upper="$1"
+  local kind="$2"
+  case "$kind" in
+    aptly)
+      ;;
+  esac
+}
+
+required_runner_token_vars() {
+  case "$context_kind" in
+    aptly)
+      printf '%s\n' GITLAB_RUNNER_APTLY_TOKEN
+      ;;
+    shared)
+      local id_upper
+      for id_upper in "${context_runner_ids[@]}"; do
+        printf 'GITLAB_RUNNER_%s_TOKEN\n' "$id_upper"
+      done
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+load_runner_env_if_present() {
+  local path="$1"
+  [[ -e "$path" ]] || return 1
+  load_env_file "$path"
+}
+
+load_user_context() {
+  local requested_user="$1"
+  local passwd_entry _passwd_name _passwd_passwd _passwd_gecos _passwd_shell
+  local build_loaded=false task_loaded=false
+  local build_username= task_username=
+
+  load_shared_env
+  context_kind=
+  context_runner_ids=()
+  context_user=
+
+  if load_env_file_if_readable "$APTLY_ENV"; then
+    validate_username GITLAB_RUNNER_APTLY_USERNAME "${GITLAB_RUNNER_APTLY_USERNAME:-}"
+    if [[ "$requested_user" == "${GITLAB_RUNNER_APTLY_USERNAME}" ]]; then
+      context_kind="aptly"
+      context_runner_ids=(APTLY)
+      context_user="${GITLAB_RUNNER_APTLY_USERNAME}"
+    fi
+  fi
+
+  if [[ -z "$context_user" ]]; then
+    if load_runner_env_if_present "$BUILD_ENV"; then
+      validate_username GITLAB_RUNNER_BUILD_USERNAME "${GITLAB_RUNNER_BUILD_USERNAME:-}"
+      build_loaded=true
+      build_username="${GITLAB_RUNNER_BUILD_USERNAME}"
+    fi
+
+    if load_runner_env_if_present "$TASK_ENV"; then
+      validate_username GITLAB_RUNNER_TASK_USERNAME "${GITLAB_RUNNER_TASK_USERNAME:-}"
+      task_loaded=true
+      task_username="${GITLAB_RUNNER_TASK_USERNAME}"
+    fi
+
+    [[ "$build_loaded" == "true" || "$task_loaded" == "true" ]] ||
+      die "unsupported managed user: ${requested_user}"
+
+    if [[ "$build_loaded" == "true" && "$task_loaded" == "true" ]]; then
+      [[ "$build_username" == "$task_username" ]] || die "build and task runner users must match"
+    fi
+
+    if [[ "$build_loaded" == "true" && "$requested_user" == "$build_username" ]]; then
+      context_runner_ids+=(BUILD)
+      context_user="$build_username"
+    fi
+
+    if [[ "$task_loaded" == "true" && "$requested_user" == "$task_username" ]]; then
+      context_runner_ids+=(TASK)
+      context_user="$task_username"
+    fi
+
+    [[ -n "$context_user" ]] || die "unsupported managed user: ${requested_user}"
+    context_kind="shared"
+  fi
+
+  passwd_entry="$(getent passwd "$context_user" || true)"
+  [[ -n "$passwd_entry" ]] || die "managed user is missing from passwd: ${context_user}"
+  IFS=: read -r _passwd_name _passwd_passwd context_uid context_gid _passwd_gecos context_home _passwd_shell <<<"$passwd_entry"
+  [[ "$context_home" == "${GITLAB_RUNNER_USER_HOME_BASE}/${context_user}" ]] || die "managed user home drifted: ${context_home}"
+
+  context_base_dir="${GITLAB_RUNNER_STATE_BASE}/${context_user}"
+  context_work_dir="${context_base_dir}/work"
+  context_job_home="${context_base_dir}/home"
+  context_config_path="${context_base_dir}/${GITLAB_RUNNER_CONFIG_BASENAME:-config.toml}"
+  context_system_id_file="${context_work_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME:-.runner_system_id}"
+  context_runtime_root="/run/user/${context_uid}/gitlab-runner"
+  context_tmp_dir="${context_runtime_root}/tmp"
+  context_docker_host="unix:///run/user/${context_uid}/podman/podman.sock"
+  context_container_host="$context_docker_host"
+  context_podman_config_root="${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${context_user}"
+  context_podman_state_root="${GITLAB_RUNNER_PODMAN_STATE_BASE}/${context_user}"
+  context_buildah_tmpdir="${GITLAB_RUNNER_PODMAN_TMP_BASE}/${context_user}/tmp"
+  context_xdg_config_home="${context_home}/.config"
+  context_xdg_data_home="${context_home}/.local/share"
+  context_xdg_cache_home="${context_home}/.cache"
+  context_xdg_state_home="${context_home}/.local/state"
+
+  validate_absolute_path context_base_dir "$context_base_dir"
+  validate_absolute_path context_work_dir "$context_work_dir"
+  validate_absolute_path context_job_home "$context_job_home"
+  validate_absolute_path context_config_path "$context_config_path"
+  validate_absolute_path context_system_id_file "$context_system_id_file"
+  validate_absolute_path context_runtime_root "$context_runtime_root"
+  validate_absolute_path context_tmp_dir "$context_tmp_dir"
+  validate_absolute_path context_podman_config_root "$context_podman_config_root"
+  validate_absolute_path context_podman_state_root "$context_podman_state_root"
+  validate_absolute_path context_buildah_tmpdir "$context_buildah_tmpdir"
+  validate_absolute_path context_xdg_config_home "$context_xdg_config_home"
+  validate_absolute_path context_xdg_data_home "$context_xdg_data_home"
+  validate_absolute_path context_xdg_cache_home "$context_xdg_cache_home"
+  validate_absolute_path context_xdg_state_home "$context_xdg_state_home"
+
+  if [[ "$context_kind" == "aptly" ]]; then
+    validate_username GITLAB_RUNNER_APTLY_OWNER_USERNAME "${GITLAB_RUNNER_APTLY_OWNER_USERNAME:-}"
+    context_aptly_owner_user="${GITLAB_RUNNER_APTLY_OWNER_USERNAME}"
+    context_aptly_owner_home="${GITLAB_RUNNER_USER_HOME_BASE}/${context_aptly_owner_user}"
+    validate_absolute_path context_aptly_owner_home "$context_aptly_owner_home"
+  else
+    context_aptly_owner_user=
+    context_aptly_owner_home=
+  fi
+}
+
+ensure_common_runtime_dirs() {
+  install -d -m 0700 -- \
+    "$context_work_dir" \
+    "$context_job_home" \
+    "$context_home" \
+    "$context_xdg_config_home" \
+    "${context_home}/.local" \
+    "$context_xdg_data_home" \
+    "$context_xdg_cache_home" \
+    "$context_xdg_state_home" \
+    "$context_tmp_dir" \
+    "$context_buildah_tmpdir"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown -- \
+      "${context_uid}:${context_gid}" \
+      "$context_work_dir" \
+      "$context_job_home" \
+      "$context_home" \
+      "$context_xdg_config_home" \
+      "${context_home}/.local" \
+      "$context_xdg_data_home" \
+      "$context_xdg_cache_home" \
+      "$context_xdg_state_home" \
+      "$context_tmp_dir" \
+      "$context_buildah_tmpdir"
+  fi
+  if [[ ! -e "$context_system_id_file" ]]; then
+    : >"$context_system_id_file"
+  fi
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "${context_uid}:${context_gid}" "$context_system_id_file"
+  fi
+  chmod 0600 "$context_system_id_file"
+}
+
+run_as_context_user() {
+  if [[ "$(id -u)" == "$context_uid" || "$(id -un)" == "$context_user" ]]; then
+    env \
+      HOME="$context_home" \
+      XDG_CONFIG_HOME="$context_xdg_config_home" \
+      XDG_DATA_HOME="$context_xdg_data_home" \
+      XDG_CACHE_HOME="$context_xdg_cache_home" \
+      XDG_STATE_HOME="$context_xdg_state_home" \
+      XDG_RUNTIME_DIR="/run/user/${context_uid}" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${context_uid}/bus" \
+      PATH="$PATH" \
+      "$@"
+    return 0
+  fi
+  if [[ "$(id -u)" -eq 0 ]]; then
+    require_cmd runuser
+    runuser -u "$context_user" -- env \
+      HOME="$context_home" \
+      XDG_CONFIG_HOME="$context_xdg_config_home" \
+      XDG_DATA_HOME="$context_xdg_data_home" \
+      XDG_CACHE_HOME="$context_xdg_cache_home" \
+      XDG_STATE_HOME="$context_xdg_state_home" \
+      XDG_RUNTIME_DIR="/run/user/${context_uid}" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${context_uid}/bus" \
+      PATH="$PATH" \
+      "$@"
+    return 0
+  fi
+  require_cmd sudo
+  sudo -u "$context_user" -- env \
+    HOME="$context_home" \
+    XDG_CONFIG_HOME="$context_xdg_config_home" \
+    XDG_DATA_HOME="$context_xdg_data_home" \
+    XDG_CACHE_HOME="$context_xdg_cache_home" \
+    XDG_STATE_HOME="$context_xdg_state_home" \
+    XDG_RUNTIME_DIR="/run/user/${context_uid}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${context_uid}/bus" \
+    PATH="$PATH" \
+    "$@"
+}
+
+ensure_runner_storage_dirs() {
+  local id_upper="$1"
+  local builds_dir gitlab_cache_dir cache_root cache_name
+  builds_dir="$(runner_var "$id_upper" BUILDS_DIR)"
+  gitlab_cache_dir="$(runner_var "$id_upper" GITLAB_CACHE_DIR)"
+  cache_root="$(runner_var "$id_upper" CACHE_ROOT)"
+  validate_absolute_path "${id_upper} BUILDS_DIR" "$builds_dir"
+  validate_absolute_path "${id_upper} GITLAB_CACHE_DIR" "$gitlab_cache_dir"
+  validate_absolute_path "${id_upper} CACHE_ROOT" "$cache_root"
+  install -d -m 0700 -- "$builds_dir" "$gitlab_cache_dir" "$cache_root"
+  while IFS= read -r cache_name || [[ -n "$cache_name" ]]; do
+    [[ -n "$cache_name" ]] || continue
+    validate_cache_dir_name "$cache_name"
+    install -d -m 0700 -- "${cache_root}/${cache_name}"
+  done <<<"$GITLAB_RUNNER_CACHE_DIR_NAMES"
+}
+
+run_podman_as_context_user() {
+  require_cmd podman
+  require_cmd timeout
+  run_as_context_user env \
+    DOCKER_HOST="$context_docker_host" \
+    CONTAINER_HOST="$context_container_host" \
+    BUILDAH_ISOLATION="${GITLAB_PODMAN_ROOTLESS_BUILDAH_ISOLATION:-rootless}" \
+    BUILDAH_TMPDIR="$context_buildah_tmpdir" \
+    timeout "$(normalize_positive_int GITLAB_RUNNER_NETWORK_TIMEOUT "${GITLAB_RUNNER_NETWORK_TIMEOUT:-900}")" \
+    podman "$@"
+}
+
+verify_owned_writable_dir() {
+  local label="$1"
+  local path="$2"
+  local path_uid path_gid
+  validate_absolute_path "$label" "$path"
+  [[ -d "$path" ]] || die "${label} is not a directory: ${path}"
+  [[ ! -L "$path" ]] || die "${label} must not be a symlink: ${path}"
+  IFS=' ' read -r path_uid path_gid < <(stat -c '%u %g' -- "$path")
+  [[ "$path_uid" == "$context_uid" && "$path_gid" == "$context_gid" ]] ||
+    die "${label} must stay owned by ${context_user}:${context_gid}: ${path}"
+  if [[ "$(id -un)" == "$context_user" ]]; then
+    [[ -w "$path" && -x "$path" ]] || die "${label} must be writable and searchable by ${context_user}: ${path}"
+  else
+    run_as_context_user test -w "$path" || die "${label} must be writable by ${context_user}: ${path}"
+    run_as_context_user test -x "$path" || die "${label} must be searchable by ${context_user}: ${path}"
+  fi
+}
+
+verify_runner_storage_context() {
+  local id_upper builds_dir gitlab_cache_dir cache_root cache_name
+  verify_owned_writable_dir context_work_dir "$context_work_dir"
+  verify_owned_writable_dir context_job_home "$context_job_home"
+  verify_owned_writable_dir context_home "$context_home"
+  verify_owned_writable_dir context_xdg_config_home "$context_xdg_config_home"
+  verify_owned_writable_dir context_xdg_data_home "$context_xdg_data_home"
+  verify_owned_writable_dir context_xdg_cache_home "$context_xdg_cache_home"
+  verify_owned_writable_dir context_xdg_state_home "$context_xdg_state_home"
+  verify_owned_writable_dir context_tmp_dir "$context_tmp_dir"
+  verify_owned_writable_dir context_buildah_tmpdir "$context_buildah_tmpdir"
+
+  for id_upper in "${active_runner_ids[@]}"; do
+    builds_dir="$(runner_var "$id_upper" BUILDS_DIR)"
+    gitlab_cache_dir="$(runner_var "$id_upper" GITLAB_CACHE_DIR)"
+    cache_root="$(runner_var "$id_upper" CACHE_ROOT)"
+    verify_owned_writable_dir "${id_upper} BUILDS_DIR" "$builds_dir"
+    verify_owned_writable_dir "${id_upper} GITLAB_CACHE_DIR" "$gitlab_cache_dir"
+    verify_owned_writable_dir "${id_upper} CACHE_ROOT" "$cache_root"
+    while IFS= read -r cache_name || [[ -n "$cache_name" ]]; do
+      [[ -n "$cache_name" ]] || continue
+      validate_cache_dir_name "$cache_name"
+      verify_owned_writable_dir "${id_upper} CACHE_ROOT/${cache_name}" "${cache_root}/${cache_name}"
+    done <<<"$GITLAB_RUNNER_CACHE_DIR_NAMES"
+  done
+}
+
+render_aptly_disk_config() {
+  local template_path config_path bucket endpoint_host prefix storage_class debug architectures_csv download_concurrency
+  template_path="/pool/aptly/.aptly.conf.template.json"
+  config_path="/pool/aptly/.aptly.conf"
+  [[ -n "${context_aptly_owner_user:-}" ]] || die "aptly owner user is unset"
+  [[ -r "$template_path" && ! -L "$template_path" ]] || die "aptly config template is missing: ${template_path}"
+  [[ -d "/pool/aptly" && ! -L "/pool/aptly" ]] || die "aptly state dir is missing: /pool/aptly"
+  [[ -d "/pool/aptly/.aptly" && ! -L "/pool/aptly/.aptly" ]] || die "aptly root dir is missing: /pool/aptly/.aptly"
+
+  bucket="$(trim "$(runner_var APTLY R2_BUCKET_NAME)")"
+  endpoint_host="$(trim "$(runner_var APTLY R2_ENDPOINT_URL)")"
+  prefix="$(trim "$(runner_var APTLY R2_PREFIX)")"
+  storage_class="$(trim "$(runner_var APTLY R2_STORAGE_CLASS)")"
+  debug="$(normalize_bool GITLAB_RUNNER_APTLY_R2_DEBUG "$(runner_var APTLY R2_DEBUG)")"
+  architectures_csv="$(trim "$(runner_var APTLY ARCHITECTURES)")"
+  download_concurrency="$(normalize_positive_int GITLAB_RUNNER_APTLY_DOWNLOAD_CONCURRENCY "$(runner_var APTLY DOWNLOAD_CONCURRENCY)")"
+
+  if [[ -z "$endpoint_host" ]]; then
+    endpoint_host="$(trim "$(runner_var APTLY R2_ACCOUNT_ID)")"
+    if [[ -n "$endpoint_host" ]]; then
+      [[ "$endpoint_host" =~ ^[A-Fa-f0-9]{32}$ ]] || die "GITLAB_RUNNER_APTLY_R2_ACCOUNT_ID must be a 32-character hex Cloudflare account id"
+      endpoint_host="https://${endpoint_host}.r2.cloudflarestorage.com"
+    fi
+  fi
+
+  if [[ -n "$endpoint_host" ]]; then
+    [[ "$endpoint_host" == https://* ]] || die "aptly R2 endpoint must use https://"
+    endpoint_host="${endpoint_host#https://}"
+    endpoint_host="${endpoint_host%%/*}"
+  fi
+
+  # shellcheck disable=SC1091
+  source /pool/aptly/bin/prepare-aptly-env.sh
+  aptly_render_config_file \
+    "$template_path" \
+    "$config_path" \
+    "/pool/aptly/.aptly" \
+    "$architectures_csv" \
+    "$download_concurrency" \
+    "$(runner_var APTLY R2_ENDPOINT_NAME)" \
+    "$bucket" \
+    "$endpoint_host" \
+    "$prefix" \
+    "$storage_class" \
+    "$debug"
+  chown "${context_aptly_owner_user}:${context_aptly_owner_user}" "$config_path"
+  chmod 0600 "$config_path"
+}
+
+emit_spec_line() {
+  local spec_path="$1"
+  local key="$2"
+  local value="$3"
+  validate_spec_value "$key" "$value"
+  printf '%s\t%s\n' "$key" "$value" >>"$spec_path"
+}
+
+collect_active_runners() {
+  local spec_path="$1"
+  local id_upper id_lower token_raw token_value metrics_value image_mode user_value url_value
+  active_runner_count=0
+  active_runner_ids=()
+  active_metrics_values=()
+
+  for id_upper in "${context_runner_ids[@]}"; do
+    id_lower="${id_upper,,}"
+    user_value="$(runner_var "$id_upper" USERNAME)"
+    [[ "$user_value" == "$context_user" ]] || die "${id_upper} runner user drifted from ${context_user}"
+    token_raw="$(runner_var "$id_upper" TOKEN)"
+    token_value="$(trim "$(read_secret_value "$token_raw")")"
+    if [[ -z "$token_value" ]]; then
+      continue
+    fi
+    validate_no_control_chars "${id_upper} token" "$token_value"
+    url_value="$(runner_var "$id_upper" GITLAB_URL)"
+    validate_http_url "${id_upper} GitLab URL" "$url_value"
+    metrics_value="$(runner_var "$id_upper" METRICS_ADDRESS)"
+    validate_metrics_address "${id_upper} metrics address" "$metrics_value"
+    image_mode="$(runner_var "$id_upper" IMAGE_BUILD_MODE)"
+    [[ -n "$image_mode" ]] || image_mode="none"
+    normalize_bool "${id_upper} enabled ccache" "${GITLAB_RUNNER_ENABLE_CCACHE:-true}" >/dev/null
+    normalize_bool "${id_upper} enabled sccache" "${GITLAB_RUNNER_ENABLE_SCCACHE:-true}" >/dev/null
+    ensure_runner_storage_dirs "$id_upper"
+    active_runner_ids+=("$id_upper")
+    active_metrics_values+=("$metrics_value")
+    active_runner_count=$((active_runner_count + 1))
+
+    emit_spec_line "$spec_path" "runner.${id_lower}.kind" "$context_kind"
+    emit_spec_line "$spec_path" "runner.${id_lower}.name" "$(runner_var "$id_upper" NAME)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.url" "$url_value"
+    emit_spec_line "$spec_path" "runner.${id_lower}.token" "$token_value"
+    emit_spec_line "$spec_path" "runner.${id_lower}.tags" "$(runner_var "$id_upper" TAGS)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.image" "$(runner_var "$id_upper" IMAGE)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.builds_dir" "$(runner_var "$id_upper" BUILDS_DIR)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.gitlab_cache_dir" "$(runner_var "$id_upper" GITLAB_CACHE_DIR)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.cache_root" "$(runner_var "$id_upper" CACHE_ROOT)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.allowed_images" "$(runner_var "$id_upper" ALLOWED_IMAGES)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.allowed_services" "$(runner_var "$id_upper" ALLOWED_SERVICES)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.extra_volumes" "$(runner_var "$id_upper" EXTRA_VOLUMES)"
+    emit_spec_line "$spec_path" "runner.${id_lower}.image_build_mode" "$image_mode"
+
+    while IFS= read -r extra_env_line || [[ -n "$extra_env_line" ]]; do
+      [[ -n "$extra_env_line" ]] || continue
+      emit_spec_line "$spec_path" "runner.${id_lower}.extra_env" "$extra_env_line"
+    done <<EOF
+$(runner_extra_env_items "$id_upper" "$context_kind")
+EOF
+  done
+
+  if (( active_runner_count > 1 )); then
+    local first_metrics="${active_metrics_values[0]}"
+    local value
+    for value in "${active_metrics_values[@]}"; do
+      [[ "$value" == "$first_metrics" ]] || die "shared user service requires one metrics address, found ${first_metrics} and ${value}"
+    done
+  fi
+  if (( active_runner_count > 0 )); then
+    context_metrics_address="${active_metrics_values[0]}"
+  else
+    case "$context_kind" in
+      aptly) context_metrics_address="$(runner_var APTLY METRICS_ADDRESS)" ;;
+      shared) context_metrics_address="$(runner_var BUILD METRICS_ADDRESS)" ;;
+    esac
+  fi
+}
+
+render_config_from_spec() {
+  local spec_path="$1"
+  local dest_path="$2"
+  python3 - "$spec_path" "$dest_path" <<'PY'
+import json
+import pathlib
+import sys
+from collections import OrderedDict
+
+spec_path = pathlib.Path(sys.argv[1])
+dest_path = pathlib.Path(sys.argv[2])
+globals_cfg = {}
+runners = OrderedDict()
+
+for raw_line in spec_path.read_text().splitlines():
+    if not raw_line:
+        continue
+    key, value = raw_line.split("\t", 1)
+    if key.startswith("global."):
+        globals_cfg[key[7:]] = value
+        continue
+    _, runner_id, field = key.split(".", 2)
+    runners.setdefault(runner_id, {}).setdefault(field, [])
+    runners[runner_id][field].append(value)
+
+def csv_values(value):
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+def toml_string(value):
+    return json.dumps(value)
+
+def toml_bool(value):
+    return "true" if value.lower() == "true" else "false"
+
+def toml_array(values):
+    return "[" + ", ".join(toml_string(item) for item in values) + "]"
+
+def env_lines_for_runner(runner):
+    container_cache_dir = globals_cfg["container_cache_dir"]
+    container_builds_dir = globals_cfg["container_builds_dir"]
+    container_tmp_dir = "/tmp"
+    buildah_tmpdir = globals_cfg["buildah_tmpdir"]
+    env_lines = [
+        f"RUNNER_PROJECT={runner['project']}",
+        f"RUNNER_CACHE_ROOT={container_cache_dir}",
+        f"RUNNER_REQUIRE_PODMAN={globals_cfg['require_podman']}",
+        f"HOME={globals_cfg['job_home']}",
+        f"TMPDIR={container_tmp_dir}",
+        f"TMP={container_tmp_dir}",
+        f"TEMP={container_tmp_dir}",
+        f"XDG_CACHE_HOME={container_cache_dir}/xdg",
+        f"BUILDAH_ISOLATION={globals_cfg['buildah_isolation']}",
+        f"BUILDAH_TMPDIR={buildah_tmpdir}",
+        "KANIKO_CACHE_DIR=/kaniko/.cache",
+        f"CARGO_HOME={container_cache_dir}/cargo",
+        f"RUSTUP_HOME={container_cache_dir}/rustup",
+        "RUSTC_WRAPPER=sccache",
+        f"CCACHE_DIR={container_cache_dir}/ccache",
+        f"CCACHE_MAXSIZE={globals_cfg['ccache_max_size']}",
+        f"CCACHE_COMPRESS={globals_cfg['ccache_compress']}",
+        f"CCACHE_COMPRESSLEVEL={globals_cfg['ccache_compresslevel']}",
+        f"CCACHE_BASEDIR={container_builds_dir}",
+        "CCACHE_NOHASHDIR=true",
+        f"CCACHE_COMPILERCHECK={globals_cfg['ccache_compilercheck']}",
+        f"SCCACHE_DIR={container_cache_dir}/sccache",
+        f"SCCACHE_CACHE_SIZE={globals_cfg['sccache_cache_size']}",
+        "CMAKE_C_COMPILER_LAUNCHER=ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER=ccache",
+        "CMAKE_CUDA_COMPILER_LAUNCHER=ccache",
+        "CMAKE_HIP_COMPILER_LAUNCHER=ccache",
+        "CMAKE_OBJC_COMPILER_LAUNCHER=ccache",
+        "CMAKE_OBJCXX_COMPILER_LAUNCHER=ccache",
+        "CMAKE_Fortran_COMPILER_LAUNCHER=ccache",
+        f"CUDA_CACHE_PATH={container_cache_dir}/cuda",
+        f"PIP_CACHE_DIR={container_cache_dir}/pip",
+        f"PIPX_HOME={container_cache_dir}/pipx/home",
+        f"PIPX_BIN_DIR={container_cache_dir}/pipx/bin",
+        f"UV_CACHE_DIR={container_cache_dir}/uv",
+        f"POETRY_CACHE_DIR={container_cache_dir}/pypoetry",
+        f"PYTHONPYCACHEPREFIX={container_cache_dir}/python/pycache",
+        f"MYPY_CACHE_DIR={container_cache_dir}/python/mypy",
+        f"RUFF_CACHE_DIR={container_cache_dir}/python/ruff",
+        f"TOX_WORK_DIR={container_cache_dir}/python/tox",
+        f"NPM_CONFIG_CACHE={container_cache_dir}/npm",
+        f"NPX_CACHE={container_cache_dir}/npx",
+        f"PNPM_STORE_DIR={container_cache_dir}/pnpm",
+        f"PNPM_HOME={container_cache_dir}/pnpx",
+        f"YARN_CACHE_FOLDER={container_cache_dir}/yarn",
+        f"COREPACK_HOME={container_cache_dir}/corepack",
+        f"npm_config_node_gyp_cache={container_cache_dir}/node-gyp",
+        f"BUN_INSTALL_CACHE_DIR={container_cache_dir}/bun",
+        f"DENO_DIR={container_cache_dir}/deno",
+        f"GOCACHE={container_cache_dir}/go-build",
+        f"GOMODCACHE={container_cache_dir}/gomod",
+        f"GRADLE_USER_HOME={container_cache_dir}/gradle",
+        f"MAVEN_CONFIG={container_cache_dir}/maven",
+        f"COURSIER_CACHE={container_cache_dir}/coursier",
+        f"SBT_IVY_HOME={container_cache_dir}/ivy2",
+        f"SBT_OPTS=-Dsbt.boot.directory={container_cache_dir}/sbt/boot -Dsbt.ivy.home={container_cache_dir}/ivy2",
+        f"NUGET_PACKAGES={container_cache_dir}/nuget",
+        f"DOTNET_CLI_HOME={container_cache_dir}/dotnet",
+        "DOTNET_CLI_TELEMETRY_OPTOUT=1",
+        f"COMPOSER_CACHE_DIR={container_cache_dir}/composer",
+        f"BUNDLE_PATH={container_cache_dir}/bundle",
+        f"BUNDLE_USER_CACHE={container_cache_dir}/bundle/cache",
+        f"GIT_LFS_STORAGE={container_cache_dir}/git-lfs",
+        f"PRE_COMMIT_HOME={container_cache_dir}/pre-commit",
+        f"PLAYWRIGHT_BROWSERS_PATH={container_cache_dir}/ms-playwright",
+        f"CYPRESS_CACHE_FOLDER={container_cache_dir}/cypress",
+        f"CONAN_HOME={container_cache_dir}/conan2",
+        f"VCPKG_DOWNLOADS={container_cache_dir}/vcpkg/downloads",
+        f"VCPKG_DEFAULT_BINARY_CACHE={container_cache_dir}/vcpkg/bincache",
+        f"MESON_PACKAGE_CACHE_DIR={container_cache_dir}/meson",
+        f"BAZELISK_HOME={container_cache_dir}/bazelisk",
+        f"TEST_TMPDIR={container_cache_dir}/bazel",
+        f"ZIG_GLOBAL_CACHE_DIR={container_cache_dir}/zig/global",
+        f"ZIG_LOCAL_CACHE_DIR={container_cache_dir}/zig/local",
+        f"JULIA_DEPOT_PATH={container_cache_dir}/julia",
+        f"R_LIBS_USER={container_cache_dir}/r/library",
+        f"RENV_PATHS_CACHE={container_cache_dir}/renv",
+        f"STACK_ROOT={container_cache_dir}/stack",
+        f"CABAL_DIR={container_cache_dir}/cabal",
+        f"MIX_HOME={container_cache_dir}/mix",
+        f"HEX_HOME={container_cache_dir}/hex",
+        f"REBAR_CACHE_DIR={container_cache_dir}/rebar3",
+        f"TF_PLUGIN_CACHE_DIR={container_cache_dir}/terraform/plugin-cache",
+        "TF_IN_AUTOMATION=true",
+        "CHECKPOINT_DISABLE=1",
+        f"HELM_CACHE_HOME={container_cache_dir}/helm/cache",
+        f"HELM_CONFIG_HOME={container_cache_dir}/helm/config",
+        f"HELM_DATA_HOME={container_cache_dir}/helm/data",
+        f"ANSIBLE_HOME={container_cache_dir}/ansible",
+        f"ANSIBLE_LOCAL_TEMP={container_tmp_dir}/ansible-local",
+        f"TURBO_CACHE_DIR={container_cache_dir}/turbo",
+        f"NX_CACHE_DIRECTORY={container_cache_dir}/nx",
+    ]
+    for value in runner.get("extra_env", []):
+        if value:
+            env_lines.append(value)
+    return env_lines
+
+def volume_lines_for_runner(runner):
+    container_cache_dir = globals_cfg["container_cache_dir"]
+    container_builds_dir = globals_cfg["container_builds_dir"]
+    buildah_tmpdir = globals_cfg["buildah_tmpdir"]
+    cache_root = runner["cache_root"][0]
+    volumes = [
+        f"{globals_cfg['job_home']}:{globals_cfg['job_home']}:rw",
+        f"{runner['builds_dir'][0]}:{container_builds_dir}:rw",
+        f"{runner['gitlab_cache_dir'][0]}:{container_cache_dir}:rw",
+        f"{cache_root}/xdg:{container_cache_dir}/xdg:rw",
+        f"{cache_root}/cargo:{container_cache_dir}/cargo:rw",
+        f"{cache_root}/rustup:{container_cache_dir}/rustup:rw",
+        f"{cache_root}/ccache:{container_cache_dir}/ccache:rw",
+        f"{cache_root}/sccache:{container_cache_dir}/sccache:rw",
+        f"{cache_root}/cuda:{container_cache_dir}/cuda:rw",
+        f"{cache_root}/pip:{container_cache_dir}/pip:rw",
+        f"{cache_root}/pipx:{container_cache_dir}/pipx:rw",
+        f"{cache_root}/uv:{container_cache_dir}/uv:rw",
+        f"{cache_root}/pypoetry:{container_cache_dir}/pypoetry:rw",
+        f"{cache_root}/python:{container_cache_dir}/python:rw",
+        f"{cache_root}/npm:{container_cache_dir}/npm:rw",
+        f"{cache_root}/npx:{container_cache_dir}/npx:rw",
+        f"{cache_root}/pnpm:{container_cache_dir}/pnpm:rw",
+        f"{cache_root}/pnpx:{container_cache_dir}/pnpx:rw",
+        f"{cache_root}/yarn:{container_cache_dir}/yarn:rw",
+        f"{cache_root}/corepack:{container_cache_dir}/corepack:rw",
+        f"{cache_root}/node-gyp:{container_cache_dir}/node-gyp:rw",
+        f"{cache_root}/bun:{container_cache_dir}/bun:rw",
+        f"{cache_root}/deno:{container_cache_dir}/deno:rw",
+        f"{cache_root}/go-build:{container_cache_dir}/go-build:rw",
+        f"{cache_root}/gomod:{container_cache_dir}/gomod:rw",
+        f"{cache_root}/gradle:{container_cache_dir}/gradle:rw",
+        f"{cache_root}/maven:{container_cache_dir}/maven:rw",
+        f"{cache_root}/coursier:{container_cache_dir}/coursier:rw",
+        f"{cache_root}/ivy2:{container_cache_dir}/ivy2:rw",
+        f"{cache_root}/sbt:{container_cache_dir}/sbt:rw",
+        f"{cache_root}/nuget:{container_cache_dir}/nuget:rw",
+        f"{cache_root}/dotnet:{container_cache_dir}/dotnet:rw",
+        f"{cache_root}/composer:{container_cache_dir}/composer:rw",
+        f"{cache_root}/bundle:{container_cache_dir}/bundle:rw",
+        f"{cache_root}/git-lfs:{container_cache_dir}/git-lfs:rw",
+        f"{cache_root}/pre-commit:{container_cache_dir}/pre-commit:rw",
+        f"{cache_root}/ms-playwright:{container_cache_dir}/ms-playwright:rw",
+        f"{cache_root}/cypress:{container_cache_dir}/cypress:rw",
+        f"{cache_root}/conan2:{container_cache_dir}/conan2:rw",
+        f"{cache_root}/vcpkg:{container_cache_dir}/vcpkg:rw",
+        f"{cache_root}/meson:{container_cache_dir}/meson:rw",
+        f"{cache_root}/bazel:{container_cache_dir}/bazel:rw",
+        f"{cache_root}/bazelisk:{container_cache_dir}/bazelisk:rw",
+        f"{cache_root}/zig:{container_cache_dir}/zig:rw",
+        f"{cache_root}/julia:{container_cache_dir}/julia:rw",
+        f"{cache_root}/r:{container_cache_dir}/r:rw",
+        f"{cache_root}/renv:{container_cache_dir}/renv:rw",
+        f"{cache_root}/stack:{container_cache_dir}/stack:rw",
+        f"{cache_root}/cabal:{container_cache_dir}/cabal:rw",
+        f"{cache_root}/mix:{container_cache_dir}/mix:rw",
+        f"{cache_root}/hex:{container_cache_dir}/hex:rw",
+        f"{cache_root}/rebar3:{container_cache_dir}/rebar3:rw",
+        f"{cache_root}/terraform:{container_cache_dir}/terraform:rw",
+        f"{cache_root}/helm/cache:{container_cache_dir}/helm/cache:rw",
+        f"{cache_root}/helm/config:{container_cache_dir}/helm/config:rw",
+        f"{cache_root}/helm/data:{container_cache_dir}/helm/data:rw",
+        f"{cache_root}/ansible:{container_cache_dir}/ansible:rw",
+        f"{cache_root}/turbo:{container_cache_dir}/turbo:rw",
+        f"{cache_root}/nx:{container_cache_dir}/nx:rw",
+        f"{cache_root}/kaniko:/kaniko/.cache:rw",
+        f"{cache_root}/buildah:{container_cache_dir}/buildah:rw",
+        f"{cache_root}/podman:{container_cache_dir}/podman:rw",
+        "/tmp",
+        f"{buildah_tmpdir}:{buildah_tmpdir}:rw",
+    ]
+    for value in runner.get("extra_volumes", []):
+        if value:
+            volumes.append(value)
+    return volumes
+
+def emit_runner_stanza(lines, runner):
+    env_lines = env_lines_for_runner(runner)
+    volume_lines = volume_lines_for_runner(runner)
+    lines.extend(
+        [
+            "[[runners]]",
+            f"  name = {toml_string(runner['name'][0])}",
+            f"  url = {toml_string(runner['url'][0])}",
+            f"  token = {toml_string(runner['token'][0])}",
+            '  executor = "docker"',
+            "",
+            f"  limit = {globals_cfg['limit']}",
+            f"  request_concurrency = {globals_cfg['request_concurrency']}",
+            f"  output_limit = {globals_cfg['output_limit']}",
+            f"  run_untagged = {toml_bool(globals_cfg['run_untagged'])}",
+            f"  locked = {toml_bool(globals_cfg['locked'])}",
+            f"  tag_list = {toml_array(csv_values(runner['tags'][0]))}",
+            "",
+            f"  builds_dir = {toml_string(globals_cfg['container_builds_dir'])}",
+            f"  cache_dir = {toml_string(globals_cfg['container_cache_dir'])}",
+            f"  clean_git_config = {toml_bool(globals_cfg['clean_git_config'])}",
+            f"  debug_trace_disabled = {toml_bool(globals_cfg['debug_trace_disabled'])}",
+            '  pre_get_sources_script = "umask 077"',
+        ]
+    )
+    lines.append('  pre_build_script = "umask 077"')
+    lines.extend(
+        [
+            '  post_build_script = "umask 077"',
+            "",
+            "  environment = [",
+        ]
+    )
+    for item in env_lines:
+        lines.append(f"    {toml_string(item)},")
+    lines.extend(
+        [
+            "  ]",
+            "",
+            "  [runners.docker]",
+            f"    host = {toml_string(globals_cfg['docker_host'])}",
+            f"    tls_verify = {toml_bool(globals_cfg['docker_tls_verify'])}",
+            f"    image = {toml_string(runner['image'][0])}",
+            f"    privileged = {toml_bool(globals_cfg['docker_privileged'])}",
+            f"    services_limit = {globals_cfg['services_limit']}",
+            f"    pull_policy = {toml_string(globals_cfg['docker_pull_policy'])}",
+            f"    allowed_pull_policies = {toml_array(csv_values(globals_cfg['allowed_pull_policies']))}",
+            f"    security_opt = {toml_array(csv_values(globals_cfg['docker_security_opts']))}",
+            f"    cap_drop = {toml_array(csv_values(globals_cfg['cap_drop']))}",
+            "    volumes = [",
+        ]
+    )
+    for item in volume_lines:
+        lines.append(f"      {toml_string(item)},")
+    lines.extend(
+        [
+            "    ]",
+            f"    allowed_images = {toml_array(csv_values(runner['allowed_images'][0]))}",
+            f"    allowed_services = {toml_array(csv_values(runner['allowed_services'][0]))}",
+            "",
+            "  [runners.custom_build_dir]",
+            f"    enabled = {toml_bool(globals_cfg['custom_build_dir_enabled'])}",
+            "",
+            "  [runners.feature_flags]",
+            "    FF_ENABLE_JOB_CLEANUP = true",
+            "    FF_GIT_URLS_WITHOUT_TOKENS = true",
+            "    FF_HASH_CACHE_KEYS = true",
+            "    FF_USE_ADAPTIVE_REQUEST_CONCURRENCY = true",
+            "    FF_NETWORK_PER_BUILD = true",
+            "",
+            "  [runners.cache]",
+            f"    MaxUploadedArchiveSize = {globals_cfg['cache_max_uploaded_archive_size']}",
+            "    Shared = true",
+            "",
+        ]
+    )
+
+lines = [
+    f"concurrent = {globals_cfg['concurrent']}",
+    f"check_interval = {globals_cfg['check_interval']}",
+    f"connection_max_age = {toml_string(globals_cfg['connection_max_age'])}",
+    f"shutdown_timeout = {globals_cfg['shutdown_timeout']}",
+    f"log_level = {toml_string(globals_cfg['log_level'])}",
+    f"log_format = {toml_string(globals_cfg['log_format'])}",
+    f"listen_address = {toml_string(globals_cfg['listen_address'])}",
+    "",
+]
+
+for runner_id, runner in runners.items():
+    runner["project"] = runner_id.lower()
+    emit_runner_stanza(lines, runner)
+
+dest_path.write_text("\n".join(lines).rstrip() + "\n")
+PY
+}
+
+validate_global_runner_toggles() {
+  normalize_bool GITLAB_RUNNER_ENABLE_CCACHE "${GITLAB_RUNNER_ENABLE_CCACHE:-true}" >/dev/null
+  normalize_bool GITLAB_RUNNER_ENABLE_SCCACHE "${GITLAB_RUNNER_ENABLE_SCCACHE:-true}" >/dev/null
+}
+
+refresh_config() {
+  local require_active="${1:-false}"
+  local spec_path rendered_config_path config_group_gid
+  load_user_context "$requested_user"
+  ensure_common_runtime_dirs
+  validate_global_runner_toggles
+  spec_path="$(mktemp "${TMPDIR:-/tmp}/${PROG}.spec.XXXXXX")"
+  set_return_file_cleanup "$spec_path"
+
+  emit_spec_line "$spec_path" global.concurrent "$(normalize_positive_int GITLAB_RUNNER_CONCURRENT "${GITLAB_RUNNER_CONCURRENT:-1}")"
+  emit_spec_line "$spec_path" global.check_interval "$(normalize_positive_int GITLAB_RUNNER_CHECK_INTERVAL "${GITLAB_RUNNER_CHECK_INTERVAL:-3}")"
+  emit_spec_line "$spec_path" global.connection_max_age "${GITLAB_RUNNER_CONNECTION_MAX_AGE:-15m}"
+  emit_spec_line "$spec_path" global.shutdown_timeout "$(normalize_positive_int GITLAB_RUNNER_SHUTDOWN_TIMEOUT "${GITLAB_RUNNER_SHUTDOWN_TIMEOUT:-30}")"
+  emit_spec_line "$spec_path" global.log_level "${GITLAB_RUNNER_LOG_LEVEL:-info}"
+  emit_spec_line "$spec_path" global.log_format "${GITLAB_RUNNER_LOG_FORMAT:-json}"
+  emit_spec_line "$spec_path" global.limit "$(normalize_positive_int GITLAB_RUNNER_LIMIT "${GITLAB_RUNNER_LIMIT:-1}")"
+  emit_spec_line "$spec_path" global.request_concurrency "$(normalize_positive_int GITLAB_RUNNER_REQUEST_CONCURRENCY "${GITLAB_RUNNER_REQUEST_CONCURRENCY:-1}")"
+  emit_spec_line "$spec_path" global.output_limit "$(normalize_positive_int GITLAB_RUNNER_OUTPUT_LIMIT "${GITLAB_RUNNER_OUTPUT_LIMIT:-32768}")"
+  emit_spec_line "$spec_path" global.run_untagged "$(normalize_bool GITLAB_RUNNER_RUN_UNTAGGED "${GITLAB_RUNNER_RUN_UNTAGGED:-false}")"
+  emit_spec_line "$spec_path" global.locked "$(normalize_bool GITLAB_RUNNER_LOCKED "${GITLAB_RUNNER_LOCKED:-true}")"
+  emit_spec_line "$spec_path" global.clean_git_config "$(normalize_bool GITLAB_RUNNER_CLEAN_GIT_CONFIG "${GITLAB_RUNNER_CLEAN_GIT_CONFIG:-true}")"
+  emit_spec_line "$spec_path" global.debug_trace_disabled "$(normalize_bool GITLAB_RUNNER_DEBUG_TRACE_DISABLED "${GITLAB_RUNNER_DEBUG_TRACE_DISABLED:-true}")"
+  emit_spec_line "$spec_path" global.custom_build_dir_enabled "$(normalize_bool GITLAB_RUNNER_CUSTOM_BUILD_DIR_ENABLED "${GITLAB_RUNNER_CUSTOM_BUILD_DIR_ENABLED:-false}")"
+  emit_spec_line "$spec_path" global.require_podman "$(normalize_bool GITLAB_RUNNER_REQUIRE_PODMAN "${GITLAB_RUNNER_REQUIRE_PODMAN:-true}")"
+  emit_spec_line "$spec_path" global.container_builds_dir "${GITLAB_RUNNER_CONTAINER_BUILDS_DIR:-/builds}"
+  emit_spec_line "$spec_path" global.container_cache_dir "${GITLAB_RUNNER_CONTAINER_CACHE_DIR:-/cache}"
+  emit_spec_line "$spec_path" global.job_home "$context_job_home"
+  emit_spec_line "$spec_path" global.tmp_dir "$context_tmp_dir"
+  emit_spec_line "$spec_path" global.docker_host "$context_docker_host"
+  emit_spec_line "$spec_path" global.container_host "$context_container_host"
+  emit_spec_line "$spec_path" global.buildah_isolation "${GITLAB_PODMAN_ROOTLESS_BUILDAH_ISOLATION:-rootless}"
+  emit_spec_line "$spec_path" global.buildah_tmpdir "$context_buildah_tmpdir"
+  emit_spec_line "$spec_path" global.ccache_max_size "${GITLAB_RUNNER_CCACHE_MAX_SIZE:-20G}"
+  emit_spec_line "$spec_path" global.ccache_compress "$(normalize_bool GITLAB_RUNNER_CCACHE_COMPRESS "${GITLAB_RUNNER_CCACHE_COMPRESS:-true}")"
+  emit_spec_line "$spec_path" global.ccache_compresslevel "${GITLAB_RUNNER_CCACHE_COMPRESSLEVEL:-6}"
+  emit_spec_line "$spec_path" global.ccache_compilercheck "${GITLAB_RUNNER_CCACHE_COMPILERCHECK:-content}"
+  emit_spec_line "$spec_path" global.sccache_cache_size "${GITLAB_RUNNER_SCCACHE_CACHE_SIZE:-20G}"
+  emit_spec_line "$spec_path" global.docker_tls_verify "$(normalize_bool GITLAB_RUNNER_DOCKER_TLS_VERIFY "${GITLAB_RUNNER_DOCKER_TLS_VERIFY:-false}")"
+  emit_spec_line "$spec_path" global.docker_privileged "$(normalize_bool GITLAB_RUNNER_DOCKER_PRIVILEGED "${GITLAB_RUNNER_DOCKER_PRIVILEGED:-false}")"
+  emit_spec_line "$spec_path" global.services_limit "$(normalize_positive_int GITLAB_RUNNER_SERVICES_LIMIT "${GITLAB_RUNNER_SERVICES_LIMIT:-5}")"
+  emit_spec_line "$spec_path" global.docker_pull_policy "${GITLAB_RUNNER_DOCKER_PULL_POLICY:-if-not-present}"
+  emit_spec_line "$spec_path" global.allowed_pull_policies "${GITLAB_RUNNER_ALLOWED_PULL_POLICIES:-always,if-not-present}"
+  emit_spec_line "$spec_path" global.docker_security_opts "${GITLAB_RUNNER_DOCKER_SECURITY_OPTS:-no-new-privileges:true}"
+  emit_spec_line "$spec_path" global.cap_drop "${GITLAB_RUNNER_CAP_DROP:-NET_RAW}"
+  emit_spec_line "$spec_path" global.cache_max_uploaded_archive_size "${GITLAB_RUNNER_CACHE_MAX_UPLOADED_ARCHIVE_SIZE:-1073741824}"
+
+  collect_active_runners "$spec_path"
+  if [[ "$require_active" == "true" && "$active_runner_count" -eq 0 ]]; then
+    die "no active runner tokens found for ${context_user}; populate at least one of: $(required_runner_token_vars | paste -sd ' ' -) in ${ENV_DIR}"
+  fi
+  if [[ "$context_kind" == "aptly" && "$active_runner_count" -gt 0 ]]; then
+    render_aptly_disk_config
+  fi
+  emit_spec_line "$spec_path" global.listen_address "$context_metrics_address"
+  rendered_config_path="$(mktemp "${TMPDIR:-/tmp}/${PROG}.config.XXXXXX")"
+  render_config_from_spec "$spec_path" "$rendered_config_path"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    config_group_gid="$(getent group "${GITLAB_RUNNER_CONFIG_GROUP}" | awk -F: 'NR == 1 { print $3; exit }')"
+    [[ -n "$config_group_gid" ]] || die "control group is missing: ${GITLAB_RUNNER_CONFIG_GROUP}"
+    install -d -m "${GITLAB_RUNNER_CONTROL_DIR_MODE:-0750}" -- "$context_base_dir"
+    chown "root:${config_group_gid}" "$context_base_dir"
+    chmod "${GITLAB_RUNNER_CONTROL_DIR_MODE:-0750}" "$context_base_dir"
+    install -m "${GITLAB_RUNNER_CONTROL_FILE_MODE:-0640}" "$rendered_config_path" "$context_config_path"
+    chown "root:${config_group_gid}" "$context_config_path"
+  else
+    cat -- "$rendered_config_path" >"$context_config_path"
+    chmod 0600 "$context_config_path"
+  fi
+  rm -f -- "$rendered_config_path"
+  info "rendered ${context_config_path} for ${context_user} with ${active_runner_count} active runner(s)"
+}
+
+ensure_images_loaded_context() {
+  local id_upper image_mode image_ref image_context image_containerfile built_count
+  [[ "$active_runner_count" -gt 0 ]] || {
+    info "no active runner images to ensure for ${context_user}"
+    return 0
+  }
+  built_count=0
+
+  for id_upper in "${active_runner_ids[@]}"; do
+    image_mode="$(runner_var "$id_upper" IMAGE_BUILD_MODE)"
+    case "$image_mode" in
+      none|'')
+        continue
+        ;;
+      containerfile)
+        image_ref="$(runner_var "$id_upper" IMAGE)"
+        image_context="$(runner_var "$id_upper" IMAGE_CONTEXT)"
+        image_containerfile="$(runner_var "$id_upper" IMAGE_CONTAINERFILE)"
+        validate_absolute_path "${id_upper} IMAGE_CONTEXT" "$image_context"
+        validate_absolute_path "${id_upper} IMAGE_CONTAINERFILE" "$image_containerfile"
+        run_podman_as_context_user image exists "$image_ref" >/dev/null 2>&1 && continue
+        run_podman_as_context_user build --pull=missing --tag "$image_ref" -f "$image_containerfile" "$image_context"
+        built_count=$((built_count + 1))
+        ;;
+      *)
+        die "${id_upper} IMAGE_BUILD_MODE is unsupported: ${image_mode}"
+        ;;
+    esac
+  done
+
+  if [[ "$built_count" -eq 0 ]]; then
+    info "no runner image builds were needed for ${context_user}"
+  else
+    info "built ${built_count} runner image(s) for ${context_user}"
+  fi
+}
+
+preflight_executor() {
+  local spec_probe backend_info rootless_value network_backend
+  load_user_context "$requested_user"
+  ensure_common_runtime_dirs
+  validate_global_runner_toggles
+  spec_probe="$(mktemp "${TMPDIR:-/tmp}/${PROG}.preflight.XXXXXX")"
+  set_return_file_cleanup "$spec_probe"
+  collect_active_runners "$spec_probe"
+  [[ "$active_runner_count" -gt 0 ]] || {
+    die "no active runner tokens found for ${context_user}; populate at least one of: $(required_runner_token_vars | paste -sd ' ' -) in ${ENV_DIR}"
+  }
+  verify_runner_storage_context
+  backend_info="$(run_podman_as_context_user info --format '{{.Host.Security.Rootless}}|{{.Host.NetworkBackend}}')" ||
+    die "failed to query the managed Podman executor backend for ${context_user}"
+  [[ "$backend_info" == *"|"* ]] || die "unexpected Podman backend response for ${context_user}: ${backend_info}"
+  rootless_value="${backend_info%%|*}"
+  network_backend="${backend_info#*|}"
+  [[ "$rootless_value" == "true" ]] || die "Podman executor backend must stay rootless for ${context_user}; got ${rootless_value}"
+  [[ "$network_backend" == "netavark" ]] || die "Podman executor backend must use netavark for ${context_user}; got ${network_backend}"
+  run_podman_as_context_user ps --all --format '{{.ID}}' >/dev/null ||
+    die "failed to talk to the managed Podman executor backend for ${context_user}"
+  info "validated Podman docker executor context for ${context_user}"
+}
+
+ensure_images() {
+  local spec_probe
+  load_user_context "$requested_user"
+  ensure_common_runtime_dirs
+  spec_probe="$(mktemp "${TMPDIR:-/tmp}/${PROG}.probe.XXXXXX")"
+  set_return_file_cleanup "$spec_probe"
+  collect_active_runners "$spec_probe"
+  ensure_images_loaded_context
+}
+
+reconcile_runner_service() {
+  require_cmd systemctl
+  run_as_context_user systemctl --user show-environment >/dev/null 2>&1 ||
+    die "user manager is not reachable for ${context_user}; rerun through glab-helper or from an active login session"
+  run_as_context_user systemctl --user daemon-reload >/dev/null
+  if run_as_context_user systemctl --user is-active --quiet gitlab-runner.service; then
+    run_as_context_user systemctl --user kill --signal=HUP --kill-whom=main gitlab-runner.service
+    info "requested config reload for gitlab-runner.service as ${context_user}"
+    return 0
+  fi
+  run_as_context_user systemctl --user reset-failed gitlab-runner.service >/dev/null 2>&1 || true
+  run_as_context_user systemctl --user start gitlab-runner.service
+  wait_for_runner_service_active
+  info "started gitlab-runner.service for ${context_user}"
+}
+
+wait_for_runner_service_active() {
+  local tries="${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-10}"
+  local verify_active stable_required stable_seen=0
+  [[ "$tries" =~ ^[0-9]+$ ]] || die "GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS must be numeric, got: ${tries:-unset}"
+  (( 10#$tries >= 1 )) || die "GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS must be greater than zero"
+  verify_active="$(normalize_bool GITLAB_RUNNER_VERIFY_ACTIVE "${GITLAB_RUNNER_VERIFY_ACTIVE:-true}")"
+  stable_required="${GITLAB_RUNNER_SERVICE_STABLE_SECONDS:-3}"
+  [[ "$stable_required" =~ ^[0-9]+$ ]] || die "GITLAB_RUNNER_SERVICE_STABLE_SECONDS must be numeric, got: ${stable_required:-unset}"
+  (( 10#$stable_required >= 1 )) || die "GITLAB_RUNNER_SERVICE_STABLE_SECONDS must be greater than zero"
+
+  while (( tries > 0 )); do
+    if run_as_context_user systemctl --user is-failed --quiet gitlab-runner.service; then
+      if (( stable_seen > 0 )); then
+        die "gitlab-runner.service did not remain active for ${context_user} during the ${GITLAB_RUNNER_SERVICE_STABLE_SECONDS:-3}s verification window; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
+      fi
+      die "gitlab-runner.service failed to reach active for ${context_user}; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
+    fi
+    if run_as_context_user systemctl --user is-active --quiet gitlab-runner.service; then
+      if [[ "$verify_active" != "true" ]]; then
+        return 0
+      fi
+      stable_seen=$((stable_seen + 1))
+      if (( stable_seen >= 10#$stable_required )); then
+        return 0
+      fi
+    else
+      stable_seen=0
+    fi
+    sleep 1
+    tries=$((tries - 1))
+  done
+
+  if (( stable_seen > 0 )); then
+    die "gitlab-runner.service did not remain active for ${context_user} during the ${GITLAB_RUNNER_SERVICE_STABLE_SECONDS:-3}s verification window; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
+  fi
+  die "gitlab-runner.service did not become active for ${context_user} within ${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-10}s; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
+}
+
+run_once() {
+  refresh_config true
+  preflight_executor
+  ensure_images
+  reconcile_runner_service
+  info "completed once for ${context_user}"
+}
+
+usage() {
+  cat <<EOF
+usage: ${PROG} --user <glab-aptly|glab-user> refresh [--require-active]
+       ${PROG} --user <glab-aptly|glab-user> preflight
+       ${PROG} --user <glab-aptly|glab-user> once
+       ${PROG} --user <glab-aptly|glab-user> ensure-images
+EOF
+}
+
+parse_args() {
+  [[ "$#" -ge 3 ]] || {
+    usage >&2
+    exit 2
+  }
+
+  [[ "$1" == "--user" ]] || die "first argument must be --user"
+  requested_user="$2"
+  shift 2
+  command_name="$1"
+  shift
+  case "$command_name" in
+    refresh)
+      require_active=false
+      if [[ "${1:-}" == "--require-active" ]]; then
+        require_active=true
+        shift
+      fi
+      [[ "$#" -eq 0 ]] || die "unexpected refresh arguments: $*"
+      ;;
+    preflight)
+      [[ "$#" -eq 0 ]] || die "unexpected preflight arguments: $*"
+      ;;
+    once)
+      [[ "$#" -eq 0 ]] || die "unexpected once arguments: $*"
+      ;;
+    ensure-images)
+      [[ "$#" -eq 0 ]] || die "unexpected ensure-images arguments: $*"
+      ;;
+    *)
+      die "unsupported command: ${command_name}"
+      ;;
+  esac
+}
+
+main() {
+  parse_args "$@"
+  case "$command_name" in
+    refresh) refresh_config "$require_active" ;;
+    preflight) preflight_executor ;;
+    once) run_once ;;
+    ensure-images) ensure_images ;;
+  esac
+}
+
+main "$@"

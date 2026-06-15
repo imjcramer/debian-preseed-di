@@ -1,0 +1,60 @@
+// Managed by debian-preseed-di.
+// High-impact desktop and system mechanisms require an active local session.
+
+(function() {
+    function startsWith(value, prefix) {
+        return typeof value === "string" && value.indexOf(prefix) === 0;
+    }
+
+    function hasPrefix(value, prefixes) {
+        var i;
+        for (i = 0; i < prefixes.length; i++) {
+            if (startsWith(value, prefixes[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function activeLocal(subject) {
+        if (subject.active !== true) {
+            return false;
+        }
+        return subject.local === true ||
+            (typeof subject.seat === "string" && subject.seat.length > 0);
+    }
+
+    var GATED_PREFIXES = [
+        "org.freedesktop.policykit.exec",
+        "org.freedesktop.login1.",
+        "org.freedesktop.udisks2.",
+        "org.freedesktop.UDisks2.",
+        "org.freedesktop.NetworkManager.",
+        "org.freedesktop.PackageKit.",
+        "org.freedesktop.packagekit.",
+        "org.freedesktop.Flatpak.",
+        "org.freedesktop.fwupd.",
+        "org.freedesktop.systemd1.",
+        "org.freedesktop.accounts.",
+        "org.freedesktop.hostname1.",
+        "org.freedesktop.locale1.",
+        "org.freedesktop.timedate1.",
+        "org.freedesktop.realmd.",
+        "org.freedesktop.ModemManager1.",
+        "org.freedesktop.color-manager.",
+        "org.freedesktop.bolt.",
+        "org.freedesktop.upower.",
+        "org.opensuse.cupspkhelper.mechanism.",
+        "org.blueman.",
+        "org.bluez.",
+        "org.fedoraproject.FirewallD1."
+    ];
+
+    polkit.addRule(function(action, subject) {
+        if (hasPrefix(action.id, GATED_PREFIXES) && !activeLocal(subject)) {
+            return polkit.Result.NO;
+        }
+
+        return polkit.Result.NOT_HANDLED;
+    });
+})();

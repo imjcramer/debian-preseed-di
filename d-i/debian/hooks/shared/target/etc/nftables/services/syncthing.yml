@@ -1,0 +1,66 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: syncthing
+  description: Syncthing sync and local discovery overlay.
+  merge_priority: 50
+services:
+  syncthing_sync_tcp:
+    enabled: true
+    direction: bidirectional
+    protocols:
+    - tcp
+    ports:
+    - 22000
+    allow:
+      ipv4:
+      - 0.0.0.0/0
+      ipv6:
+      - ::/0
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    log: false
+  syncthing_sync_quic:
+    enabled: true
+    direction: bidirectional
+    protocols:
+    - udp
+    ports:
+    - 22000
+    allow:
+      ipv4:
+      - 0.0.0.0/0
+      ipv6:
+      - ::/0
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+      - wg0
+    log: false
+  syncthing_local_discovery:
+    enabled: true
+    direction: bidirectional
+    protocols:
+    - udp
+    ports:
+    - 21027
+    allow:
+      ipv4:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      ipv6:
+      - fc00::/7
+      - fe80::/10
+      interfaces:
+      - eth0
+      - en*
+      - wlan0
+      - wl*
+    log: false

@@ -1,0 +1,50 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: gitlab-runner
+  description: GitLab Runner rootless Podman executor egress and container networking overlay.
+  merge_priority: 60
+containers:
+  podman:
+    enabled: true
+    allow_container_outbound: true
+    interfaces:
+    - podman0
+    - cni-podman0
+egress:
+  rules:
+    dns:
+      enabled: true
+      protocols:
+      - tcp
+      - udp
+      ports:
+      - 53
+      allow_to:
+        ipv4:
+        - 0.0.0.0/0
+        ipv6:
+        - ::/0
+    ntp:
+      enabled: true
+      protocols:
+      - udp
+      ports:
+      - 123
+      allow_to:
+        ipv4:
+        - 0.0.0.0/0
+        ipv6:
+        - ::/0
+    http_https:
+      enabled: true
+      protocols:
+      - tcp
+      ports:
+      - 80
+      - 443
+      allow_to:
+        ipv4:
+        - 0.0.0.0/0
+        ipv6:
+        - ::/0

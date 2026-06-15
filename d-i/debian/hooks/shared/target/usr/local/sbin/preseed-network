@@ -1,0 +1,416 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+
+use File::Basename qw(basename);
+use Socket qw(AF_INET AF_INET6 inet_pton);
+
+my $LOG_TAG = 'preseed-network';
+my $TARGET_ROOT = $ENV{PRESEED_TARGET_ROOT} // '/';
+my $SYS_CLASS_NET = $ENV{PRESEED_SYS_CLASS_NET} // '/sys/class/net';
+my $CONFIG_FILE = $ENV{PRESEED_NETWORK_CONFIG} // '';
+my $SYSTEMD_LOG_LEVEL = $ENV{SYSTEMD_LOG_LEVEL} // 'error';
+my $LOGGER = -x '/usr/bin/logger' ? '/usr/bin/logger' : (-x '/bin/logger' ? '/bin/logger' : '');
+
+my %CONFIG = (
+    SYSTEMD_LOG_LEVEL                   => $SYSTEMD_LOG_LEVEL,
+    PRESEED_NETWORK_MODE                => '',
+    PRESEED_NETWORK_LINK_TYPES          => '',
+    PRESEED_NETWORK_HOSTNAME            => '',
+    PRESEED_NETWORK_DOMAIN              => '',
+    PRESEED_NETWORK_CLASSES_RAW         => '',
+    PRESEED_NETWORK_SELECTED_CLASS_REFS => '',
+    PRESEED_NETWORK_HOST_VARIANT        => '',
+    PRESEED_NETWORK_IPV4_GATEWAY        => '',
+    PRESEED_NETWORK_IPV4_DNS            => '',
+    PRESEED_NETWORK_IPV6_GATEWAY        => '',
+    PRESEED_NETWORK_IPV6_DNS            => '',
+    PRESEED_NETWORK_WIFI_PSK_SECURITY   => '',
+    PRESEED_NETWORK_WIFI_ESSID          => '',
+    PRESEED_NETWORK_ETHERNET_IFACE      => '',
+    PRESEED_NETWORK_ETHERNET_MAC        => '',
+    PRESEED_NETWORK_ETHERNET_IPV4_CIDR  => '',
+    PRESEED_NETWORK_ETHERNET_IPV6_CIDR  => '',
+    PRESEED_NETWORK_WIFI_IFACE          => '',
+    PRESEED_NETWORK_WIFI_MAC            => '',
+    PRESEED_NETWORK_WIFI_IPV4_CIDR      => '',
+    PRESEED_NETWORK_WIFI_IPV6_CIDR      => '',
+    PRESEED_NETWORK_IPV4_HOST_CIDRS     => '',
+    PRESEED_NETWORK_IPV4_NETWORK_CIDRS  => '',
+    PRESEED_NETWORK_IPV6_HOST_CIDRS     => '',
+    PRESEED_NETWORK_IPV6_NETWORK_CIDRS  => '',
+);
+my %SUPPORTED_CONFIG_KEY = map { $_ => 1 } keys %CONFIG;
+my %LOG_LEVEL_VALUE = (
+    debug   => 10,
+    info    => 20,
+    warning => 30,
+    error   => 40,
+    none    => 99,
+);
+
+sub canonical_log_level {
+    my ($level) = @_;
+    $level = lc($level // 'info');
+    return 'warning' if $level eq 'warn';
+    return $level if exists $LOG_LEVEL_VALUE{$level};
+    return 'info';
+}
+
+sub log_enabled {
+    my ($level) = @_;
+    my $requested = canonical_log_level($level);
+    return 1 if $requested eq 'error';
+    my $active = canonical_log_level($CONFIG{SYSTEMD_LOG_LEVEL});
+    return 0 if $active eq 'none';
+    return $LOG_LEVEL_VALUE{$requested} >= $LOG_LEVEL_VALUE{$active};
+}
+
+sub log_msg {
+    my ($level, $message) = @_;
+    $level = canonical_log_level($level);
+    return if !log_enabled($level);
+    my $line = "$level: $message";
+    print STDERR "$line\n";
+    system($LOGGER, '-t', $LOG_TAG, '--', $line)
+        if $LOGGER ne '';
+}
+
+sub fatal {
+    my ($message) = @_;
+    log_msg('error', $message);
+    exit 1;
+}
+
+sub usage {
+    print STDERR "usage: " . basename($0) . " validate\n";
+    exit 1;
+}
+
+sub target_prefix {
+    return '' if $TARGET_ROOT eq '/';
+    (my $prefix = $TARGET_ROOT) =~ s{/+\z}{};
+    return $prefix;
+}
+
+sub target_path {
+    my ($path) = @_;
+    return target_prefix() . $path;
+}
+
+sub parse_shell_value {
+    my ($raw) = @_;
+    $raw =~ s/^\s+|\s+\z//g;
+    return '' if $raw eq '';
+
+    if (substr($raw, 0, 1) ne "'") {
+        $raw =~ s/\s+#.*\z//;
+        $raw =~ s/^\s+|\s+\z//g;
+        return $raw;
+    }
+
+    my $out = '';
+    my $i = 0;
+    my $len = length($raw);
+    while ($i < $len) {
+        my $ch = substr($raw, $i, 1);
+        if ($ch eq "'") {
+            $i++;
+            my $end = index($raw, "'", $i);
+            die "unterminated single-quoted value" if $end < 0;
+            $out .= substr($raw, $i, $end - $i);
+            $i = $end + 1;
+            next;
+        }
+        if (substr($raw, $i, 2) eq "\\'") {
+            $out .= "'";
+            $i += 2;
+            next;
+        }
+        if ($ch =~ /\s/) {
+            my $tail = substr($raw, $i);
+            $tail =~ s/^\s+//;
+            return $out if $tail eq '' || $tail =~ /\A#/;
+        }
+        die "unsupported shell value syntax near: " . substr($raw, $i, 16);
+    }
+    return $out;
+}
+
+sub read_config_file {
+    my ($path) = @_;
+    open my $fh, '<', $path or fatal("cannot read $path: $!");
+    local $/;
+    my $raw = <$fh>;
+    close $fh or fatal("cannot close $path: $!");
+    fatal("config file is too large: $path") if length($raw // '') > 65536;
+
+    my @statements;
+    my $current = '';
+    for my $line (split /\n/, $raw, -1) {
+        if ($current eq '' && $line =~ /\A\s*(?:#|\z)/) {
+            next;
+        }
+        $current = length($current) ? "$current\n$line" : $line;
+        my ($raw_value) = $current =~ /\A[A-Z_][A-Z0-9_]*=(.*)\z/s;
+        fatal("invalid config assignment in $path") if !defined $raw_value;
+        my $complete = eval { parse_shell_value($raw_value); 1 };
+        if (!$complete) {
+            next if $@ =~ /unterminated single-quoted value/;
+            fatal("invalid shell value in $path: $@");
+        }
+        push @statements, $current if $current =~ /\S/;
+        $current = '';
+    }
+    fatal("unterminated quoted assignment in $path") if length($current);
+
+    for my $stmt (@statements) {
+        $stmt =~ s/^\s+|\s+\z//g;
+        next if $stmt eq '' || $stmt =~ /\A#/;
+        my ($key, $raw_value) = $stmt =~ /\A([A-Z_][A-Z0-9_]*)=(.*)\z/s
+            or fatal("invalid config assignment in $path");
+        fatal("unsupported config key in preseed network defaults: $key")
+            if !$SUPPORTED_CONFIG_KEY{$key};
+        my $value = eval { parse_shell_value($raw_value) };
+        fatal("invalid shell value for $key: $@") if $@;
+        fatal("control character in $key")
+            if $value =~ /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
+        $CONFIG{$key} = $value;
+    }
+}
+
+sub load_config {
+    $CONFIG_FILE = target_path('/etc/default/preseed-network') if $CONFIG_FILE eq '';
+    fatal("preseed network defaults are missing: $CONFIG_FILE") if !-r $CONFIG_FILE;
+    read_config_file($CONFIG_FILE);
+}
+
+sub valid_iface_name {
+    my ($name) = @_;
+    return 0 if !defined($name) || $name eq '' || $name eq '.' || $name eq '..' || $name eq 'lo';
+    return 0 if length($name) > 15;
+    return $name =~ /\A[A-Za-z0-9_.-]+\z/ ? 1 : 0;
+}
+
+sub normalize_mac {
+    my ($mac) = @_;
+    $mac = lc($mac // '');
+    $mac =~ s/^\s+|\s+\z//g;
+    return $mac;
+}
+
+sub valid_mac {
+    my ($mac) = @_;
+    $mac = normalize_mac($mac);
+    return 0 if $mac eq '00:00:00:00:00:00';
+    return $mac =~ /\A[0-9a-f]{2}(?::[0-9a-f]{2}){5}\z/ ? 1 : 0;
+}
+
+sub valid_ipv4 {
+    my ($value) = @_;
+    return 0 if !defined($value) || $value !~ /\A[0-9]{1,3}(?:\.[0-9]{1,3}){3}\z/;
+    for my $octet (split /\./, $value) {
+        return 0 if $octet > 255;
+    }
+    return 1;
+}
+
+sub valid_ipv4_cidr {
+    my ($value) = @_;
+    my ($addr, $prefix) = ($value // '') =~ /\A([^\/]+)\/([0-9]{1,2})\z/;
+    return 0 if !defined $addr || !valid_ipv4($addr);
+    return $prefix >= 1 && $prefix <= 32 ? 1 : 0;
+}
+
+sub valid_ipv6 {
+    my ($value) = @_;
+    return defined($value) && $value ne '' && $value !~ m{/} && defined inet_pton(AF_INET6, $value);
+}
+
+sub valid_ipv6_cidr {
+    my ($value) = @_;
+    my ($addr, $prefix) = ($value // '') =~ /\A([^\/]+)\/([0-9]{1,3})\z/;
+    return 0 if !defined $addr || !valid_ipv6($addr);
+    return $prefix >= 1 && $prefix <= 128 ? 1 : 0;
+}
+
+sub valid_domain {
+    my ($value) = @_;
+    return 1 if !defined($value) || $value eq '';
+    return 0 if length($value) > 253 || $value =~ /\A[.]|[.]\z|[.]{2}/;
+    for my $part (split /\./, $value) {
+        return 0 if $part eq '' || length($part) > 63;
+        return 0 if $part !~ /\A[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\z/;
+    }
+    return 1;
+}
+
+sub split_words {
+    my ($value) = @_;
+    return grep { $_ ne '' } split /\s+/, $value // '';
+}
+
+sub link_types {
+    my @out;
+    my %seen;
+    for my $item (split_words(lc($CONFIG{PRESEED_NETWORK_LINK_TYPES}))) {
+        fatal("unsupported link type in defaults: $item")
+            if $item ne 'ethernet' && $item ne 'wifi';
+        next if $seen{$item}++;
+        push @out, $item;
+    }
+    fatal('PRESEED_NETWORK_LINK_TYPES must include at least one link type') if !@out;
+    return @out;
+}
+
+sub file_mode {
+    my ($path) = @_;
+    my @st = stat $path;
+    return '' if !@st;
+    return sprintf '%04o', $st[2] & 07777;
+}
+
+sub slurp_limited {
+    my ($path) = @_;
+    open my $fh, '<', $path or fatal("cannot read $path: $!");
+    local $/;
+    my $content = <$fh>;
+    close $fh or fatal("cannot close $path: $!");
+    fatal("$path is too large") if length($content // '') > 131072;
+    return $content // '';
+}
+
+sub iface_is_wifi {
+    my ($sys_iface) = @_;
+    return -d "$sys_iface/wireless" || -d "$sys_iface/phy80211";
+}
+
+sub read_sys_value {
+    my ($path) = @_;
+    open my $fh, '<', $path or return undef;
+    my $value = <$fh>;
+    close $fh;
+    return undef if !defined $value;
+    chomp $value;
+    return $value;
+}
+
+sub validate_paths {
+    fatal("PRESEED_TARGET_ROOT must be absolute: $TARGET_ROOT") if $TARGET_ROOT !~ m{\A/};
+    fatal("target root is missing: $TARGET_ROOT") if !-d $TARGET_ROOT;
+    fatal("PRESEED_SYS_CLASS_NET must be absolute: $SYS_CLASS_NET") if $SYS_CLASS_NET !~ m{\A/};
+    fatal("sysfs net directory is missing: $SYS_CLASS_NET") if !-d $SYS_CLASS_NET;
+}
+
+sub validate_config_values {
+    fatal('SYSTEMD_LOG_LEVEL must be debug, info, warning, error, or none')
+        if lc($CONFIG{SYSTEMD_LOG_LEVEL}) !~ /\A(?:debug|info|warn|warning|error|none)\z/;
+    $CONFIG{SYSTEMD_LOG_LEVEL} = canonical_log_level($CONFIG{SYSTEMD_LOG_LEVEL});
+    fatal('PRESEED_NETWORK_MODE must be static') if $CONFIG{PRESEED_NETWORK_MODE} ne 'static';
+    fatal('PRESEED_NETWORK_DOMAIN is invalid') if !valid_domain($CONFIG{PRESEED_NETWORK_DOMAIN});
+    fatal('PRESEED_NETWORK_IPV4_GATEWAY is invalid') if !valid_ipv4($CONFIG{PRESEED_NETWORK_IPV4_GATEWAY});
+    fatal('PRESEED_NETWORK_IPV6_GATEWAY is invalid') if !valid_ipv6($CONFIG{PRESEED_NETWORK_IPV6_GATEWAY});
+    for my $dns (split_words($CONFIG{PRESEED_NETWORK_IPV4_DNS})) {
+        fatal('PRESEED_NETWORK_IPV4_DNS contains an invalid IPv4 address') if !valid_ipv4($dns);
+    }
+    for my $dns (split_words($CONFIG{PRESEED_NETWORK_IPV6_DNS})) {
+        fatal('PRESEED_NETWORK_IPV6_DNS contains an invalid IPv6 address') if !valid_ipv6($dns);
+    }
+    if (grep { $_ eq 'wifi' } link_types()) {
+        fatal('PRESEED_NETWORK_WIFI_ESSID is missing') if $CONFIG{PRESEED_NETWORK_WIFI_ESSID} eq '';
+        fatal('PRESEED_NETWORK_WIFI_PSK_SECURITY is invalid')
+            if lc($CONFIG{PRESEED_NETWORK_WIFI_PSK_SECURITY}) !~ /\A(?:open|wep|open\/wep|wpa|sae)\z/;
+    }
+}
+
+sub validate_expected_interface {
+    my ($link_type) = @_;
+    my $upper = uc($link_type);
+    my $iface = $CONFIG{"PRESEED_NETWORK_${upper}_IFACE"};
+    my $mac = normalize_mac($CONFIG{"PRESEED_NETWORK_${upper}_MAC"});
+    my $ipv4 = $CONFIG{"PRESEED_NETWORK_${upper}_IPV4_CIDR"};
+    my $ipv6 = $CONFIG{"PRESEED_NETWORK_${upper}_IPV6_CIDR"};
+
+    fatal("missing interface name for $link_type") if !valid_iface_name($iface);
+    fatal("invalid MAC for $link_type") if !valid_mac($mac);
+    fatal("invalid IPv4 CIDR for $link_type") if !valid_ipv4_cidr($ipv4);
+    fatal("invalid IPv6 CIDR for $link_type") if !valid_ipv6_cidr($ipv6);
+
+    my $sys_iface = "$SYS_CLASS_NET/$iface";
+    fatal("expected $link_type interface is absent: $iface") if !-d $sys_iface;
+    my $actual_mac = normalize_mac(read_sys_value("$sys_iface/address") // '');
+    fatal("expected $link_type interface $iface has MAC $actual_mac, expected $mac")
+        if $actual_mac ne $mac;
+    my $type = read_sys_value("$sys_iface/type") // '';
+    fatal("expected $link_type interface $iface is not an ARPHRD_ETHER adapter")
+        if $type ne '1';
+    if ($link_type eq 'wifi') {
+        fatal("expected Wi-Fi interface $iface is not marked wireless")
+            if !iface_is_wifi($sys_iface);
+    } else {
+        fatal("expected Ethernet interface $iface is marked wireless")
+            if iface_is_wifi($sys_iface);
+    }
+}
+
+sub validate_staged_files {
+    my @types = link_types();
+    my $interfaces = target_path('/etc/network/interfaces');
+    my $managed = target_path('/etc/network/interfaces.d/50-preseed-network');
+    fatal("missing $interfaces") if !-r $interfaces;
+    fatal("missing $managed") if !-r $managed;
+    fatal("$CONFIG_FILE must be mode 0600") if file_mode($CONFIG_FILE) ne '0600';
+    if (grep { $_ eq 'wifi' } @types) {
+        fatal("$managed must be mode 0600 for Wi-Fi static configuration")
+            if file_mode($managed) ne '0600';
+    }
+
+    my $base = slurp_limited($interfaces);
+    fatal("$interfaces does not source interfaces.d")
+        if $base !~ /^source[ \t]+\/etc\/network\/interfaces\.d\/\*/m;
+
+    my $content = slurp_limited($managed);
+    for my $link_type (@types) {
+        my $upper = uc($link_type);
+        my $iface = $CONFIG{"PRESEED_NETWORK_${upper}_IFACE"};
+        fatal("$managed lacks static IPv4 stanza for $iface")
+            if $content !~ /^iface[ \t]+\Q$iface\E[ \t]+inet[ \t]+static\b/m;
+        fatal("$managed lacks static IPv6 stanza for $iface")
+            if $content !~ /^iface[ \t]+\Q$iface\E[ \t]+inet6[ \t]+static\b/m;
+        if ($link_type eq 'wifi') {
+            fatal("$managed lacks Wi-Fi SSID stanza")
+                if $content !~ /^[ \t]+wpa-ssid[ \t]+\Q$CONFIG{PRESEED_NETWORK_WIFI_ESSID}\E[ \t]*$/m;
+            my $security = lc($CONFIG{PRESEED_NETWORK_WIFI_PSK_SECURITY});
+            if ($security eq 'sae') {
+                fatal("$managed lacks SAE key management")
+                    if $content !~ /^[ \t]+wpa-key-mgmt[ \t]+SAE[ \t]*$/m;
+                fatal("$managed lacks WPA/SAE PSK material")
+                    if $content !~ /^[ \t]+wpa-psk[ \t]+\S+[ \t]*$/m;
+            } elsif ($security eq 'wpa') {
+                fatal("$managed lacks WPA-PSK key management")
+                    if $content !~ /^[ \t]+wpa-key-mgmt[ \t]+WPA-PSK[ \t]*$/m;
+                fatal("$managed lacks WPA/SAE PSK material")
+                    if $content !~ /^[ \t]+wpa-psk[ \t]+\S+[ \t]*$/m;
+            } elsif ($security eq 'wep') {
+                fatal("$managed lacks WEP key material")
+                    if $content !~ /^[ \t]+wpa-wep-key0[ \t]+\S+[ \t]*$/m;
+            }
+        }
+    }
+}
+
+sub validate_preseed_network {
+    validate_paths();
+    load_config();
+    validate_config_values();
+    for my $link_type (link_types()) {
+        validate_expected_interface($link_type);
+    }
+    validate_staged_files();
+    log_msg('info', 'validated static preseed network staging');
+}
+
+if (@ARGV != 1 || $ARGV[0] ne 'validate') {
+    usage();
+}
+validate_preseed_network();

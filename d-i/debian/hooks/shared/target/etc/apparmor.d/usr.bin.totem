@@ -1,0 +1,63 @@
+# Managed by debian-preseed-di.
+
+#include <tunables/global>
+
+profile /usr/bin/totem /usr/bin/totem flags=(attach_disconnected, complain) {
+  #include <abstractions/base>
+  include if exists <abstractions/audio>
+  include if exists <abstractions/dbus-session>
+  include if exists <abstractions/dconf>
+  include if exists <abstractions/dri-common>
+  include if exists <abstractions/fonts>
+  include if exists <abstractions/freedesktop.org>
+  include if exists <abstractions/gnome>
+  include if exists <abstractions/gtk>
+  include if exists <abstractions/nameservice>
+  include if exists <abstractions/qt6>
+  include if exists <abstractions/user-tmp>
+
+  capability sys_nice,
+
+  /usr/bin/totem mr,
+  /usr/lib/** mr,
+  /usr/libexec/** mr,
+  /usr/share/** r,
+  /etc/** r,
+
+  /dev/dri/** rw,
+  /dev/snd/** rw,
+  /dev/video* rw,
+  /proc/** r,
+  /sys/** r,
+
+  owner @{HOME}/** r,
+  owner @{HOME}/.cache/** rwk,
+  owner @{HOME}/.config/** rwk,
+  owner @{HOME}/.local/share/** rwk,
+  owner /run/user/*/** rwk,
+  /tmp/** rwk,
+
+  profile sanitized_helper flags=(attach_disconnected, complain) {
+    #include <abstractions/base>
+    include if exists <abstractions/fonts>
+    include if exists <abstractions/nameservice>
+    include if exists <abstractions/user-tmp>
+
+    /usr/bin/totem mr,
+    /usr/lib/** mr,
+    /usr/libexec/** mr,
+    /usr/share/** r,
+    /etc/** r,
+    /proc/** r,
+    /sys/** r,
+
+    owner @{HOME}/** r,
+    owner @{HOME}/.cache/** rwk,
+    owner /run/user/*/** rwk,
+    /tmp/** rwk,
+
+    include if exists <local/usr.bin.totem>
+  }
+
+  include if exists <local/usr.bin.totem>
+}

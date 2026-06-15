@@ -1,0 +1,173 @@
+{
+  "layer": "top",
+  "position": "top",
+  "height": 42,
+  "spacing": 6,
+  "margin-top": 8,
+  "margin-left": 14,
+  "margin-right": 14,
+  "modules-left": [
+    "custom/launcher",
+    "custom/files",
+    "custom/terminal",
+    "wlr/taskbar"
+  ],
+  "modules-center": [
+    "clock"
+  ],
+  "modules-right": [
+    "ext/workspaces",
+    "network",
+    "pulseaudio",
+    "backlight",
+    "battery",
+    "disk",
+    "cpu",
+    "memory",
+    "tray",
+    "custom/dnd",
+    "custom/lock",
+    "custom/power"
+  ],
+  "ext/workspaces": {
+    "format": "{name}",
+    "sort-by-name": true,
+    "on-click": "activate",
+    "active-only": false,
+    "all-outputs": true
+  },
+  "wlr/taskbar": {
+    "format": "{icon}",
+    "icon-size": 20,
+    "icon-theme": "Papirus-Dark",
+    "tooltip-format": "{name}\n{title}",
+    "on-click": "activate",
+    "on-click-middle": "close",
+    "on-click-right": "minimize-raise",
+    "app_ids-mapping": {
+      "footclient": "foot",
+      "org.xfce.Thunar": "thunar"
+    }
+  },
+  "custom/launcher": {
+    "format": "Menu",
+    "tooltip": false,
+    "on-click": "labwc-run"
+  },
+  "custom/files": {
+    "format": "Files",
+    "tooltip": false,
+    "on-click": "thunar"
+  },
+  "custom/terminal": {
+    "format": "Term",
+    "tooltip": false,
+    "on-click": "labwc-terminal"
+  },
+  "clock": {
+    "interval": 30,
+    "format": "{:%a %H:%M}",
+    "format-alt": "{:%Y-%m-%d %H:%M:%S}",
+    "tooltip-format": "<tt><small>{calendar}</small></tt>",
+    "calendar": {
+      "mode": "month",
+      "weeks-pos": "right",
+      "format": {
+        "months": "<span color='#ecb860'><b>{}</b></span>",
+        "weekdays": "<span color='#6dc4ed'><b>{}</b></span>",
+        "weeks": "<span color='#94d2bd'>W{}</span>",
+        "today": "<span color='#ffb4a2'><b><u>{}</u></b></span>"
+      }
+    },
+    "on-click": "gsimplecal"
+  },
+  "network": {
+    "interval": 5,
+    "family": "ipv4",
+    "format-wifi": "WiFi {signalStrength}%",
+    "format-ethernet": "LAN",
+    "format-linked": "LAN link",
+    "format-disconnected": "Net off",
+    "format-disabled": "Net off",
+    "tooltip-format-wifi": "{essid}\n{signalStrength}%  {ipaddr}\nUp {bandwidthUpBytes}  Down {bandwidthDownBytes}",
+    "tooltip-format-ethernet": "{ifname}\n{ipaddr}\nUp {bandwidthUpBytes}  Down {bandwidthDownBytes}",
+    "on-click": "labwc-terminal -e nmtui"
+  },
+  "pulseaudio": {
+    "format": "Vol {volume}%",
+    "format-muted": "Mute",
+    "tooltip-format": "{desc}",
+    "scroll-step": 5,
+    "on-click": "pavucontrol",
+    "on-click-middle": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "on-scroll-up": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+",
+    "on-scroll-down": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+  },
+  "backlight": {
+    "format": "Bri {percent}%",
+    "tooltip-format": "Brightness {percent}%",
+    "scroll-step": 5
+  },
+  "battery": {
+    "interval": 15,
+    "format": "Bat {capacity}%",
+    "format-charging": "AC {capacity}%",
+    "format-full": "Full {capacity}%",
+    "format-warning": "Low {capacity}%",
+    "format-critical": "Crit {capacity}%",
+    "tooltip-format": "{timeTo}\nHealth {health}%  Cycles {cycles}",
+    "states": {
+      "warning": 30,
+      "critical": 15
+    }
+  },
+  "disk": {
+    "path": "/",
+    "interval": 30,
+    "format": "Disk {percentage_used}%",
+    "tooltip-format": "{used} used out of {total} on {path} ({percentage_used}%)",
+    "on-click": "labwc-terminal -e ncdu /",
+    "states": {
+      "warning": 80,
+      "critical": 90
+    }
+  },
+  "cpu": {
+    "interval": 5,
+    "format": "CPU {usage}%",
+    "on-click": "labwc-terminal -e btop",
+    "states": {
+      "warning": 70,
+      "critical": 90
+    }
+  },
+  "memory": {
+    "interval": 10,
+    "format": "RAM {percentage}%",
+    "tooltip-format": "{used:0.1f} GiB / {total:0.1f} GiB\nSwap {swapUsed:0.1f} / {swapTotal:0.1f} GiB",
+    "on-click": "labwc-terminal -e btop",
+    "states": {
+      "warning": 75,
+      "critical": 90
+    }
+  },
+  "tray": {
+    "icon-size": 18,
+    "spacing": 8
+  },
+  "custom/dnd": {
+    "format": "DND",
+    "tooltip": false,
+    "on-click": "makoctl mode -t do-not-disturb"
+  },
+  "custom/lock": {
+    "format": "Lock",
+    "tooltip": false,
+    "on-click": "labwc-lock"
+  },
+  "custom/power": {
+    "format": "Power",
+    "tooltip": false,
+    "on-click": "labwc-power-menu"
+  }
+}

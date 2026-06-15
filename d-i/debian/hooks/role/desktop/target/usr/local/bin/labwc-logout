@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+shutdown_hook="${XDG_CONFIG_HOME:-${HOME}/.config}/labwc/shutdown"
+
+if [ -x "$shutdown_hook" ]; then
+  "$shutdown_hook" >/dev/null 2>&1 || true
+fi
+
+if [ -n "${XDG_SESSION_ID:-}" ] && command -v loginctl >/dev/null 2>&1; then
+  exec loginctl terminate-session "$XDG_SESSION_ID"
+fi
+
+if command -v pkill >/dev/null 2>&1; then
+  pkill -x labwc >/dev/null 2>&1 || true
+fi
+
+exit 0

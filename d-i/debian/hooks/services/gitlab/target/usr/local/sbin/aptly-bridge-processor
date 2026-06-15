@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+shopt -s nullglob inherit_errexit 2>/dev/null || true
+
+PROG="${0##*/}"
+REQUESTS_DIR="${APTLY_BRIDGE_REQUESTS_DIR:-/pool/aptly/queue/requests}"
+RESULTS_DIR="${APTLY_BRIDGE_RESULTS_DIR:-/pool/aptly/queue/results}"
+PROCESSING_DIR="${APTLY_BRIDGE_PROCESSING_DIR:-/pool/aptly/queue/processing}"
+RUNNER_USER="${APTLY_BRIDGE_RUNNER_USER:-glab-aptly}"
+
+info() {
+  printf '%s: %s\n' "$PROG" "$*" >&2
+}
+
+die() {
+  printf '%s: %s\n' "$PROG" "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+validate_dir() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" == /* ]] || die "${label} must be an absolute path"
+  [[ -d "$value" && ! -L "$value" ]] || die "${label} is missing: ${value}"
+}
+
+write_result() {
+  local result_path="$1"
+  local owner_uid="$2"
+  local owner_gid="$3"
+  local exit_code="$4"
+  local stdout_path="$5"
+  local stderr_path="$6"
+  require_cmd python3
+  python3 - "$result_path" "$exit_code" "$stdout_path" "$stderr_path" <<'PY'
+import json
+import pathlib
+import sys
+
+result_path = pathlib.Path(sys.argv[1])
+exit_code = int(sys.argv[2])
+stdout_path = pathlib.Path(sys.argv[3])
+stderr_path = pathlib.Path(sys.argv[4])
+payload = {
+    "exit_code": exit_code,
+    "status": "success" if exit_code == 0 else "error",
+    "stdout": stdout_path.read_text() if stdout_path.exists() else "",
+    "stderr": stderr_path.read_text() if stderr_path.exists() else "",
+}
+result_path.write_text(json.dumps(payload, indent=2) + "\n")
+PY
+  chown "${owner_uid}:${owner_gid}" "$result_path"
+  chmod 0600 "$result_path"
+}
+
+process_one_request() {
+  local request_path="$1"
+  local processing_path request_uid request_gid result_path stdout_log stderr_log
+  local request_id
+  local -a request_args=()
+
+  [[ -f "$request_path" && ! -L "$request_path" ]] || return 0
+  request_id="${request_path##*/}"
+  request_id="${request_id%.json}"
+  processing_path="${PROCESSING_DIR%/}/${request_id}.json"
+  mv -- "$request_path" "$processing_path"
+
+  request_uid="$(stat -c '%u' -- "$processing_path")"
+  request_gid="$(stat -c '%g' -- "$processing_path")"
+  result_path="${RESULTS_DIR%/}/${request_id}.json"
+  stdout_log="${PROCESSING_DIR%/}/${request_id}.stdout"
+  stderr_log="${PROCESSING_DIR%/}/${request_id}.stderr"
+
+  mapfile -t request_args < <(python3 - "$processing_path" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+
+request_path = pathlib.Path(sys.argv[1])
+st = os.stat(request_path, follow_symlinks=False)
+if not stat.S_ISREG(st.st_mode):
+    raise SystemExit("bridge request is not a regular file")
+if st.st_size > 65536:
+    raise SystemExit("bridge request is too large")
+data = json.loads(request_path.read_text())
+if data.get("version") != 1:
+    raise SystemExit("unsupported bridge request version")
+request_id = data.get("request_id", "")
+args = data.get("args")
+if not isinstance(request_id, str) or not request_id:
+    raise SystemExit("bridge request_id is missing")
+if not isinstance(args, list) or len(args) < 2:
+    raise SystemExit("bridge args are missing")
+if args[0] != "publish" or args[1] not in {"snapshot", "repo"}:
+    raise SystemExit("bridge only supports aptly publish snapshot|repo")
+for arg in args:
+    if not isinstance(arg, str) or not arg:
+        raise SystemExit("bridge args must be non-empty strings")
+    if len(arg) > 512:
+        raise SystemExit("bridge arg too long")
+    if any(ord(ch) < 32 for ch in arg):
+        raise SystemExit("bridge args contain unsupported control characters")
+for item in args:
+    print(item)
+PY
+  )
+
+  if [[ "${#request_args[@]}" -eq 0 ]]; then
+    printf 'invalid bridge request: %s\n' "$processing_path" >"$stderr_log"
+    : >"$stdout_log"
+    write_result "$result_path" "$request_uid" "$request_gid" 1 "$stdout_log" "$stderr_log"
+    rm -f -- "$processing_path" "$stdout_log" "$stderr_log"
+    return 0
+  fi
+
+  if /usr/local/sbin/aptly-managed --runner-user "$RUNNER_USER" run "${request_args[@]}" >"$stdout_log" 2>"$stderr_log"; then
+    write_result "$result_path" "$request_uid" "$request_gid" 0 "$stdout_log" "$stderr_log"
+  else
+    rc=$?
+    write_result "$result_path" "$request_uid" "$request_gid" "$rc" "$stdout_log" "$stderr_log"
+  fi
+
+  rm -f -- "$processing_path" "$stdout_log" "$stderr_log"
+}
+
+main() {
+  require_cmd python3
+  validate_dir REQUESTS_DIR "$REQUESTS_DIR"
+  validate_dir RESULTS_DIR "$RESULTS_DIR"
+  validate_dir PROCESSING_DIR "$PROCESSING_DIR"
+
+  local request_path
+  for request_path in "${REQUESTS_DIR%/}"/*.json; do
+    process_one_request "$request_path"
+  done
+  info "processed queued Aptly bridge requests"
+}
+
+main "$@"

@@ -1,0 +1,36 @@
+// Managed by debian-preseed-di.
+//
+// Conservative automatic maintenance policy: apply updates from the installed
+// Debian release/security pockets, remove obsolete dependency leaves, and never
+// reboot without an explicit operator action.
+
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename},label=Debian";
+        "origin=Debian,codename=${distro_codename},label=Debian-Security";
+        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+        "origin=Debian,codename=${distro_codename}-updates,label=Debian";
+};
+
+Unattended-Upgrade::Package-Blacklist {
+};
+
+Unattended-Upgrade::Mail "";
+Unattended-Upgrade::MailReport "on-change";
+
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::InstallOnShutdown "false";
+Unattended-Upgrade::OnlyOnACPower "false";
+Unattended-Upgrade::Skip-Updates-On-Metered-Connections "true";
+
+Unattended-Upgrade::SyslogEnable "true";
+Unattended-Upgrade::SyslogFacility "daemon";
+Unattended-Upgrade::Verbose "false";
+Unattended-Upgrade::Debug "false";
