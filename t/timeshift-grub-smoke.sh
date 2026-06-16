@@ -110,6 +110,7 @@ if /bin/sh -n "$snapshot_helper" &&
    grep -q 'flock -n 9' "$grub_refresh_helper" &&
    grep -q 'new_temp_file()' "$grub_refresh_helper" &&
    grep -q 'remove_temp_file "$profile_body"' "$grub_refresh_helper" &&
+   ! grep -q 'cat <<EOF' "$grub_refresh_helper" &&
    ! grep -q 'update-grub' "$grub_refresh_helper"; then
   pass "managed Timeshift and GRUB snapshot helpers are syntax-valid"
 else

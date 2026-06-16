@@ -191,17 +191,22 @@ apply_placeholder_map_to_target() {
   target_path=$1
   map_func=$2
   rendered_tmp="${target_path}.map.$$"
+  map_tmp="${TMP_ENV_DIR}/target-placeholder-map.$$.tmp"
 
   set --
+  if ! "$map_func" >"$map_tmp"; then
+    rm -f "$map_tmp"
+    installer_fatal "failed to render placeholder map ${map_func} for ${target_path}"
+  fi
   while IFS= read -r map_line || [ -n "$map_line" ]; do
     map_name=${map_line%%=*}
     map_value=${map_line#*=}
     [ -n "$map_name" ] || continue
     set -- "$@" "$map_name" "$map_value"
-  done <<EOF
-$("$map_func")
-EOF
+  done <"$map_tmp"
+  rm -f "$map_tmp"
   installer_apply_scalar_placeholders "$target_path" "$rendered_tmp" "$@" || {
+    rm -f "$map_tmp"
     rm -f "$rendered_tmp"
     installer_fatal "failed to apply placeholder map ${map_func} to ${target_path}"
   }

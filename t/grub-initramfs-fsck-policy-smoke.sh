@@ -153,6 +153,17 @@ else
   fail "secure boot helper queues MOK deletions before import and no longer defers duplicate cleanup"
 fi
 
+if grep -q '^validate_secure_boot_certificate_settings() {$' "$secure_boot_tool" &&
+   grep -F -q 'validate_country_code SECURE_BOOT_MOK_COUNTRY "$SECURE_BOOT_MOK_COUNTRY"' "$secure_boot_tool" &&
+   grep -F -q "printf '%s\\n' '[ req ]'" "$secure_boot_tool" &&
+   grep -F -q 'printf '\''mok_signing_key=%s\n'\'' "$(shell_single_quote "$SECURE_BOOT_MOK_KEY")"' "$secure_boot_tool" &&
+   ! grep -F -q 'cat >"$SECURE_BOOT_OPENSSL_CONFIG" <<' "$secure_boot_tool" &&
+   ! grep -F -q 'cat >"$SECURE_BOOT_DKMS_CONF" <<' "$secure_boot_tool"; then
+  pass "secure boot helper validates certificate settings and avoids expanding heredocs for generated configs"
+else
+  fail "secure boot helper validates certificate settings and avoids expanding heredocs for generated configs"
+fi
+
 boot_env="$ROOT_DIR/d-i/debian/hosts/shared/boot.env"
 display_template="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/default/grub.d/07-display.cfg.tmpl"
 if grep -q '^GRUB_DISPLAY_GFXMODE="1024x768,auto"$' "$boot_env" &&

@@ -235,8 +235,13 @@ render_target_template() {
   dest=$2
   mode=$3
   dest_parent=$(dirname "$dest")
+  map_tmp="${TMP_ENV_DIR}/template-placeholder-map.$$.tmp"
   [ -d "$dest_parent" ] || install -d -m 0755 "$dest_parent"
   cp "$src" "$dest"
+  if ! render_target_template_placeholder_map >"$map_tmp"; then
+    rm -f "$map_tmp"
+    installer_fatal "failed to render template placeholder map for ${dest}"
+  fi
   while IFS= read -r map_line || [ -n "$map_line" ]; do
     map_name=${map_line%%=*}
     map_value=${map_line#*=}
@@ -249,9 +254,8 @@ render_target_template() {
       "$dest" \
       "__${map_name}__" \
       "$map_value" || installer_fatal "failed to render direct template placeholder ${map_name} into ${dest}"
-  done <<EOF
-$(render_target_template_placeholder_map)
-EOF
+  done <"$map_tmp"
+  rm -f "$map_tmp"
   apply_tmpfs_policy_placeholders "$dest"
   apply_tmpfs_pre_clean_placeholders "$dest"
   apply_apt_refresh_placeholders "$dest"

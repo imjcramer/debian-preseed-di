@@ -483,22 +483,17 @@ configure_target_timeshift() {
     0600 \
     timeshift_placeholder_map
 
-  while IFS='|' read -r shared_relpath target_path mode || [ -n "${shared_relpath:-}" ]; do
-    [ -n "$shared_relpath" ] || continue
-    btrfs_stage_shared_target_asset "$shared_relpath" "$target_path" "$mode"
-  done <<EOF
-etc/default/grub-btrfs/config.tmpl|${FILE_GRUB_BTRFS_CONFIG}|0644
-usr/local/sbin/timeshift-managed-snapshot|${FILE_TIMESHIFT_SNAPSHOT_HELPER}|0755
-usr/local/sbin/grub-btrfs-refresh|${FILE_GRUB_BTRFS_REFRESH_HELPER}|0755
-etc/systemd/system/timeshift-daily.service|${FILE_TIMESHIFT_DAILY_SERVICE}|0644
-etc/systemd/system/timeshift-daily.timer|${FILE_TIMESHIFT_DAILY_TIMER}|0644
-etc/systemd/system/timeshift-weekly.service|${FILE_TIMESHIFT_WEEKLY_SERVICE}|0644
-etc/systemd/system/timeshift-weekly.timer|${FILE_TIMESHIFT_WEEKLY_TIMER}|0644
-etc/systemd/system/timeshift-monthly.service|${FILE_TIMESHIFT_MONTHLY_SERVICE}|0644
-etc/systemd/system/timeshift-monthly.timer|${FILE_TIMESHIFT_MONTHLY_TIMER}|0644
-etc/systemd/system/grub-btrfs-refresh.service|${FILE_GRUB_BTRFS_REFRESH_SERVICE}|0644
-etc/systemd/system/grub-btrfs-refresh.path|${FILE_GRUB_BTRFS_REFRESH_PATH}|0644
-EOF
+  btrfs_stage_shared_target_asset etc/default/grub-btrfs/config.tmpl "${FILE_GRUB_BTRFS_CONFIG}" 0644
+  btrfs_stage_shared_target_asset usr/local/sbin/timeshift-managed-snapshot "${FILE_TIMESHIFT_SNAPSHOT_HELPER}" 0755
+  btrfs_stage_shared_target_asset usr/local/sbin/grub-btrfs-refresh "${FILE_GRUB_BTRFS_REFRESH_HELPER}" 0755
+  btrfs_stage_shared_target_asset etc/systemd/system/timeshift-daily.service "${FILE_TIMESHIFT_DAILY_SERVICE}" 0644
+  btrfs_stage_shared_target_asset etc/systemd/system/timeshift-daily.timer "${FILE_TIMESHIFT_DAILY_TIMER}" 0644
+  btrfs_stage_shared_target_asset etc/systemd/system/timeshift-weekly.service "${FILE_TIMESHIFT_WEEKLY_SERVICE}" 0644
+  btrfs_stage_shared_target_asset etc/systemd/system/timeshift-weekly.timer "${FILE_TIMESHIFT_WEEKLY_TIMER}" 0644
+  btrfs_stage_shared_target_asset etc/systemd/system/timeshift-monthly.service "${FILE_TIMESHIFT_MONTHLY_SERVICE}" 0644
+  btrfs_stage_shared_target_asset etc/systemd/system/timeshift-monthly.timer "${FILE_TIMESHIFT_MONTHLY_TIMER}" 0644
+  btrfs_stage_shared_target_asset etc/systemd/system/grub-btrfs-refresh.service "${FILE_GRUB_BTRFS_REFRESH_SERVICE}" 0644
+  btrfs_stage_shared_target_asset etc/systemd/system/grub-btrfs-refresh.path "${FILE_GRUB_BTRFS_REFRESH_PATH}" 0644
 
   for unit in \
     timeshift-daily.timer \

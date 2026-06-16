@@ -120,9 +120,14 @@ render_target_asset_with_placeholders() {
   map_func=$4
   tmp_asset="${TMP_ENV_DIR}/asset.$$.tmp"
   tmp_rendered="${TMP_ENV_DIR}/asset.$$.rendered"
+  map_tmp="${TMP_ENV_DIR}/asset.$$.map"
 
   fetch_hook "$repo_path" "$tmp_asset"
   cp "$tmp_asset" "$tmp_rendered"
+  if ! "$map_func" >"$map_tmp"; then
+    rm -f "$tmp_asset" "$tmp_rendered" "$map_tmp"
+    installer_fatal "failed to render D-Bus placeholder map for ${repo_path}"
+  fi
   while IFS= read -r map_line || [ -n "$map_line" ]; do
     map_name=${map_line%%=*}
     map_value=${map_line#*=}
@@ -131,12 +136,11 @@ render_target_asset_with_placeholders() {
       "$tmp_rendered" \
       "__INSTALLER_${map_name}__" \
       "$map_value" || {
-        rm -f "$tmp_asset" "$tmp_rendered"
+        rm -f "$tmp_asset" "$tmp_rendered" "$map_tmp"
         installer_fatal "failed to render D-Bus template placeholder ${map_name} for ${repo_path}"
       }
-  done <<EOF
-$("$map_func")
-EOF
+  done <"$map_tmp"
+  rm -f "$map_tmp"
   ensure_target_asset_parent "$target_path"
   install -m "$mode" "$tmp_rendered" "/target${target_path}"
   rm -f "$tmp_asset" "$tmp_rendered"

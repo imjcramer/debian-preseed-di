@@ -67,23 +67,26 @@ fetch_hook() {
 }
 
 install_storage_layout_hook() {
+  layout_hook_tmp_env_dir=$(installer_shell_quote "$TMP_ENV_DIR")
+  layout_hook_family=$(installer_shell_quote "$HOOK_FAMILY")
+
   fetch_hook_file "hooks/shared/partman/finish.d/99-storage-layout.sh" "$TMP_ENV_DIR/partman-layout-common.sh"
-  cat >"$LAYOUT_HOOK" <<EOF
-#!/bin/sh
-set -eu
-IFS=\$(printf ' \t\nX'); IFS=\${IFS%X}
-umask 022
-TMP_ENV_DIR=${TMP_ENV_DIR}
-HOOK_FAMILY=${HOOK_FAMILY}
-LAYOUT_COMMON="\${TMP_ENV_DIR}/partman-layout-common.sh"
-[ -r "\$LAYOUT_COMMON" ] || {
-  printf '[partman-layout] ERROR: missing shared finish helper %s\n' "\$LAYOUT_COMMON" >&2
-  exit 1
-}
-# shellcheck disable=SC1090
-. "\$LAYOUT_COMMON"
-run_btrfs_storage_layout
-EOF
+  {
+    printf '%s\n' '#!/bin/sh'
+    printf '%s\n' 'set -eu'
+    printf '%s\n' "IFS=\$(printf ' \t\nX'); IFS=\${IFS%X}"
+    printf '%s\n' 'umask 022'
+    printf 'TMP_ENV_DIR=%s\n' "$layout_hook_tmp_env_dir"
+    printf 'HOOK_FAMILY=%s\n' "$layout_hook_family"
+    printf '%s\n' 'LAYOUT_COMMON="${TMP_ENV_DIR}/partman-layout-common.sh"'
+    printf '%s\n' '[ -r "$LAYOUT_COMMON" ] || {'
+    printf '%s\n' "  printf '[partman-layout] ERROR: missing shared finish helper %s\n' \"\$LAYOUT_COMMON\" >&2"
+    printf '%s\n' '  exit 1'
+    printf '%s\n' '}'
+    printf '%s\n' '# shellcheck disable=SC1090'
+    printf '%s\n' '. "$LAYOUT_COMMON"'
+    printf '%s\n' 'run_btrfs_storage_layout'
+  } >"$LAYOUT_HOOK"
   chmod 0755 "$LAYOUT_HOOK"
 }
 

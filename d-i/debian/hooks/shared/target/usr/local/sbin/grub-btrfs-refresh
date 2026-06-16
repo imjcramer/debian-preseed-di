@@ -314,23 +314,31 @@ main() {
           [[ -d "${snapshot_root}/${snapshot_name}/${snapshot_root_subvolume}/lib/modules/${kernel_ver}" ]] || continue
 
           kernel_title_escaped=$(grub_single_quote "[${profile_label}] ${kernel_ver}")
-          cat <<EOF >>"$profile_body"
-    menuentry '${kernel_title_escaped}' --id '${snapshot_entry_id}_$(grub_id_fragment "$profile_name")_$(grub_id_fragment "$kernel_ver")' {
-        if [ -s \$prefix/grubenv ]; then
-            set installer_linux_last_profile='${profile_name}'
-            set installer_linux_last_kernel='${kernel_ver}'
-            save_env installer_linux_last_profile
-            save_env installer_linux_last_kernel
-        fi
-        insmod gzio
-        insmod zstd
-        insmod part_gpt
-        insmod ext2
-        ${boot_search}
-        linux   /vmlinuz-${kernel_ver} ${root_arg} ro ${snapshot_rootfs_flags} ${base_cmdline} bootprofile=${profile_name} ${profile_flags}
-        initrd  /initrd.img-${kernel_ver}
-    }
-EOF
+          {
+            printf "    menuentry '%s' --id '%s' {\n" \
+              "$kernel_title_escaped" \
+              "${snapshot_entry_id}_$(grub_id_fragment "$profile_name")_$(grub_id_fragment "$kernel_ver")"
+            printf '%s\n' '        if [ -s $prefix/grubenv ]; then'
+            printf "            set installer_linux_last_profile='%s'\n" "$profile_name"
+            printf "            set installer_linux_last_kernel='%s'\n" "$kernel_ver"
+            printf '%s\n' '            save_env installer_linux_last_profile'
+            printf '%s\n' '            save_env installer_linux_last_kernel'
+            printf '%s\n' '        fi'
+            printf '%s\n' '        insmod gzio'
+            printf '%s\n' '        insmod zstd'
+            printf '%s\n' '        insmod part_gpt'
+            printf '%s\n' '        insmod ext2'
+            printf '        %s\n' "$boot_search"
+            printf '        linux   /vmlinuz-%s %s ro %s %s bootprofile=%s %s\n' \
+              "$kernel_ver" \
+              "$root_arg" \
+              "$snapshot_rootfs_flags" \
+              "$base_cmdline" \
+              "$profile_name" \
+              "$profile_flags"
+            printf '        initrd  /initrd.img-%s\n' "$kernel_ver"
+            printf '%s\n' '    }'
+          } >>"$profile_body"
           profile_has_entries=true
         done <<<"$kernel_images"
 
@@ -342,11 +350,12 @@ EOF
         fi
         remove_temp_file "$profile_body"
         profile_body=
-      done <<EOF
-${bootprofile_default}|Balanced|${grub_profile_default_flags}
-${bootprofile_performance}|Performance|${grub_profile_performance_flags}
-${bootprofile_hardened}|Hardened|${grub_profile_hardened_flags}
-EOF
+      done < <(
+        printf '%s|%s|%s\n' \
+          "${bootprofile_default}" "Balanced" "${grub_profile_default_flags}" \
+          "${bootprofile_performance}" "Performance" "${grub_profile_performance_flags}" \
+          "${bootprofile_hardened}" "Hardened" "${grub_profile_hardened_flags}"
+      )
     } >"$snapshot_body"
 
     if [[ "$snapshot_has_entries" == true ]]; then

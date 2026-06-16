@@ -33,6 +33,85 @@ fatal() {
   exit 1
 }
 
+shell_single_quote() {
+  printf "'%s'\n" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+validate_single_line_value() {
+  local label value
+
+  label=$1
+  value=${2-}
+  [ -n "$value" ] || fatal "$label must not be empty"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    fatal "$label must be a single-line value"
+  fi
+  if [[ "$value" =~ [[:cntrl:]] ]]; then
+    fatal "$label must not contain control characters"
+  fi
+}
+
+validate_absolute_path_value() {
+  local label value
+
+  label=$1
+  value=${2-}
+  validate_single_line_value "$label" "$value"
+  case "$value" in
+    /*) ;;
+    *) fatal "$label must be an absolute path: ${value:-unset}" ;;
+  esac
+  case "$value" in
+    *'//'*) fatal "$label contains unsupported path syntax: $value" ;;
+    ../*|*/../*|*/..|*/./*|*/.) fatal "$label contains unsupported path traversal: $value" ;;
+  esac
+}
+
+validate_positive_integer() {
+  local label value
+
+  label=$1
+  value=${2-}
+  [[ "$value" =~ ^[0-9]+$ ]] || fatal "$label must be a positive integer, got '${value:-unset}'"
+  (( 10#$value > 0 )) || fatal "$label must be greater than zero"
+}
+
+validate_country_code() {
+  local label value
+
+  label=$1
+  value=${2-}
+  [[ "$value" =~ ^[A-Z]{2}$ ]] || fatal "$label must be a two-letter uppercase country code, got '${value:-unset}'"
+}
+
+validate_email_value() {
+  local label value
+
+  label=$1
+  value=${2-}
+  validate_single_line_value "$label" "$value"
+  [[ "$value" == *'@'* ]] || fatal "$label must contain @, got '${value:-unset}'"
+  [[ "$value" != *' '* ]] || fatal "$label must not contain spaces, got '${value:-unset}'"
+}
+
+validate_secure_boot_certificate_settings() {
+  validate_absolute_path_value SECURE_BOOT_OPENSSL_CONFIG "$SECURE_BOOT_OPENSSL_CONFIG"
+  validate_absolute_path_value SECURE_BOOT_DKMS_CONF "$SECURE_BOOT_DKMS_CONF"
+  validate_absolute_path_value SECURE_BOOT_MOK_KEY "$SECURE_BOOT_MOK_KEY"
+  validate_absolute_path_value SECURE_BOOT_MOK_CERT_DER "$SECURE_BOOT_MOK_CERT_DER"
+  validate_country_code SECURE_BOOT_MOK_COUNTRY "$SECURE_BOOT_MOK_COUNTRY"
+  validate_single_line_value SECURE_BOOT_MOK_STATE "$SECURE_BOOT_MOK_STATE"
+  validate_single_line_value SECURE_BOOT_MOK_LOCALITY "$SECURE_BOOT_MOK_LOCALITY"
+  validate_single_line_value SECURE_BOOT_MOK_ORGANIZATION "$SECURE_BOOT_MOK_ORGANIZATION"
+  validate_single_line_value SECURE_BOOT_MOK_ORG_UNIT "$SECURE_BOOT_MOK_ORG_UNIT"
+  validate_single_line_value SECURE_BOOT_MOK_COMMON_NAME "$SECURE_BOOT_MOK_COMMON_NAME"
+  validate_email_value SECURE_BOOT_MOK_EMAIL "$SECURE_BOOT_MOK_EMAIL"
+  validate_positive_integer SECURE_BOOT_MOK_VALID_DAYS "$SECURE_BOOT_MOK_VALID_DAYS"
+  validate_positive_integer SECURE_BOOT_MOK_RSA_BITS "$SECURE_BOOT_MOK_RSA_BITS"
+  (( 10#$SECURE_BOOT_MOK_RSA_BITS >= 2048 )) || fatal "SECURE_BOOT_MOK_RSA_BITS must be at least 2048"
+  (( 10#$SECURE_BOOT_MOK_RSA_BITS % 8 == 0 )) || fatal "SECURE_BOOT_MOK_RSA_BITS must be a multiple of 8"
+}
+
 secure_boot_state_uses_luks() {
   [ "$SECURE_BOOT_STATE_MODE" = "luks" ]
 }
@@ -320,32 +399,33 @@ sync_mok_enrollment_copy() {
 }
 
 write_openssl_config() {
-  cat >"$SECURE_BOOT_OPENSSL_CONFIG" <<OPENSSL_EOF
-[ req ]
-default_bits = ${SECURE_BOOT_MOK_RSA_BITS}
-default_md = sha256
-prompt = no
-distinguished_name = dn
-x509_extensions = v3_secure_boot
-
-[ dn ]
-C = ${SECURE_BOOT_MOK_COUNTRY}
-ST = ${SECURE_BOOT_MOK_STATE}
-L = ${SECURE_BOOT_MOK_LOCALITY}
-O = ${SECURE_BOOT_MOK_ORGANIZATION}
-OU = ${SECURE_BOOT_MOK_ORG_UNIT}
-CN = ${SECURE_BOOT_MOK_COMMON_NAME}
-emailAddress = ${SECURE_BOOT_MOK_EMAIL}
-
-[ v3_secure_boot ]
-basicConstraints = critical,CA:FALSE
-keyUsage = critical,digitalSignature
-# Do not include shim's module-signing-only EKU OID here. GRUB/shim will refuse
-# boot images signed by keys carrying that restriction.
-extendedKeyUsage = codeSigning
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer
-OPENSSL_EOF
+  validate_secure_boot_certificate_settings
+  {
+    printf '%s\n' '[ req ]'
+    printf 'default_bits = %s\n' "$SECURE_BOOT_MOK_RSA_BITS"
+    printf '%s\n' 'default_md = sha256'
+    printf '%s\n' 'prompt = no'
+    printf '%s\n' 'distinguished_name = dn'
+    printf '%s\n' 'x509_extensions = v3_secure_boot'
+    printf '\n'
+    printf '%s\n' '[ dn ]'
+    printf 'C = %s\n' "$SECURE_BOOT_MOK_COUNTRY"
+    printf 'ST = %s\n' "$SECURE_BOOT_MOK_STATE"
+    printf 'L = %s\n' "$SECURE_BOOT_MOK_LOCALITY"
+    printf 'O = %s\n' "$SECURE_BOOT_MOK_ORGANIZATION"
+    printf 'OU = %s\n' "$SECURE_BOOT_MOK_ORG_UNIT"
+    printf 'CN = %s\n' "$SECURE_BOOT_MOK_COMMON_NAME"
+    printf 'emailAddress = %s\n' "$SECURE_BOOT_MOK_EMAIL"
+    printf '\n'
+    printf '%s\n' '[ v3_secure_boot ]'
+    printf '%s\n' 'basicConstraints = critical,CA:FALSE'
+    printf '%s\n' 'keyUsage = critical,digitalSignature'
+    printf '%s\n' "# Do not include shim's module-signing-only EKU OID here. GRUB/shim will refuse"
+    printf '%s\n' '# boot images signed by keys carrying that restriction.'
+    printf '%s\n' 'extendedKeyUsage = codeSigning'
+    printf '%s\n' 'subjectKeyIdentifier = hash'
+    printf '%s\n' 'authorityKeyIdentifier = keyid:always,issuer'
+  } >"$SECURE_BOOT_OPENSSL_CONFIG"
   chmod 0600 "$SECURE_BOOT_OPENSSL_CONFIG"
 }
 
@@ -401,12 +481,13 @@ ensure_keypair() {
 ensure_dkms_framework_config() {
   require_secure_boot_state_mount
   ensure_directory_layout
-  cat >"$SECURE_BOOT_DKMS_CONF" <<DKMS_EOF
-# Managed by installer automation. Do not edit manually.
-mok_signing_key="${SECURE_BOOT_MOK_KEY}"
-mok_certificate="${SECURE_BOOT_MOK_CERT_DER}"
-sign_file="/lib/modules/\${kernelver}/build/scripts/sign-file"
-DKMS_EOF
+  validate_secure_boot_certificate_settings
+  {
+    printf '%s\n' '# Managed by installer automation. Do not edit manually.'
+    printf 'mok_signing_key=%s\n' "$(shell_single_quote "$SECURE_BOOT_MOK_KEY")"
+    printf 'mok_certificate=%s\n' "$(shell_single_quote "$SECURE_BOOT_MOK_CERT_DER")"
+    printf '%s\n' 'sign_file="/lib/modules/${kernelver}/build/scripts/sign-file"'
+  } >"$SECURE_BOOT_DKMS_CONF"
   chmod 0644 "$SECURE_BOOT_DKMS_CONF"
 }
 
@@ -510,6 +591,7 @@ ensure_mok_import() {
   require_command mokutil
   [ -d /sys/firmware/efi/efivars ] || fatal "EFI variable access is unavailable; cannot queue MOK import"
   [ -n "${SECURE_BOOT_MOK_ENROLL_PASSWORD:-}" ] || fatal "SECURE_BOOT_MOK_ENROLL_PASSWORD must be set for non-interactive MOK import"
+  validate_single_line_value SECURE_BOOT_MOK_ENROLL_PASSWORD "$SECURE_BOOT_MOK_ENROLL_PASSWORD"
 
   expected_fp=$(managed_cert_fingerprint) || fatal "could not calculate managed MOK certificate fingerprint"
   [ -n "$expected_fp" ] || fatal "could not calculate managed MOK certificate fingerprint"
