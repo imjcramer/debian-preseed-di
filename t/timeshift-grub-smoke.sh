@@ -57,10 +57,10 @@ else
   fail "timeshift addon fragment installs the Timeshift package"
 fi
 
-classes_conf="$ROOT_DIR/d-i/debian/classes/CLASSES.conf"
+addons_cfg="$ROOT_DIR/d-i/debian/classes/configs/addons.cfg"
 common_lib="$ROOT_DIR/d-i/debian/scripts/common/lib.sh"
-if grep -q '^\[class\.addon\.timeshift\]$' "$classes_conf" &&
-   grep -q '^allowed_hardware_classes=disk/nvme disk/vm$' "$classes_conf" &&
+if grep -q '^Name: timeshift$' "$addons_cfg" &&
+   grep -q '^AllowedHardwareClasses: disk/nvme, disk/vm$' "$addons_cfg" &&
    grep -q 'allowed_hardware_classes=$(installer_class_meta_value' "$common_lib" &&
    grep -q 'selected class ${group_name}/${class_name} is only allowed with one of:' "$common_lib"; then
   pass "timeshift addon is restricted to Btrfs-root storage classes and enforced by class resolution"

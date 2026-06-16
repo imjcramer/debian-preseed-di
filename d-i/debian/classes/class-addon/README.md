@@ -34,4 +34,5 @@ server-role rootless API socket bootstrap.
 
 `timeshift.cfg` installs Timeshift and enables the managed Btrfs snapshot /
 GRUB snapshot-menu integration when selected as `classes=...,timeshift`. The
-class is restricted to Btrfs-root storage profiles through `CLASSES.conf`.
+class is restricted to Btrfs-root storage profiles through
+`classes/configs/addons.cfg` `AllowedHardwareClasses`.

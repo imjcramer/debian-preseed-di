@@ -34,10 +34,12 @@ run_helper_script() {
   shift 2
 
   installer_fetch_file "$seed_base" "$helper_path" "$helper_dest" 0755
-  "$helper_dest" "$@"
+  "$helper_dest" "$@" </dev/null
 }
 
 run_selected_class_helpers() {
+  selected_records_path=$(installer_selected_class_records_path)
+  [ -r "$selected_records_path" ] || return 0
   while IFS='|' read -r group_name class_name _class_relpath || [ -n "$group_name" ]; do
     [ -n "$group_name" ] || continue
     helper_name=$(installer_class_meta_value "$seed_base" "$group_name" "$class_name" early_helper)
@@ -45,9 +47,7 @@ run_selected_class_helpers() {
     helper_path=$(installer_repo_join_var DIR_SCRIPTS_EARLY "${helper_name}.sh")
     helper_dest="${helper_dir}/${helper_name}.sh"
     run_helper_script "$helper_path" "$helper_dest" "$host_profile" "$seed_base"
-  done <<EOF
-$(cat "$(installer_selected_class_records_path)")
-EOF
+  done <"$selected_records_path"
 }
 
 run_selected_class_helpers

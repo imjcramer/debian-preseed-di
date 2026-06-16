@@ -76,20 +76,35 @@ run_helper_script() {
   shift 2
 
   installer_fetch_file "$seed_base" "$helper_path" "$helper_dest" 0755
-  "$helper_dest" "$@"
+  "$helper_dest" "$@" </dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-
 }
 
 run_selected_class_helpers() {
+  selected_records_path=$(installer_selected_class_records_path)
+  helper_records="${helper_dir}/selected-helpers.tsv"
+  helper_sorted="${helper_dir}/selected-helpers.sorted.tsv"
+  [ -r "$selected_records_path" ] || return 0
+  : >"$helper_records"
   while IFS='|' read -r group_name class_name _class_relpath || [ -n "$group_name" ]; do
     [ -n "$group_name" ] || continue
     helper_name=$(installer_class_meta_value "$seed_base" "$group_name" "$class_name" late_helper)
     [ -n "$helper_name" ] || continue
+    helper_order=$(installer_class_helper_order "$seed_base" "$group_name" "$class_name")
+    printf '%08d\t%s\t%s\t%s\n' \
+      "$helper_order" \
+      "$group_name" \
+      "$class_name" \
+      "$helper_name" >>"$helper_records"
+  done <"$selected_records_path"
+
+  [ -s "$helper_records" ] || return 0
+  sort -t "$(printf '\t')" -k1,1n -k2,2 -k3,3 "$helper_records" >"$helper_sorted"
+  while IFS="$(printf '\t')" read -r _helper_order group_name class_name helper_name || [ -n "${group_name:-}" ]; do
+    [ -n "${group_name:-}" ] || continue
     helper_path=$(installer_repo_join_var DIR_SCRIPTS_LATE "${helper_name}.sh")
     helper_dest="${helper_dir}/${helper_name}.sh"
     run_helper_script "$helper_path" "$helper_dest" /target
-  done <<EOF
-$(cat "$(installer_selected_class_records_path)")
-EOF
+  done <"$helper_sorted"
 }
 
 run_selected_class_helpers

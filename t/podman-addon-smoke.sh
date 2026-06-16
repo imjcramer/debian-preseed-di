@@ -22,7 +22,7 @@ fail() {
 printf '1..%s\n' "$TEST_COUNT"
 
 podman_class="$ROOT_DIR/d-i/debian/classes/class-addon/podman.cfg"
-classes_conf="$ROOT_DIR/d-i/debian/classes/CLASSES.conf"
+addons_cfg="$ROOT_DIR/d-i/debian/classes/configs/addons.cfg"
 desktop_env="$ROOT_DIR/d-i/debian/hosts/shared/desktop.env"
 server_env="$ROOT_DIR/d-i/debian/hosts/shared/server.env"
 helper="$ROOT_DIR/d-i/debian/scripts/late/podman.sh"
@@ -53,8 +53,9 @@ else
   fail "podman addon fragment installs the requested rootless package baseline"
 fi
 
-if grep -q '^\[class\.addon\.podman\]$' "$classes_conf" &&
-   ! grep -q '^late_helper=podman$' "$classes_conf"; then
+if grep -q '^Name: podman$' "$addons_cfg" &&
+   grep -q '^Description: opt-in rootless Podman and Buildah runtime policy$' "$addons_cfg" &&
+   ! grep -q '^LateHelper: podman-addon$' "$addons_cfg"; then
   pass "podman addon is package-selected directly while the shared late module handles target staging"
 else
   fail "podman addon is package-selected directly while the shared late module handles target staging"

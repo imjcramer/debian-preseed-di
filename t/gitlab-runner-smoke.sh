@@ -21,7 +21,7 @@ fail() {
 
 printf '1..%s\n' "$TEST_COUNT"
 
-classes_conf="$ROOT_DIR/d-i/debian/classes/CLASSES.conf"
+system_cfg="$ROOT_DIR/d-i/debian/classes/configs/system.cfg"
 class_select="$ROOT_DIR/d-i/debian/classes/class-select/service/gitlab-runner.cfg"
 shared_loader="$ROOT_DIR/d-i/debian/hooks/shared/late_command.sh"
 dispatch_script="$ROOT_DIR/d-i/debian/scripts/late/dispatch.sh"
@@ -55,11 +55,12 @@ docs_index="$ROOT_DIR/d-i/debian/hooks/shared/target/data/docs/README.md"
 gitlab_runner_doc="$ROOT_DIR/d-i/debian/hooks/shared/target/data/docs/gitlab-runner.md"
 service_readme="$ROOT_DIR/d-i/debian/hosts/services/gitlab/README.md"
 
-if grep -q '^\[class\.service\.gitlab-runner\]$' "$classes_conf" &&
-   grep -q '^description=GitLab Runner service role$' "$classes_conf"; then
-  pass "service/gitlab-runner class is registered"
+if grep -q '^Name: gitlab-runner$' "$system_cfg" &&
+   grep -q '^Description: GitLab Runner service role$' "$system_cfg" &&
+   ! grep -q '^LateHelper: gitlab-runner-service$' "$system_cfg"; then
+  pass "service/gitlab-runner class is registered and stays package-selected only"
 else
-  fail "service/gitlab-runner class is registered"
+  fail "service/gitlab-runner class is registered and stays package-selected only"
 fi
 
 if grep -q '^d-i apt-setup/local3/repository string https://packages.gitlab.com/runner/gitlab-runner/debian trixie main$' "$class_select" &&

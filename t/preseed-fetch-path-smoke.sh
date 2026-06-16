@@ -143,9 +143,9 @@ else
 fi
 
 dualboot_class="$ROOT_DIR/d-i/debian/classes/class-addon/dualboot.cfg"
-classes_conf="$ROOT_DIR/d-i/debian/classes/CLASSES.conf"
-if grep -q '^\[class\.addon\.dualboot\]$' "$classes_conf" &&
-   grep -q '^allowed_hardware_classes=disk/nvme disk/vm$' "$classes_conf" &&
+addons_cfg="$ROOT_DIR/d-i/debian/classes/configs/addons.cfg"
+if grep -q '^Name: dualboot$' "$addons_cfg" &&
+   grep -q '^AllowedHardwareClasses: disk/nvme, disk/vm$' "$addons_cfg" &&
    grep -q '^d-i pkgsel/include string os-prober$' "$dualboot_class"; then
   pass "dualboot addon is declared and owns os-prober package selection"
 else

@@ -25,18 +25,23 @@ fail() {
 
 make_source_tree() {
   source_root=$1
-  mkdir -p "$source_root/classes"
+  mkdir -p "$source_root/classes/configs"
   cp "$ROOT_DIR/d-i/debian/repo.env" "$source_root/repo.env"
-  cp "$ROOT_DIR/d-i/debian/classes/CLASSES.conf" "$source_root/classes/CLASSES.conf"
-  cat >>"$source_root/classes/CLASSES.conf" <<'EOF'
+  cp "$ROOT_DIR/d-i/debian/classes/install.conf" "$source_root/classes/install.conf"
+  cp "$ROOT_DIR"/d-i/debian/classes/configs/*.cfg "$source_root/classes/configs/"
+  cat >>"$source_root/classes/configs/addons.cfg" <<'EOF'
 
-[class.addon.testprefs]
-description=test additive apt preference merge
-debian_apt_preferences=sid dbus forky test
+Type: class
+Group: addon
+Name: testprefs
+Description: test additive apt preference merge
+DebianAptPreferences: sid, dbus, forky, test
 
-[class.addon.minprefs]
-description=test override without repo defaults
-debian_apt_preferences=sid test
+Type: class
+Group: addon
+Name: minprefs
+Description: test override without repo defaults
+DebianAptPreferences: sid, test
 EOF
 }
 

@@ -22,13 +22,13 @@ fail() {
 
 printf '1..%s\n' "$TEST_COUNT"
 
-classes_conf="$ROOT_DIR/d-i/debian/classes/CLASSES.conf"
+addons_cfg="$ROOT_DIR/d-i/debian/classes/configs/addons.cfg"
 devops_class="$ROOT_DIR/d-i/debian/classes/class-addon/devops.cfg"
 devops_late="$ROOT_DIR/d-i/debian/scripts/late/devops.sh"
 storage_maintenance="$ROOT_DIR/d-i/debian/scripts/late/storage-maintenance.sh"
 
-if grep -q '^\[class\.addon\.devops\]$' "$classes_conf" &&
-   grep -q '^late_helper=devops$' "$classes_conf"; then
+if grep -q '^Name: devops$' "$addons_cfg" &&
+   grep -q '^LateHelper: devops$' "$addons_cfg"; then
   pass "devops addon is wired to its late helper"
 else
   fail "devops addon is wired to its late helper"

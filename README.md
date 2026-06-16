@@ -60,7 +60,7 @@ normalizes that to `http://<lan-host>:8080/d-i/debian`; with
 `scripts/partman/dispatch.sh`, and `scripts/late/dispatch.sh` below that tree
 through the shared bootstrap helper.
 
-The class-group contract is defined by `d-i/debian/classes/CLASSES.conf`. Most groups allow at most one selected class; `gpu` and `addon` may select multiple classes. The installer auto-detects `arch`, `cpu`, `gpu`, and `disk` classes through `d-i/debian/scripts/preseed/class-auto.sh` and appends them to the manual `classes=` value. A manual class from an auto group overrides detection for that group. NVIDIA is intentionally not auto-selected; add the `nvidia` addon class when the proprietary NVIDIA stack should be installed on hosts with detected NVIDIA display hardware.
+The class-group contract is defined by `d-i/debian/classes/install.conf` plus the records under `d-i/debian/classes/configs/*.cfg`. During installation the runtime compiles those config files into `state/plan.tsv` and `cache/classes.state.conf`, then resolves the selected class set from that generated plan. Most groups allow at most one selected class; `gpu` and `addon` may select multiple classes. The installer auto-detects `arch`, `cpu`, `gpu`, and `disk` classes through `d-i/debian/scripts/preseed/class-auto.sh` and appends them to the manual `classes=` value. A manual class from an auto group overrides detection for that group. NVIDIA is intentionally not auto-selected; add the `nvidia` addon class when the proprietary NVIDIA stack should be installed on hosts with detected NVIDIA display hardware.
 
 Manual `class-select` groups are:
 
@@ -96,7 +96,7 @@ That means:
 - Adding an additive class does not require dispatcher/code changes: add `d-i/debian/classes/class-addon/<name>.cfg` and select it as `<name>` in `classes=`.
 - Adding a select class group uses `d-i/debian/classes/class-select/<group>/<class>.cfg` and `group/class` in `classes=`.
 - Group-qualified tokens also accept `group:class` and `group.class`; prefer `group/class` in manual references and use commas between selected classes on the kernel cmdline because that survives more bootloaders cleanly than semicolons.
-- Adding new host/storage behavior should be declared in `d-i/debian/classes/CLASSES.conf`, not inline inside the class fragment.
+- Adding new host/storage behavior should be declared in `d-i/debian/classes/configs/*.cfg`, not inline inside the class fragment. `d-i/debian/classes/install.conf` owns only the manifest-wide metadata and config source list.
 - The optional `debug` class does nothing unless you explicitly include `debug` in `classes=`. When selected, it enables installer-side stage/category logging and archives `/tmp/preseed-logs/` into `/var/lib/preseed/logs/installer/` on the target.
 
 Every install derives the primary account name, primary account password, and
