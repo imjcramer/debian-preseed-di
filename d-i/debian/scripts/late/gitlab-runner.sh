@@ -451,7 +451,7 @@ gitlab_runner_prepare_runner_root() {
   job_home="${base_dir}/home"
   backup_root="${base_dir}/backups"
   backup_dir="${backup_root}/systemd"
-  system_id_path="${work_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME}"
+  system_id_path="${base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME}"
 
   gitlab_runner_ensure_target_tree "$base_dir" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$GITLAB_RUNNER_CONTROL_GID"
   gitlab_runner_ensure_target_tree "$backup_root" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$GITLAB_RUNNER_CONTROL_GID"
@@ -536,6 +536,7 @@ gitlab_runner_render_unit() {
   base_dir="${GITLAB_RUNNER_STATE_BASE}/${runner_user}"
   work_dir="${base_dir}/work"
   config_path="${base_dir}/${GITLAB_RUNNER_CONFIG_BASENAME}"
+  system_id_path="${base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME}"
   tmp_dir="/run/user/${runner_uid}/gitlab-runner/tmp"
   buildah_tmpdir="${GITLAB_RUNNER_PODMAN_TMP_BASE}/${runner_user}/tmp"
   template_src="/target${GITLAB_RUNNER_STATE_BASE}/templates/gitlab-runner.service.tmpl"
@@ -545,7 +546,7 @@ gitlab_runner_render_unit() {
   # ExecStartPre preflight and ensure-images create and verify BUILDAH_TMPDIR
   # inside the unit sandbox, so it must stay writable even though the broader
   # Podman service configuration remains external to this unit.
-  read_write_paths="${read_write_paths} ${buildah_tmpdir}"
+  read_write_paths="${read_write_paths} ${buildah_tmpdir} ${system_id_path}"
   installer_apply_scalar_placeholders "$template_src" "$rendered_tmp" \
     GITLAB_RUNNER_DESCRIPTION "$description" \
     GITLAB_RUNNER_USER "$runner_user" \

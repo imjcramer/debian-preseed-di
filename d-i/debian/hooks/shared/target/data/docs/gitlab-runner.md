@@ -12,6 +12,11 @@ These managed users intentionally use `/usr/sbin/nologin`. `sudo -iu glab-user`
 or `sudo -iu glab-aptly` is expected to fail and is not the supported
 debugging path.
 
+Persistent Podman storage for those runners stays under `/pool/podman/<user>`,
+but rootless Podman runtime state now stays under `/run/user/<uid>/run` and
+`/run/user/<uid>/libpod/tmp` so helpers such as `pasta` write PID and runtime
+files on the user runtime filesystem instead of under `/pool`.
+
 ## Managed files
 
 - `/etc/default/gitlab-runner/gitlab-runner-shared.env`
@@ -19,7 +24,9 @@ debugging path.
 - `/etc/default/gitlab-runner/gitlab-runner-build.env`
 - `/etc/default/gitlab-runner/gitlab-runner-task.env`
 - `/data/config/runners/glab-aptly/config.toml`
+- `/data/config/runners/glab-aptly/.runner_system_id`
 - `/data/config/runners/glab-user/config.toml`
+- `/data/config/runners/glab-user/.runner_system_id`
 - `/pool/aptly/.aptly.conf`
 
 ## Operator entrypoints
@@ -58,8 +65,9 @@ sudo glab-helper --user glab-user gitlab-runner-managed ensure-images
 
 - `refresh`: renders the managed runner config
 - `preflight`: validates the rootless Podman executor context, checks that the
-  managed runner paths are owned and writable by the service user, and confirms
-  the Podman backend is reachable and still rootless over `netavark`
+  managed runner paths, Podman state roots, and `.runner_system_id` state file
+  are owned and writable by the service user, and confirms the Podman backend
+  is reachable and still rootless over `netavark`
 - `ensure-images`: builds only the managed local runner images that are missing
 - `once`: runs `refresh --require-active`, then `preflight`, then
   `ensure-images`, and finally starts or reloads the user service

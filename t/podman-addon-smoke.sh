@@ -97,6 +97,8 @@ if grep -q 'PODMAN_SERVICE_USER=$PODMAN_USER' "$helper" &&
    grep -q ': "${PODMAN_USER_DOCKER_HOST:=1}"' "$helper" &&
    grep -q ': "${PODMAN_USER_CONTAINER_HOST:=1}"' "$helper" &&
    grep -q 'podman_chown_target_tree()' "$helper" &&
+   grep -q 'podman_clear_target_dir_setgid_bits()' "$helper" &&
+   grep -q 'podman_chmod_target_paths()' "$helper" &&
    grep -q 'usermod -p "!" -- "$service_user"' "$helper" &&
    grep -q '/etc/shadow' "$helper" &&
    ! grep -q 'glab-aptly' "$helper" &&
@@ -105,13 +107,18 @@ if grep -q 'PODMAN_SERVICE_USER=$PODMAN_USER' "$helper" &&
    ! grep -q 'passwd -S "$service_user"' "$helper" &&
    grep -q 'PODMAN_ROOTLESS_CONTAINERS_CONFIG_DIR="${PODMAN_ROOTLESS_CONFIG_ROOT}/containers"' "$helper" &&
    grep -q 'PODMAN_ROOTLESS_QUADLET_DIR="${PODMAN_ROOTLESS_CONTAINERS_CONFIG_DIR}/systemd"' "$helper" &&
+   grep -q 'PODMAN_ROOTLESS_RUNTIME_DIR="/run/user/${PODMAN_SERVICE_UID}"' "$helper" &&
+   grep -q 'PODMAN_ROOTLESS_RUNROOT="${PODMAN_ROOTLESS_RUNTIME_DIR}/run"' "$helper" &&
+   grep -q 'PODMAN_ROOTLESS_TMPDIR="${PODMAN_ROOTLESS_RUNTIME_LIBPOD_DIR}/tmp"' "$helper" &&
+   grep -q 'find "/target${target_path}" -type d -exec chmod g-s {} +' "$helper" &&
+   grep -q 'podman_chmod_target_paths 0700 \\' "$helper" &&
    grep -q 'server role requires PODMAN_USER_LINGER=1' "$helper" &&
    grep -q 'PODMAN_EFFECTIVE_USER_DAEMON=1' "$helper" &&
    grep -q 'PODMAN_EFFECTIVE_USER_API_ENV=1' "$helper" &&
    grep -q 'Podman addon must not stage rootful /etc/containers/containers.conf' "$helper"; then
-  pass "podman helper enforces the hardened service user, unique subids, managed roots, and server socket policy"
+  pass "podman helper enforces the hardened service user, unique subids, managed roots, and rootless runtime-path policy"
 else
-  fail "podman helper enforces the hardened service user, unique subids, managed roots, and server socket policy"
+  fail "podman helper enforces the hardened service user, unique subids, managed roots, and rootless runtime-path policy"
 fi
 
 if grep -q 'containers/systemd/container.d/10-podman-managed.conf.tmpl' "$helper" &&

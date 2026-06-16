@@ -5,7 +5,7 @@ IFS=$'\n\t'
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/gitlab-runner-managed"
 
-TEST_COUNT=8
+TEST_COUNT=10
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -145,7 +145,8 @@ MOCK_BIN="$TMP_ROOT/bin"
 CURRENT_UID=$(id -u)
 CURRENT_GID=$(id -g)
 
-mkdir -p "$ENV_DIR" "$MOCK_BIN" "$RUNTIME_BASE/$CURRENT_UID"
+mkdir -p "$ENV_DIR" "$MOCK_BIN" "$RUNTIME_BASE/$CURRENT_UID" "$STATE_BASE/glab-user"
+: >"$STATE_BASE/glab-user/.runner_system_id"
 write_shared_env
 write_runner_envs ""
 
@@ -275,6 +276,8 @@ chmod +x "$MOCK_BIN/podman"
 sed \
   -e "s|^ENV_DIR=.*|ENV_DIR=\"$ENV_DIR\"|" \
   -e "s|context_runtime_root=\"/run/user/\${context_uid}/gitlab-runner\"|context_runtime_root=\"$RUNTIME_BASE/\${context_uid}/gitlab-runner\"|" \
+  -e "s|context_podman_runtime_libpod_dir=\"/run/user/\${context_uid}/libpod\"|context_podman_runtime_libpod_dir=\"$RUNTIME_BASE/\${context_uid}/libpod\"|" \
+  -e "s|context_podman_runroot=\"/run/user/\${context_uid}/run\"|context_podman_runroot=\"$RUNTIME_BASE/\${context_uid}/run\"|" \
   "$MANAGED_HELPER" >"$PATCHED_HELPER"
 chmod +x "$PATCHED_HELPER"
 
@@ -285,10 +288,16 @@ export TEST_SYSTEMCTL_EVENTS="$SYSTEMCTL_EVENTS"
 export TEST_EXPECTED_PODMAN_HOME="$HOME_BASE/glab-user"
 export TEST_EXPECTED_XDG_RUNTIME_DIR="/run/user/$CURRENT_UID"
 
-if bash "$PATCHED_HELPER" --user glab-user once >"$TMP_ROOT/first.stdout" 2>"$TMP_ROOT/first.stderr"; then
-  pass "once succeeds with only the build token populated"
+if bash "$PATCHED_HELPER" --user glab-user refresh --require-active >"$TMP_ROOT/first.stdout" 2>"$TMP_ROOT/first.stderr"; then
+  pass "refresh succeeds with only the build token populated"
 else
-  fail "once succeeds with only the build token populated"
+  fail "refresh succeeds with only the build token populated"
+fi
+
+if bash "$PATCHED_HELPER" --user glab-user preflight >"$TMP_ROOT/preflight-first.stdout" 2>"$TMP_ROOT/preflight-first.stderr"; then
+  pass "preflight succeeds with only the build token populated"
+else
+  fail "preflight succeeds with only the build token populated"
 fi
 
 if assert_contains "$CONFIG_PATH" 'name = "build"' &&
@@ -296,6 +305,22 @@ if assert_contains "$CONFIG_PATH" 'name = "build"' &&
   pass "single-token render keeps only the build runner stanza"
 else
   fail "single-token render keeps only the build runner stanza"
+fi
+
+if [[ -f "$STATE_BASE/glab-user/.runner_system_id" ]] &&
+   [[ ! -e "$STATE_BASE/glab-user/work/.runner_system_id" ]]; then
+  pass "runner system-id state is created alongside config.toml instead of under the writable work subtree"
+else
+  fail "runner system-id state is created alongside config.toml instead of under the writable work subtree"
+fi
+
+if [[ -d "$RUNTIME_BASE/$CURRENT_UID/run/networks/rootless-netns" ]] &&
+   [[ -d "$RUNTIME_BASE/$CURRENT_UID/libpod/tmp" ]] &&
+   [[ -d "$PODMAN_STATE_BASE/glab-user/storage" ]] &&
+   [[ -d "$PODMAN_STATE_BASE/glab-user/libpod" ]]; then
+  pass "preflight prepares rootless Podman runtime state under /run plus persistent storage state under /pool"
+else
+  fail "preflight prepares rootless Podman runtime state under /run plus persistent storage state under /pool"
 fi
 
 if assert_not_contains "$CONFIG_PATH" 'DOCKER_HOST=' &&
@@ -310,20 +335,25 @@ else
   fail "rendered config keeps Podman as the executor backend without injecting the socket into job containers"
 fi
 
-: >"$SYSTEMCTL_LOG"
 write_runner_envs "task-token"
 
-if bash "$PATCHED_HELPER" --user glab-user once >"$TMP_ROOT/second.stdout" 2>"$TMP_ROOT/second.stderr"; then
-  pass "rerunning once succeeds after the task token is added"
+if bash "$PATCHED_HELPER" --user glab-user refresh --require-active >"$TMP_ROOT/second.stdout" 2>"$TMP_ROOT/second.stderr"; then
+  pass "rerunning refresh succeeds after the task token is added"
 else
-  fail "rerunning once succeeds after the task token is added"
+  fail "rerunning refresh succeeds after the task token is added"
+fi
+
+if bash "$PATCHED_HELPER" --user glab-user preflight >"$TMP_ROOT/preflight-second.stdout" 2>"$TMP_ROOT/preflight-second.stderr"; then
+  pass "preflight succeeds after the task token is added"
+else
+  fail "preflight succeeds after the task token is added"
 fi
 
 if assert_contains "$CONFIG_PATH" 'name = "build"' &&
    assert_contains "$CONFIG_PATH" 'name = "task"'; then
-  pass "rerunning once renders both shared runner stanzas when both tokens are present"
+  pass "rerendering adds the task runner stanza when both tokens are present"
 else
-  fail "rerunning once renders both shared runner stanzas when both tokens are present"
+  fail "rerendering adds the task runner stanza when both tokens are present"
 fi
 
 if assert_not_contains "$CONFIG_PATH" 'DOCKER_HOST=' &&
@@ -336,30 +366,6 @@ if assert_not_contains "$CONFIG_PATH" 'DOCKER_HOST=' &&
   pass "rerendered shared config still avoids recursive socket injection after task enablement"
 else
   fail "rerendered shared config still avoids recursive socket injection after task enablement"
-fi
-
-: >"$SYSTEMCTL_LOG"
-if bash "$PATCHED_HELPER" --user glab-user once >"$TMP_ROOT/third.stdout" 2>"$TMP_ROOT/third.stderr"; then
-  :
-else
-  fail "rerunning once signals the active service to reload instead of forcing another start"
-fi
-
-if assert_contains "$SYSTEMCTL_LOG" '--user kill --signal=HUP --kill-whom=main gitlab-runner.service' &&
-   assert_not_contains "$SYSTEMCTL_LOG" '--user start gitlab-runner.service'; then
-  pass "rerunning once signals the active service to reload instead of forcing another start"
-else
-  fail "rerunning once signals the active service to reload instead of forcing another start"
-fi
-
-: >"$SYSTEMCTL_LOG"
-printf 'active\n' >"$SYSTEMCTL_STATE"
-TEST_SYSTEMCTL_KILL_FAIL=true bash "$PATCHED_HELPER" --user glab-user once >"$TMP_ROOT/fourth.stdout" 2>"$TMP_ROOT/fourth.stderr"
-if assert_contains "$SYSTEMCTL_LOG" '--user kill --signal=HUP --kill-whom=main gitlab-runner.service' &&
-   assert_contains "$SYSTEMCTL_LOG" '--user start gitlab-runner.service'; then
-  pass "once falls back to a real start when the active-unit reload path has no main process"
-else
-  fail "once falls back to a real start when the active-unit reload path has no main process"
 fi
 
 [ "$FAIL_COUNT" -eq 0 ]

@@ -291,6 +291,30 @@ podman_chown_target_tree() {
   done
 }
 
+podman_chmod_target_paths() {
+  target_mode=$1
+  shift
+  for target_path in "$@"; do
+    [ -n "$target_path" ] || continue
+    [ -e "/target${target_path}" ] || continue
+    chmod "$target_mode" "/target${target_path}"
+  done
+}
+
+podman_clear_target_dir_setgid_bits() {
+  seen_paths=" "
+  for target_path in "$@"; do
+    [ -n "$target_path" ] || continue
+    case "$seen_paths" in
+      *" $target_path "*) continue ;;
+    esac
+    seen_paths="${seen_paths}${target_path} "
+    podman_reject_target_symlink "$target_path"
+    [ -d "/target${target_path}" ] || continue
+    find "/target${target_path}" -type d -exec chmod g-s {} +
+  done
+}
+
 podman_placeholder_map() {
   cat <<EOF
 PODMAN_CONTAINERS_CGROUPNS=$PODMAN_CONTAINERS_CGROUPNS
@@ -1021,11 +1045,13 @@ configure_target_rootless_podman() {
   PODMAN_ROOTLESS_BACKUP_ROOT="${PODMAN_ROOTLESS_CONFIG_ROOT}/backups"
   PODMAN_ROOTLESS_GRAPHROOT="${PODMAN_ROOTLESS_STATE_BASE}/storage"
   PODMAN_ROOTLESS_IMAGESTORE="${PODMAN_ROOTLESS_STATE_BASE}/imagestore"
-  PODMAN_ROOTLESS_RUNROOT="${PODMAN_ROOTLESS_STATE_BASE}/runroot"
+  PODMAN_ROOTLESS_RUNTIME_DIR="/run/user/${PODMAN_SERVICE_UID}"
+  PODMAN_ROOTLESS_RUNTIME_LIBPOD_DIR="${PODMAN_ROOTLESS_RUNTIME_DIR}/libpod"
+  PODMAN_ROOTLESS_RUNROOT="${PODMAN_ROOTLESS_RUNTIME_DIR}/run"
   PODMAN_ROOTLESS_VOLUME_PATH="${PODMAN_ROOTLESS_STATE_BASE}/volumes"
   PODMAN_ROOTLESS_NETWORK_CONFIG_DIR="${PODMAN_ROOTLESS_STATE_BASE}/networks"
   PODMAN_ROOTLESS_STATIC_DIR="${PODMAN_ROOTLESS_STATE_BASE}/libpod"
-  PODMAN_ROOTLESS_TMPDIR="${PODMAN_ROOTLESS_TMP_BASE}/tmp"
+  PODMAN_ROOTLESS_TMPDIR="${PODMAN_ROOTLESS_RUNTIME_LIBPOD_DIR}/tmp"
   PODMAN_ROOTLESS_BUILDAH_TMPDIR="${PODMAN_ROOTLESS_TMP_BASE}/tmp"
   PODMAN_ROOTLESS_SOCKET_URI="unix:///run/user/${PODMAN_SERVICE_UID}/podman/podman.sock"
   if [ "$PODMAN_USER_DOCKER_HOST" = 1 ] || [ "$PODMAN_USER_CONTAINER_HOST" = 1 ]; then
@@ -1082,14 +1108,29 @@ configure_target_rootless_podman() {
     "/target${PODMAN_ROOTLESS_BACKUP_ROOT}" \
     "/target${PODMAN_ROOTLESS_GRAPHROOT}" \
     "/target${PODMAN_ROOTLESS_IMAGESTORE}" \
-    "/target${PODMAN_ROOTLESS_RUNROOT}" \
     "/target${PODMAN_ROOTLESS_VOLUME_PATH}" \
     "/target${PODMAN_ROOTLESS_NETWORK_CONFIG_DIR}" \
-    "/target${PODMAN_ROOTLESS_STATIC_DIR}" \
-    "/target${PODMAN_ROOTLESS_TMPDIR}"
+    "/target${PODMAN_ROOTLESS_STATIC_DIR}"
   podman_chown_target_tree \
     "$PODMAN_ROOTLESS_STATE_BASE" \
     "$PODMAN_ROOTLESS_TMP_BASE"
+  podman_clear_target_dir_setgid_bits \
+    "$PODMAN_ROOTLESS_STATE_BASE" \
+    "$PODMAN_ROOTLESS_TMP_BASE" \
+    "$PODMAN_ROOTLESS_RUNTIME_DIR" \
+    "$PODMAN_ROOTLESS_RUNTIME_LIBPOD_DIR"
+  podman_chmod_target_paths 0700 \
+    "$PODMAN_ROOTLESS_STATE_BASE" \
+    "$PODMAN_ROOTLESS_TMP_BASE" \
+    "$PODMAN_ROOTLESS_GRAPHROOT" \
+    "$PODMAN_ROOTLESS_IMAGESTORE" \
+    "$PODMAN_ROOTLESS_VOLUME_PATH" \
+    "$PODMAN_ROOTLESS_NETWORK_CONFIG_DIR" \
+    "$PODMAN_ROOTLESS_STATIC_DIR" \
+    "$PODMAN_ROOTLESS_RUNTIME_DIR" \
+    "$PODMAN_ROOTLESS_RUNTIME_LIBPOD_DIR" \
+    "$PODMAN_ROOTLESS_RUNROOT" \
+    "$PODMAN_ROOTLESS_TMPDIR"
 
   podman_render_managed_template data/config/podman/templates/rootless/containers.conf.tmpl "${PODMAN_ROOTLESS_CONTAINERS_CONFIG_DIR}/containers.conf" 0640
   podman_render_managed_template data/config/podman/templates/rootless/storage.conf.tmpl "${PODMAN_ROOTLESS_CONTAINERS_CONFIG_DIR}/storage.conf" 0640

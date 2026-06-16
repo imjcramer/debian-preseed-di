@@ -1,0 +1,156 @@
+Jun 15 22:25:48 LPL-056 runuser[9057]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9057]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9062]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9062]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9069]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9069]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9074]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9074]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9081]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9081]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9086]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9086]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9093]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9093]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9098]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9098]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9105]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9105]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9110]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9110]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9117]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9117]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9122]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9122]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:48 LPL-056 runuser[9129]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:48 LPL-056 runuser[9129]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:52 LPL-056 runuser[10724]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:52 LPL-056 runuser[10731]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:52 LPL-056 systemd[3907]: Created slice podman.slice - Slice /podman.
+Jun 15 22:25:52 LPL-056 systemd[3907]: Created slice podman-rootless.slice - Managed rootless Podman resource slice.
+Jun 15 22:25:52 LPL-056 systemd[3907]: Starting podman.service - Podman API Service...
+Jun 15 22:25:52 LPL-056 systemd[3907]: Started podman.service - Podman API Service.
+Jun 15 22:25:52 LPL-056 podman[10745]: 2026-06-15 22:25:52.38969852 +0200 CEST m=+0.027568113 system refresh
+Jun 15 22:25:52 LPL-056 runuser[10731]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:52 LPL-056 runuser[10788]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:52 LPL-056 runuser[10788]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:53 LPL-056 runuser[10978]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:53 LPL-056 runuser[10978]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:53 LPL-056 runuser[10984]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:53 LPL-056 systemd[3907]: Reload requested from client PID 10985 ('systemctl')...
+Jun 15 22:25:53 LPL-056 systemd[3907]: Reloading...
+Jun 15 22:25:53 LPL-056 systemd[3907]: Reloading finished in 302 ms.
+Jun 15 22:25:53 LPL-056 runuser[10984]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:53 LPL-056 runuser[10998]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:53 LPL-056 systemd[3907]: Reload requested from client PID 10999 ('systemctl')...
+Jun 15 22:25:53 LPL-056 systemd[3907]: Reloading...
+Jun 15 22:25:53 LPL-056 systemd[3907]: Reloading finished in 310 ms.
+Jun 15 22:25:53 LPL-056 runuser[10998]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:53 LPL-056 runuser[11012]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:53 LPL-056 runuser[11012]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:53 LPL-056 runuser[11017]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:53 LPL-056 runuser[11017]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:53 LPL-056 runuser[11022]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:53 LPL-056 systemd[3907]: Starting gitlab-runner.service - GitLab Runner build and task docker executor...
+Jun 15 22:25:55 LPL-056 gitlab-runner-managed[11029]: gitlab-runner-managed: validated Podman docker executor context for glab-user
+Jun 15 22:25:55 LPL-056 gitlab-runner-managed[11533]: gitlab-runner-managed: no runner image builds were needed for glab-user
+Jun 15 22:25:55 LPL-056 systemd[3907]: Started gitlab-runner.service - GitLab Runner build and task docker executor.
+Jun 15 22:25:55 LPL-056 runuser[11022]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:55 LPL-056 runuser[11718]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:55 LPL-056 runuser[11718]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:55 LPL-056 runuser[11724]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:55 LPL-056 runuser[11724]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: Runtime platform                                    arch=amd64 os=linux pid=11713 revision=c2831b75 version=19.0.1
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: Starting multi-runner from /data/config/runners/glab-user/config.toml...  builds=0 max_builds=0
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: WARNING: Running in user-mode.                    
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: WARNING: Use sudo for system-mode:                
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: WARNING: $ sudo gitlab-runner...                  
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]:                                                   
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: Created missing unique system ID                    system_id=s_5484c9874316
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: WARNING: Couldn't save new system ID on state file. In order to reliably identify this runner in jobs with a known identifier,
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: please ensure there is a text file at the location specified in `state_file` with the contents of `system_id`. Example: echo "s_5484c9874316" > >
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]:   state_file=/data/config/runners/glab-user/.runner_system_id system_id=s_5484c9874316
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: {"builds":0,"level":"info","max_builds":1,"msg":"Usage logger disabled","time":"2026-06-15T22:25:55.665203434+02:00"}
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: {"builds":0,"level":"info","max_builds":1,"msg":"Configuration loaded","time":"2026-06-15T22:25:55.665306864+02:00"}
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: {"builds":0,"level":"warning","max_builds":1,"msg":"CONFIGURATION: Long polling issues detected.\nIssues found:\n  - Worker starvation bottlenec>
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: {"address":"127.0.0.1:9272","builds":0,"level":"info","max_builds":1,"msg":"Metrics server listening","time":"2026-06-15T22:25:55.670738217+02:0>
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: {"builds":0,"level":"info","max_builds":1,"msg":"[session_server].listen_address not defined, session endpoints disabled","time":"2026-06-15T22:>
+Jun 15 22:25:55 LPL-056 gitlab-runner[11713]: {"builds":0,"level":"info","max_builds":1,"msg":"Initializing executor providers","time":"2026-06-15T22:25:55.670802637+02:00"}
+Jun 15 22:25:56 LPL-056 runuser[11736]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:56 LPL-056 runuser[11736]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:56 LPL-056 runuser[11741]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:56 LPL-056 runuser[11741]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:57 LPL-056 runuser[11747]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:57 LPL-056 runuser[11747]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:57 LPL-056 runuser[11752]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:57 LPL-056 runuser[11752]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:57 LPL-056 runuser[11756]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:25:57 LPL-056 runuser[11756]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:25:57 LPL-056 sudo[8661]: pam_unix(sudo:session): session closed for user root
+Jun 15 22:26:11 LPL-056 sudo[11759]:   lolita : TTY=pts/1 ; PWD=/etc/default/gitlab-runner ; USER=root ; COMMAND=/usr/local/sbin/glab-helper --user glab-user status gitlab-runner.service
+Jun 15 22:26:11 LPL-056 sudo[11759]: pam_unix(sudo:session): session opened for user root(uid=0) by lolita(uid=1000)
+Jun 15 22:26:11 LPL-056 runuser[11767]: pam_unix(runuser:session): session opened for user glab-user(uid=996) by lolita(uid=0)
+Jun 15 22:26:11 LPL-056 runuser[11767]: pam_unix(runuser:session): session closed for user glab-user
+Jun 15 22:26:11 LPL-056 sudo[11759]: pam_unix(sudo:session): session closed for user root
+Jun 15 22:33:53 LPL-056 systemd[1]: Starting zram-writeback.service - Run pressure-aware zram recompression/writeback maintenance...
+Jun 15 22:33:53 LPL-056 systemd[1]: zram-writeback.service: Deactivated successfully.
+Jun 15 22:33:53 LPL-056 systemd[1]: Finished zram-writeback.service - Run pressure-aware zram recompression/writeback maintenance.
+Jun 15 22:34:41 LPL-056 sudo[11822]:   lolita : TTY=tty1 ; PWD=/home/lolita ; USER=root ; COMMAND=/usr/bin/journalctl
+Jun 15 22:34:41 LPL-056 sudo[11822]: pam_unix(sudo:session): session opened for user root(uid=0) by lolita(uid=1000)
+Jun 15 22:35:05 LPL-056 gitlab-runner[11713]: {"correlation_id":"a0c45bf06ca9431d-ARN","job":14866971542,"level":"info","msg":"Checking for jobs... received","repo_url":"https://gitlab.com/c>
+Jun 15 22:35:05 LPL-056 gitlab-runner[11713]: {"bytesize":0,"checksum":"","correlation_id":"ec89225fd5c241d9b8436b78bf31b459","job":14866971542,"level":"info","msg":"Updating job...","runner>
+Jun 15 22:35:05 LPL-056 gitlab-runner[11713]: {"bytesize":0,"checksum":"","code":200,"correlation_id":"a0c45bf5de26431d-ARN","job":14866971542,"job-status":"running","level":"info","msg":"Su>
+Jun 15 22:35:05 LPL-056 gitlab-runner[11713]: {"builds":1,"gitlab_user_id":14295201,"job":14866971542,"level":"info","max_builds":1,"msg":"Added job to processing list","namespace_id":122646>
+Jun 15 22:35:06 LPL-056 podman[10745]: 2026-06-15 22:35:06.491535703 +0200 CEST m=+554.129405316 network create b87255cdbc491391142ddbfda7237e9e7a67e235e73614a972aa5048db43bcad (name=runner->
+Jun 15 22:35:06 LPL-056 podman[10745]: Getting image source signatures
+Jun 15 22:35:06 LPL-056 podman[10745]: Copying blob sha256:278f6f3dc11e10226470c91e7e692ab6f197d2cd9f9924115fc3daecd1dd3186
+Jun 15 22:35:08 LPL-056 gitlab-runner[11713]: {"code":202,"correlation_id":"a0c45c08a82e431d-ARN","job":14866971542,"job-log":"0-671","job-status":"running","level":"info","msg":"Appending t>
+Jun 15 22:35:10 LPL-056 podman[10745]: Trying to pull registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.0.1...
+Jun 15 22:35:11 LPL-056 gitlab-runner[11713]: {"code":202,"correlation_id":"a0c45c1d3ef6431d-ARN","job":14866971542,"job-log":"0-1253","job-status":"running","level":"info","msg":"Appending >
+Jun 15 22:35:12 LPL-056 podman[10745]: Getting image source signatures
+Jun 15 22:35:12 LPL-056 podman[10745]: Copying blob sha256:21490c2367e4008d54cacbe85ed111801f1c738dca96e167c156065c9275a4d2
+Jun 15 22:35:12 LPL-056 podman[10745]: Copying blob sha256:897d797d2723cf0e318402f4d6f37d51b011517e5cf09246b22155f0fa90dc81
+Jun 15 22:35:12 LPL-056 podman[10745]: Copying blob sha256:92ea3fa7c9f5442fb55637016b6c390cd46dfc388f3e8d00e3e9c10d8fba2610
+Jun 15 22:35:12 LPL-056 podman[10745]: Copying blob sha256:fe742d7f39b0ece6aa37e97381bd750b9d5531c96eb6bb1921a9af141df4f3c1
+Jun 15 22:35:12 LPL-056 podman[10745]: Copying blob sha256:31a8e30273300ac1e9cebbdde9b5f8bc38a4402166d8dfb1660493575123aca5
+Jun 15 22:35:14 LPL-056 podman[10745]: Copying config sha256:6300e9ad4c3ee49a82c9456dea9f0dbf72bccac6be03a89ebba9b3648fac497c
+Jun 15 22:35:14 LPL-056 podman[10745]: Writing manifest to image destination
+Jun 15 22:35:14 LPL-056 podman[10745]: 2026-06-15 22:35:14.370660305 +0200 CEST m=+562.008529878 volume create runner-1e4d47a4461c5eb24c8f97517640b9cb-cache-d42b9c57d24cf5db3bd8d332dc35437f->
+Jun 15 22:35:14 LPL-056 podman[10745]: 2026-06-15 22:35:14.391826344 +0200 CEST m=+562.029695927 container create 0a5102cebecc1b7efe70e40e0acbd435a026a113d69092f2cf2d86bcf7eee44b (image=regi>
+Jun 15 22:35:14 LPL-056 pasta[11913]: Couldn't open PID file /pool/podman/glab-user/runroot/networks/rootless-netns/rootless-netns-conn.pid
+Jun 15 22:35:14 LPL-056 pasta[11913]: : Permission denied
+Jun 15 22:35:14 LPL-056 podman[10745]: 2026-06-15 22:35:14.433407653 +0200 CEST m=+562.071277236 container remove 0a5102cebecc1b7efe70e40e0acbd435a026a113d69092f2cf2d86bcf7eee44b (image=regi>
+Jun 15 22:35:14 LPL-056 podman[10745]: 2026-06-15 22:35:14.437758955 +0200 CEST m=+562.075628578 network remove b87255cdbc491391142ddbfda7237e9e7a67e235e73614a972aa5048db43bcad (name=runner->
+Jun 15 22:35:14 LPL-056 gitlab-runner[11713]: {"gitlab_user_id":14295201,"job":14866971542,"level":"warning","msg":"Preparation failed: adding cache volume: set volume permissions: running p>
+Jun 15 22:35:14 LPL-056 gitlab-runner[11713]: {"gitlab_user_id":14295201,"job":14866971542,"level":"info","msg":"Will be retried in 3s ...","namespace_id":122646207,"organization_id":1,"pipe>
+Jun 15 22:35:14 LPL-056 podman[10745]: 2026-06-15 22:35:14.36024212 +0200 CEST m=+561.998111723 image pull 6300e9ad4c3ee49a82c9456dea9f0dbf72bccac6be03a89ebba9b3648fac497c registry.gitlab.co>
+Jun 15 22:35:15 LPL-056 gitlab-runner[11713]: {"code":202,"correlation_id":"a0c45c31ecfb431d-ARN","job":14866971542,"job-log":"0-2292","job-status":"running","level":"info","msg":"Appending >
+Jun 15 22:35:18 LPL-056 podman[10745]: 2026-06-15 22:35:18.261190924 +0200 CEST m=+565.899060517 network create 35c47062e8c376de891d96f92120dfaabe86e4fb443eed3a7ce034c438e3ab77 (name=runner->
+Jun 15 22:35:18 LPL-056 podman[10745]: 2026-06-15 22:35:18.283890154 +0200 CEST m=+565.921759737 container create 4a8944946f1e8708a410f5fc795f372ef78cd9c55f5734689f6abfc1f09e7974 (image=regi>
+Jun 15 22:35:18 LPL-056 pasta[11963]: Couldn't open PID file /pool/podman/glab-user/runroot/networks/rootless-netns/rootless-netns-conn.pid
+Jun 15 22:35:18 LPL-056 pasta[11963]: : Permission denied
+Jun 15 22:35:18 LPL-056 podman[10745]: 2026-06-15 22:35:18.324242932 +0200 CEST m=+565.962112515 container remove 4a8944946f1e8708a410f5fc795f372ef78cd9c55f5734689f6abfc1f09e7974 (image=regi>
+Jun 15 22:35:18 LPL-056 podman[10745]: 2026-06-15 22:35:18.328151974 +0200 CEST m=+565.966021567 network remove 35c47062e8c376de891d96f92120dfaabe86e4fb443eed3a7ce034c438e3ab77 (name=runner->
+Jun 15 22:35:18 LPL-056 gitlab-runner[11713]: {"gitlab_user_id":14295201,"job":14866971542,"level":"warning","msg":"Preparation failed: adding cache volume: set volume permissions: running p>
+Jun 15 22:35:18 LPL-056 gitlab-runner[11713]: {"gitlab_user_id":14295201,"job":14866971542,"level":"info","msg":"Will be retried in 3s ...","namespace_id":122646207,"organization_id":1,"pipe>
+Jun 15 22:35:21 LPL-056 gitlab-runner[11713]: {"code":202,"correlation_id":"a0c45c592874431d-ARN","job":14866971542,"job-log":"0-3123","job-status":"running","level":"info","msg":"Appending >
+Jun 15 22:35:22 LPL-056 podman[10745]: 2026-06-15 22:35:22.137087657 +0200 CEST m=+569.774957280 network create bd4b2373ef77902a3fa8b965edcb3022ea35ebbd010d2c787c5a20c534149d19 (name=runner->
+Jun 15 22:35:22 LPL-056 podman[10745]: 2026-06-15 22:35:22.158868777 +0200 CEST m=+569.796738350 container create 106d1ba1cfed4535005909312d38bd19d5475d90e1f0babdd653bd6a49dc1a7b (image=regi>
+Jun 15 22:35:22 LPL-056 pasta[12016]: Couldn't open PID file /pool/podman/glab-user/runroot/networks/rootless-netns/rootless-netns-conn.pid
+Jun 15 22:35:22 LPL-056 pasta[12016]: : Permission denied
+Jun 15 22:35:22 LPL-056 podman[10745]: 2026-06-15 22:35:22.19006381 +0200 CEST m=+569.827933383 container remove 106d1ba1cfed4535005909312d38bd19d5475d90e1f0babdd653bd6a49dc1a7b (image=regis>
+Jun 15 22:35:22 LPL-056 podman[10745]: 2026-06-15 22:35:22.192561442 +0200 CEST m=+569.830431035 network remove bd4b2373ef77902a3fa8b965edcb3022ea35ebbd010d2c787c5a20c534149d19 (name=runner->
+Jun 15 22:35:22 LPL-056 gitlab-runner[11713]: {"gitlab_user_id":14295201,"job":14866971542,"level":"warning","msg":"Preparation failed: adding cache volume: set volume permissions: running p>
+Jun 15 22:35:22 LPL-056 gitlab-runner[11713]: {"gitlab_user_id":14295201,"job":14866971542,"level":"info","msg":"Will be retried in 3s ...","namespace_id":122646207,"organization_id":1,"pipe>
+Jun 15 22:35:24 LPL-056 gitlab-runner[11713]: {"code":202,"correlation_id":"a0c45c6e0bca431d-ARN","job":14866971542,"job-log":"0-3954","job-status":"running","level":"info","msg":"Appending >
+Jun 15 22:35:25 LPL-056 gitlab-runner[11713]: {"duration_s":19.499053627,"error":"adding cache volume: set volume permissions: running permission container \"106d1ba1cfed4535005909312d38bd19>
+Jun 15 22:35:25 LPL-056 gitlab-runner[11713]: {"code":202,"correlation_id":"a0c45c731cc3431d-ARN","job":14866971542,"job-log":"0-4671","job-status":"running","level":"info","msg":"Appending >
+Jun 15 22:35:25 LPL-056 gitlab-runner[11713]: {"bytesize":4671,"checksum":"crc32:277a5d21","correlation_id":"c0d183aae5c2483187f9b6ca8b730f87","job":14866971542,"level":"info","msg":"Updatin>
+Jun 15 22:35:25 LPL-056 gitlab-runner[11713]: {"bytesize":4671,"checksum":"crc32:277a5d21","code":202,"correlation_id":"a0c45c74efdd431d-ARN","job":14866971542,"job-status":"running","level">
+Jun 15 22:35:26 LPL-056 gitlab-runner[11713]: {"bytesize":4671,"checksum":"crc32:277a5d21","correlation_id":"7494c9f32ed24f5ba5f1eb843781e95e","job":14866971542,"level":"info","msg":"Updatin>
+Jun 15 22:35:27 LPL-056 gitlab-runner[11713]: {"bytesize":4671,"checksum":"crc32:277a5d21","code":200,"correlation_id":"a0c45c7cfd37431d-ARN","job":14866971542,"job-status":"failed","level":>
+Jun 15 22:35:27 LPL-056 gitlab-runner[11713]: {"builds":0,"gitlab_user_id":14295201,"job":14866971542,"level":"info","max_builds":1,"msg":"Removed job from processing list","namespace_id":12>
+Jun 15 22:35:27 LPL-056 gitlab-runner[11713]: {"builds":0,"error":"adding cache volume: set volume permissions: running permission container \"106d1ba1cfed4535005909312d38bd19d5475d90e1f0bab>
+Jun 15 22:36:53 LPL-056 systemd[1]: Starting systemd-tmpfiles-clean.service - Cleanup of Temporary Directories...
+Jun 15 22:36:53 LPL-056 systemd[1]: systemd-tmpfiles-clean.service: Deactivated successfully.
+Jun 15 22:36:53 LPL-056 systemd[1]: Finished systemd-tmpfiles-clean.service - Cleanup of Temporary Directories.

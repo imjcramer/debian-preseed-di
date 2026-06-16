@@ -30,6 +30,11 @@ Runtime split:
   runner service now keeps `HOME` plus `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
   `XDG_CACHE_HOME`, and `XDG_STATE_HOME` so Podman and user-systemd state stay
   coherent
+- `/pool/podman/<user>` keeps persistent rootless Podman storage such as
+  graphroot, imagestore, volumes, and static metadata
+- `/run/user/<uid>/run` plus `/run/user/<uid>/libpod/tmp` keep the rootless
+  Podman runtime state and tmp files so `pasta` and other runtime helpers do
+  not try to persist PID files under `/pool`
 
 ## Managed users
 
@@ -137,8 +142,8 @@ Behavior:
 
 - `refresh`: renders the managed `config.toml`
 - `preflight`: validates the managed Podman Docker-executor context, checks the
-  writable runner roots, and confirms the backend is still rootless over
-  `netavark`
+  writable runner roots, Podman state roots, and `.runner_system_id` state
+  file, and confirms the backend is still rootless over `netavark`
 - `once`: runs `refresh --require-active` and then builds any missing runner
   image after a successful preflight; if the user service is inactive it starts
   it, and if the service is already active it signals GitLab Runner to reload
@@ -195,7 +200,9 @@ Managed runner config is rendered under `/data/config/runners/<user>/`.
 Expected config paths:
 
 - `/data/config/runners/glab-aptly/config.toml`
+- `/data/config/runners/glab-aptly/.runner_system_id`
 - `/data/config/runners/glab-user/config.toml`
+- `/data/config/runners/glab-user/.runner_system_id`
 
 The rendered Docker-executor config targets the managed rootless Podman socket
 through `[runners.docker].host`. It does not export `DOCKER_HOST` or

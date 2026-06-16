@@ -222,14 +222,15 @@ if grep -q '^Wants=podman.socket$' "$service_template" &&
    grep -q '^RestartSec=15s$' "$service_template" &&
    grep -q '^ProtectSystem=strict$' "$service_template" &&
    grep -q '^ReadWritePaths=__INSTALLER_GITLAB_RUNNER_READ_WRITE_PATHS__$' "$service_template" &&
-   grep -Fq 'read_write_paths="${read_write_paths} ${buildah_tmpdir}"' "$gitlab_late" &&
+   grep -Fq 'system_id_path="${base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME}"' "$gitlab_late" &&
+   grep -Fq 'read_write_paths="${read_write_paths} ${buildah_tmpdir} ${system_id_path}"' "$gitlab_late" &&
    grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"' "$gitlab_late" &&
    ! grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME} ${GITLAB_RUNNER_PODMAN_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"' "$gitlab_late" &&
    grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"' "$gitlab_late" &&
    ! grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME} ${GITLAB_RUNNER_PODMAN_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"' "$gitlab_late"; then
-  pass "user service template keeps Podman control-plane access without making the managed Buildah tmpdir read-only inside ExecStartPre"
+  pass "user service template keeps Podman control-plane access while leaving the Buildah tmpdir and runner system-id file writable inside ExecStartPre"
 else
-  fail "user service template keeps Podman control-plane access without making the managed Buildah tmpdir read-only inside ExecStartPre"
+  fail "user service template keeps Podman control-plane access while leaving the Buildah tmpdir and runner system-id file writable inside ExecStartPre"
 fi
 
 if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
@@ -237,6 +238,10 @@ if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
    grep -Fq 'context_runner_ids+=(BUILD)' "$managed_helper" &&
    grep -Fq 'context_runner_ids+=(TASK)' "$managed_helper" &&
    grep -q 'context_docker_host="unix:///run/user/${context_uid}/podman/podman.sock"' "$managed_helper" &&
+   grep -q 'context_system_id_file="${context_base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME:-.runner_system_id}"' "$managed_helper" &&
+   grep -q 'context_podman_tmpdir="${context_podman_runtime_libpod_dir}/tmp"' "$managed_helper" &&
+   grep -q 'context_podman_runroot="/run/user/${context_uid}/run"' "$managed_helper" &&
+   grep -q 'context_podman_rootless_netns_dir="${context_podman_runroot_networks_dir}/rootless-netns"' "$managed_helper" &&
    grep -q '^preflight_executor() {$' "$managed_helper" &&
    grep -Fq "run_podman_as_context_user info --format '{{.Host.Security.Rootless}}|{{.Host.NetworkBackend}}'" "$managed_helper" &&
    grep -q 'FF_NETWORK_PER_BUILD = true' "$managed_helper" &&
@@ -248,19 +253,21 @@ if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
    ! grep -Fq 'docker_socket = docker_host.removeprefix("unix://")' "$managed_helper" &&
    ! grep -Fq 'f"{tmp_dir}:{tmp_dir}:rw"' "$managed_helper" &&
    ! grep -Fq 'docker.sock' "$managed_helper"; then
-  pass "managed helper renders one aptly runner and shared build/task runners over Podman without recursive socket injection"
+  pass "managed helper renders one aptly runner and shared build/task runners over Podman while checking the rootless runtime paths under /run/user"
 else
-  fail "managed helper renders one aptly runner and shared build/task runners over Podman without recursive socket injection"
+  fail "managed helper renders one aptly runner and shared build/task runners over Podman while checking the rootless runtime paths under /run/user"
 fi
 
 if grep -q 'GITLAB_RUNNER_CACHE_DIR_NAMES' "$managed_helper" &&
    grep -q 'validate_cache_dir_name' "$managed_helper" &&
    ! grep -q '^cache_dir_names=(' "$managed_helper" &&
    grep -q 'IFS=: read -r _passwd_name' "$managed_helper" &&
+   ! grep -q 'run_as_context_user test -w' "$managed_helper" &&
+   ! grep -q 'run_as_context_user test -x' "$managed_helper" &&
    grep -q 'IFS=: read -r _passwd_name' "$operator_helper"; then
-  pass "installed Bash helpers avoid duplicated cache tables and repeated passwd parsing subprocesses"
+  pass "installed Bash helpers avoid duplicated cache tables, repeated passwd parsing subprocesses, and per-path runuser permission probes"
 else
-  fail "installed Bash helpers avoid duplicated cache tables and repeated passwd parsing subprocesses"
+  fail "installed Bash helpers avoid duplicated cache tables, repeated passwd parsing subprocesses, and per-path runuser permission probes"
 fi
 
 if grep -q '^set_return_file_cleanup() {$' "$managed_helper" &&

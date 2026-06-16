@@ -253,13 +253,23 @@ load_user_context() {
   context_work_dir="${context_base_dir}/work"
   context_job_home="${context_base_dir}/home"
   context_config_path="${context_base_dir}/${GITLAB_RUNNER_CONFIG_BASENAME:-config.toml}"
-  context_system_id_file="${context_work_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME:-.runner_system_id}"
+  context_system_id_file="${context_base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME:-.runner_system_id}"
   context_runtime_root="/run/user/${context_uid}/gitlab-runner"
   context_tmp_dir="${context_runtime_root}/tmp"
   context_docker_host="unix:///run/user/${context_uid}/podman/podman.sock"
   context_container_host="$context_docker_host"
   context_podman_config_root="${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${context_user}"
   context_podman_state_root="${GITLAB_RUNNER_PODMAN_STATE_BASE}/${context_user}"
+  context_podman_graphroot="${context_podman_state_root}/storage"
+  context_podman_imagestore="${context_podman_state_root}/imagestore"
+  context_podman_runtime_libpod_dir="/run/user/${context_uid}/libpod"
+  context_podman_tmpdir="${context_podman_runtime_libpod_dir}/tmp"
+  context_podman_runroot="/run/user/${context_uid}/run"
+  context_podman_runroot_networks_dir="${context_podman_runroot}/networks"
+  context_podman_rootless_netns_dir="${context_podman_runroot_networks_dir}/rootless-netns"
+  context_podman_volume_path="${context_podman_state_root}/volumes"
+  context_podman_network_config_dir="${context_podman_state_root}/networks"
+  context_podman_static_dir="${context_podman_state_root}/libpod"
   context_buildah_tmpdir="${GITLAB_RUNNER_PODMAN_TMP_BASE}/${context_user}/tmp"
   context_xdg_config_home="${context_home}/.config"
   context_xdg_data_home="${context_home}/.local/share"
@@ -275,6 +285,16 @@ load_user_context() {
   validate_absolute_path context_tmp_dir "$context_tmp_dir"
   validate_absolute_path context_podman_config_root "$context_podman_config_root"
   validate_absolute_path context_podman_state_root "$context_podman_state_root"
+  validate_absolute_path context_podman_graphroot "$context_podman_graphroot"
+  validate_absolute_path context_podman_imagestore "$context_podman_imagestore"
+  validate_absolute_path context_podman_runtime_libpod_dir "$context_podman_runtime_libpod_dir"
+  validate_absolute_path context_podman_tmpdir "$context_podman_tmpdir"
+  validate_absolute_path context_podman_runroot "$context_podman_runroot"
+  validate_absolute_path context_podman_runroot_networks_dir "$context_podman_runroot_networks_dir"
+  validate_absolute_path context_podman_rootless_netns_dir "$context_podman_rootless_netns_dir"
+  validate_absolute_path context_podman_volume_path "$context_podman_volume_path"
+  validate_absolute_path context_podman_network_config_dir "$context_podman_network_config_dir"
+  validate_absolute_path context_podman_static_dir "$context_podman_static_dir"
   validate_absolute_path context_buildah_tmpdir "$context_buildah_tmpdir"
   validate_absolute_path context_xdg_config_home "$context_xdg_config_home"
   validate_absolute_path context_xdg_data_home "$context_xdg_data_home"
@@ -302,6 +322,17 @@ ensure_common_runtime_dirs() {
     "$context_xdg_data_home" \
     "$context_xdg_cache_home" \
     "$context_xdg_state_home" \
+    "$context_podman_state_root" \
+    "$context_podman_graphroot" \
+    "$context_podman_imagestore" \
+    "$context_podman_runtime_libpod_dir" \
+    "$context_podman_tmpdir" \
+    "$context_podman_runroot" \
+    "$context_podman_runroot_networks_dir" \
+    "$context_podman_rootless_netns_dir" \
+    "$context_podman_volume_path" \
+    "$context_podman_network_config_dir" \
+    "$context_podman_static_dir" \
     "$context_tmp_dir" \
     "$context_buildah_tmpdir"
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -315,10 +346,24 @@ ensure_common_runtime_dirs() {
       "$context_xdg_data_home" \
       "$context_xdg_cache_home" \
       "$context_xdg_state_home" \
+      "$context_podman_state_root" \
+      "$context_podman_graphroot" \
+      "$context_podman_imagestore" \
+      "$context_podman_runtime_libpod_dir" \
+      "$context_podman_tmpdir" \
+      "$context_podman_runroot" \
+      "$context_podman_runroot_networks_dir" \
+      "$context_podman_rootless_netns_dir" \
+      "$context_podman_volume_path" \
+      "$context_podman_network_config_dir" \
+      "$context_podman_static_dir" \
       "$context_tmp_dir" \
       "$context_buildah_tmpdir"
   fi
   if [[ ! -e "$context_system_id_file" ]]; then
+    if [[ "$(id -u)" -ne 0 ]]; then
+      die "runner system-id state file is missing for ${context_user}; rerun gitlab-runner-managed once through glab-helper to recreate ${context_system_id_file}"
+    fi
     : >"$context_system_id_file"
   fi
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -400,19 +445,16 @@ run_podman_as_context_user() {
 verify_owned_writable_dir() {
   local label="$1"
   local path="$2"
-  local path_uid path_gid
+  local path_uid path_gid path_mode owner_perms
   validate_absolute_path "$label" "$path"
   [[ -d "$path" ]] || die "${label} is not a directory: ${path}"
   [[ ! -L "$path" ]] || die "${label} must not be a symlink: ${path}"
-  IFS=' ' read -r path_uid path_gid < <(stat -c '%u %g' -- "$path")
+  IFS=' ' read -r path_uid path_gid path_mode < <(stat -c '%u %g %a' -- "$path")
   [[ "$path_uid" == "$context_uid" && "$path_gid" == "$context_gid" ]] ||
     die "${label} must stay owned by ${context_user}:${context_gid}: ${path}"
-  if [[ "$(id -un)" == "$context_user" ]]; then
-    [[ -w "$path" && -x "$path" ]] || die "${label} must be writable and searchable by ${context_user}: ${path}"
-  else
-    run_as_context_user test -w "$path" || die "${label} must be writable by ${context_user}: ${path}"
-    run_as_context_user test -x "$path" || die "${label} must be searchable by ${context_user}: ${path}"
-  fi
+  owner_perms=$(( (8#$path_mode >> 6) & 7 ))
+  (( (owner_perms & 2) == 2 )) || die "${label} must be writable by ${context_user}: ${path}"
+  (( (owner_perms & 1) == 1 )) || die "${label} must be searchable by ${context_user}: ${path}"
 }
 
 verify_runner_storage_context() {
@@ -424,6 +466,17 @@ verify_runner_storage_context() {
   verify_owned_writable_dir context_xdg_data_home "$context_xdg_data_home"
   verify_owned_writable_dir context_xdg_cache_home "$context_xdg_cache_home"
   verify_owned_writable_dir context_xdg_state_home "$context_xdg_state_home"
+  verify_owned_writable_dir context_podman_state_root "$context_podman_state_root"
+  verify_owned_writable_dir context_podman_graphroot "$context_podman_graphroot"
+  verify_owned_writable_dir context_podman_imagestore "$context_podman_imagestore"
+  verify_owned_writable_dir context_podman_runtime_libpod_dir "$context_podman_runtime_libpod_dir"
+  verify_owned_writable_dir context_podman_tmpdir "$context_podman_tmpdir"
+  verify_owned_writable_dir context_podman_runroot "$context_podman_runroot"
+  verify_owned_writable_dir context_podman_runroot_networks_dir "$context_podman_runroot_networks_dir"
+  verify_owned_writable_dir context_podman_rootless_netns_dir "$context_podman_rootless_netns_dir"
+  verify_owned_writable_dir context_podman_volume_path "$context_podman_volume_path"
+  verify_owned_writable_dir context_podman_network_config_dir "$context_podman_network_config_dir"
+  verify_owned_writable_dir context_podman_static_dir "$context_podman_static_dir"
   verify_owned_writable_dir context_tmp_dir "$context_tmp_dir"
   verify_owned_writable_dir context_buildah_tmpdir "$context_buildah_tmpdir"
 
