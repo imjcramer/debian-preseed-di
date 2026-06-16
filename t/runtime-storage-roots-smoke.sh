@@ -55,9 +55,9 @@ if grep -q '^d __INSTALLER_DIR_DATA__ 0755 root root -$' "$tmpfiles_roots" &&
    grep -q '^d __INSTALLER_DIR_POOL_CACHE__ 2770 root devops -$' "$tmpfiles_roots" &&
    grep -q '^d __INSTALLER_DIR_POOL_CACHE_RUNNERS__ 2770 root devops -$' "$tmpfiles_roots" &&
    grep -q '^d __INSTALLER_DIR_POOL_DB__ 2770 root devops -$' "$tmpfiles_roots" &&
-   grep -q '^d __INSTALLER_DIR_POOL_PODMAN__ 2770 root devops -$' "$tmpfiles_roots" &&
+   grep -q '^d __INSTALLER_DIR_POOL_PODMAN__ 0711 root root -$' "$tmpfiles_roots" &&
    grep -q '^d __INSTALLER_DIR_POOL_LOG__ 2770 root devops -$' "$tmpfiles_roots" &&
-   grep -q '^d __INSTALLER_DIR_POOL_APTLY__ 2770 root devops -$' "$tmpfiles_roots"; then
+   ! grep -q '^d __INSTALLER_DIR_POOL_APTLY__ ' "$tmpfiles_roots"; then
   pass "tmpfiles root policy recreates the shared /data and /pool runtime roots"
 else
   fail "tmpfiles root policy recreates the shared /data and /pool runtime roots"

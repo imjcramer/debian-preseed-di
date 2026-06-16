@@ -32,6 +32,9 @@ Runtime split:
   coherent
 - `/pool/podman/<user>` keeps persistent rootless Podman storage such as
   graphroot, imagestore, volumes, and static metadata
+- `/pool/podman` remains a traversal-only parent instead of a shared devops
+  work tree so rootless OCI helpers can still open user-owned graphroots even
+  if a helper process does not retain supplemental groups during startup
 - `/run/user/<uid>/run` plus `/run/user/<uid>/libpod/tmp` keep the rootless
   Podman runtime state and tmp files so `pasta` and other runtime helpers do
   not try to persist PID files under `/pool`

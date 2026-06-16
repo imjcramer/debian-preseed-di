@@ -12,10 +12,13 @@ These managed users intentionally use `/usr/sbin/nologin`. `sudo -iu glab-user`
 or `sudo -iu glab-aptly` is expected to fail and is not the supported
 debugging path.
 
-Persistent Podman storage for those runners stays under `/pool/podman/<user>`,
-but rootless Podman runtime state now stays under `/run/user/<uid>/run` and
-`/run/user/<uid>/libpod/tmp` so helpers such as `pasta` write PID and runtime
-files on the user runtime filesystem instead of under `/pool`.
+Persistent Podman storage for those runners stays under `/pool/podman/<user>`.
+The shared `/pool/podman` parent stays traversal-only so rootless OCI helpers
+can still reach those per-user graphroots even if they momentarily lose
+supplemental groups during container startup. Rootless Podman runtime state now
+stays under `/run/user/<uid>/run` and `/run/user/<uid>/libpod/tmp` so helpers
+such as `pasta` write PID and runtime files on the user runtime filesystem
+instead of under `/pool`.
 
 ## Managed files
 
