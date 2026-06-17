@@ -5,7 +5,7 @@ IFS=$'\n\t'
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 BRIDGE="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/pool/aptly/bin/aptly-bridge"
 
-TEST_COUNT=2
+TEST_COUNT=3
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -116,6 +116,35 @@ else
   else
     fail "bridge submit propagates publish failures"
   fi
+fi
+
+rm -f "$RESULTS_DIR"/*.json "$REQUESTS_DIR"/*.json
+APTLY_CHANNEL=testing \
+APTLY_BRIDGE_REQUESTS_DIR="$REQUESTS_DIR" \
+APTLY_BRIDGE_RESULTS_DIR="$RESULTS_DIR" \
+APTLY_BRIDGE_WAIT_SECONDS=5 \
+APTLY_BRIDGE_POLL_INTERVAL=1 \
+"$BRIDGE" submit publish switch stable s3:r2: demo >"$TMP_ROOT/channel.stdout" 2>"$TMP_ROOT/channel.stderr" &
+bridge_pid=$!
+request_path=
+for _ in $(seq 1 50); do
+  request_path=$(find "$REQUESTS_DIR" -maxdepth 1 -type f -name '*.json' | sort | head -n1 || true)
+  if [[ -n "$request_path" ]]; then
+    emit_result "$RESULTS_DIR" "$request_path" 0 "" ""
+    break
+  fi
+  sleep 0.1
+done
+if wait "$bridge_pid"; then
+  if [[ -n "$request_path" ]] &&
+     assert_contains "$request_path" '"channel": "testing"' &&
+     assert_contains "$request_path" '"switch"'; then
+    pass "bridge records publish switch requests and preserves the optional channel hint"
+  else
+    fail "bridge records publish switch requests and preserves the optional channel hint"
+  fi
+else
+  fail "bridge records publish switch requests and preserves the optional channel hint"
 fi
 
 [ "$FAIL_COUNT" -eq 0 ]

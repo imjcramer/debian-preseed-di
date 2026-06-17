@@ -97,6 +97,19 @@ if [[ $# -ge 2 && "$1" == "publish" ]]; then
         extra_args+=("-label=${APTLY_PUBLISH_LABEL}")
       fi
       ;;
+    switch)
+      if [[ "$skip_contents" == "true" ]] && ! has_flag "-skip-contents" "$@"; then
+        extra_args+=("-skip-contents")
+      fi
+      if [[ -n "${APTLY_PUBLISH_COMPONENT:-}" ]] && ! has_flag "-component" "$@"; then
+        extra_args+=("-component=${APTLY_PUBLISH_COMPONENT}")
+      fi
+      ;;
+    update)
+      if [[ "$skip_contents" == "true" ]] && ! has_flag "-skip-contents" "$@"; then
+        extra_args+=("-skip-contents")
+      fi
+      ;;
   esac
 
   exec "$real_bin" "$1" "$2" "${extra_args[@]}" "${@:3}"

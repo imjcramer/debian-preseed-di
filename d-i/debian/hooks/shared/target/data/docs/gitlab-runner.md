@@ -79,13 +79,25 @@ Use `aptly-managed` for the persistent Aptly state:
 
 ```sh
 sudo glab-helper --user glab-aptly aptly-managed render-config
-sudo glab-helper --user glab-aptly aptly-managed publish snapshot repo-name s3:r2:
+sudo glab-helper --user glab-aptly aptly-managed --channel stable publish snapshot repo-name
+sudo glab-helper --user glab-aptly aptly-managed --channel testing publish switch testing repo-name-20260617
 ```
 
 Direct `aptly publish ...` inside the runner container is now bridged into a
 host-side queue instead of signing in-container. The `.aptly.conf` file is
 owned by `aptly:aptly` with mode `0600`, and the state under
 `/pool/aptly/.aptly` is reserved for that account.
+
+Set `APTLY_CHANNEL=stable` or `APTLY_CHANNEL=testing` inside CI before calling
+`aptly publish ...`. The bridge now accepts `publish repo`, `publish snapshot`,
+and `publish switch`, and the host helper applies channel policy after the new
+publication is confirmed live:
+
+- `stable`: keep the live snapshot plus one older snapshot, with no age expiry
+- `testing`: keep up to three snapshots total and retire older testing snapshots
+  once their Aptly `CreatedAt` age exceeds `14` days
+
+Retention state is tracked under `/pool/aptly/.managed/channels`.
 
 The installed bridge units are:
 

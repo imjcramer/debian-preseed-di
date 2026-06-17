@@ -181,7 +181,8 @@ Use the controlled helper for Aptly publication and signing:
 
 ```sh
 sudo glab-helper --user glab-aptly aptly-managed render-config
-sudo glab-helper --user glab-aptly aptly-managed publish snapshot repo-name s3:r2:
+sudo glab-helper --user glab-aptly aptly-managed --channel stable publish snapshot repo-name
+sudo glab-helper --user glab-aptly aptly-managed --channel testing publish switch testing repo-name-20260617
 ```
 
 Direct container-side publish is no longer a direct signing operation. The job
@@ -195,6 +196,21 @@ and also provide:
 - `GITLAB_RUNNER_APTLY_R2_BUCKET_NAME`
 - `GITLAB_RUNNER_APTLY_R2_ACCESS_KEY_ID`
 - `GITLAB_RUNNER_APTLY_R2_SECRET_ACCESS_KEY`
+
+The managed Aptly host path now exposes two publication channels:
+
+- `stable`: maps to distribution `stable`, publishes to `s3:r2:`, keeps the
+  current snapshot plus one older snapshot, and has no age-based expiry
+- `testing`: maps to distribution `testing`, publishes to `s3:r2:`, keeps up to
+  three snapshots total, and drops retired snapshots older than `14` days by
+  their Aptly `CreatedAt` timestamp after the new publication is confirmed live
+
+Inside CI, set `APTLY_CHANNEL=stable` or `APTLY_CHANNEL=testing` before calling
+`aptly publish ...`. The container-side bridge now accepts `aptly publish repo`,
+`aptly publish snapshot`, and `aptly publish switch`; when the target channel
+already exists, the host helper automatically converts repeated snapshot
+publishes into `publish switch` and repeated local-repo publishes into
+`publish update`.
 
 ## Rendered state
 
@@ -223,6 +239,7 @@ The CI publish bridge adds these host-side paths:
 - `/pool/aptly/queue/requests`
 - `/pool/aptly/queue/results`
 - `/pool/aptly/queue/processing`
+- `/pool/aptly/.managed/channels`
 - `/etc/systemd/system/aptly-bridge.path`
 - `/etc/systemd/system/aptly-bridge.service`
 

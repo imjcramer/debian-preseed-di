@@ -60,7 +60,7 @@ PY
 
 process_one_request() {
   local request_path="$1"
-  local processing_path request_uid request_gid result_path stdout_log stderr_log
+  local processing_path request_uid request_gid result_path stdout_log stderr_log request_channel
   local request_id
   local -a request_args=()
 
@@ -90,16 +90,22 @@ if not stat.S_ISREG(st.st_mode):
 if st.st_size > 65536:
     raise SystemExit("bridge request is too large")
 data = json.loads(request_path.read_text())
-if data.get("version") != 1:
+if data.get("version") not in {1, 2}:
     raise SystemExit("unsupported bridge request version")
 request_id = data.get("request_id", "")
 args = data.get("args")
+channel = data.get("channel", "")
 if not isinstance(request_id, str) or not request_id:
     raise SystemExit("bridge request_id is missing")
 if not isinstance(args, list) or len(args) < 2:
     raise SystemExit("bridge args are missing")
-if args[0] != "publish" or args[1] not in {"snapshot", "repo"}:
-    raise SystemExit("bridge only supports aptly publish snapshot|repo")
+if args[0] != "publish" or args[1] not in {"snapshot", "repo", "switch"}:
+    raise SystemExit("bridge only supports aptly publish snapshot|repo|switch")
+if channel:
+    if not isinstance(channel, str):
+        raise SystemExit("bridge channel must be a string")
+    if len(channel) > 32 or any(ord(ch) < 32 for ch in channel):
+        raise SystemExit("bridge channel is invalid")
 for arg in args:
     if not isinstance(arg, str) or not arg:
         raise SystemExit("bridge args must be non-empty strings")
@@ -107,6 +113,7 @@ for arg in args:
         raise SystemExit("bridge arg too long")
     if any(ord(ch) < 32 for ch in arg):
         raise SystemExit("bridge args contain unsupported control characters")
+print(f"__CHANNEL__={channel}")
 for item in args:
     print(item)
 PY
@@ -120,7 +127,16 @@ PY
     return 0
   fi
 
-  if /usr/local/sbin/aptly-managed --runner-user "$RUNNER_USER" run "${request_args[@]}" >"$stdout_log" 2>"$stderr_log"; then
+  request_channel="${request_args[0]#__CHANNEL__=}"
+  request_args=("${request_args[@]:1}")
+
+  local -a managed_args=(--runner-user "$RUNNER_USER")
+  if [[ -n "$request_channel" ]]; then
+    managed_args+=(--channel "$request_channel")
+  fi
+  managed_args+=(publish "${request_args[@]:1}")
+
+  if /usr/local/sbin/aptly-managed "${managed_args[@]}" >"$stdout_log" 2>"$stderr_log"; then
     write_result "$result_path" "$request_uid" "$request_gid" 0 "$stdout_log" "$stderr_log"
   else
     rc=$?

@@ -275,6 +275,7 @@ gitlab_runner_stage_service_assets() {
 
   stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/sbin/aptly-managed)" /usr/local/sbin/aptly-managed 0750
   stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/sbin/aptly-bridge-processor)" /usr/local/sbin/aptly-bridge-processor 0750
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/libexec/aptly-publish-managed)" /usr/local/libexec/aptly-publish-managed 0755
   stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/sbin/glab-helper)" /usr/local/sbin/glab-helper 0755
   stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/sbin/gitlab-runner-managed)" /usr/local/sbin/gitlab-runner-managed 0755
   stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/data/config/runners/templates/gitlab-runner.service.tmpl)" "${GITLAB_RUNNER_STATE_BASE}/templates/gitlab-runner.service.tmpl" 0644
@@ -299,6 +300,7 @@ gitlab_runner_stage_service_assets() {
   chown root:root \
     /target/usr/local/sbin/aptly-managed \
     /target/usr/local/sbin/aptly-bridge-processor \
+    /target/usr/local/libexec/aptly-publish-managed \
     /target/etc/systemd/system/aptly-bridge.service \
     /target/etc/systemd/system/aptly-bridge.path \
     /target/pool/aptly/Containerfile \

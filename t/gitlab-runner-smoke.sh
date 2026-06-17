@@ -40,6 +40,7 @@ task_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-task.env"
 managed_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/gitlab-runner-managed"
 aptly_managed="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/aptly-managed"
 aptly_bridge_processor="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/aptly-bridge-processor"
+aptly_publish_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/libexec/aptly-publish-managed"
 operator_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/glab-helper"
 service_template="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/data/config/runners/templates/gitlab-runner.service.tmpl"
 aptly_tmpfiles="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/etc/tmpfiles.d/80-gitlab-runner-storage.conf.tmpl"
@@ -97,6 +98,10 @@ fi
 
 if grep -q '^GITLAB_RUNNER_APTLY_USERNAME="glab-aptly"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_OWNER_USERNAME="aptly"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNELS="stable testing"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_STABLE_KEEP_SNAPSHOTS="2"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_TESTING_KEEP_SNAPSHOTS="3"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_TESTING_MAX_AGE_DAYS="14"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_BUILD_USERNAME="glab-user"$' "$build_env" &&
    grep -q '^GITLAB_RUNNER_TASK_USERNAME="glab-user"$' "$task_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_NAME="aptly"$' "$aptly_env" &&
@@ -135,6 +140,7 @@ if grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES git
    grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-task.env)"' "$gitlab_late" &&
    grep -q 'target/usr/local/sbin/aptly-managed' "$gitlab_late" &&
    grep -q 'target/usr/local/sbin/aptly-bridge-processor' "$gitlab_late" &&
+   grep -q 'target/usr/local/libexec/aptly-publish-managed' "$gitlab_late" &&
    grep -q 'target/pool/aptly/bin/aptly-bridge' "$gitlab_late" &&
    grep -q 'target/etc/systemd/system/aptly-bridge.service' "$gitlab_late" &&
    grep -q 'target/etc/systemd/system/aptly-bridge.path' "$gitlab_late" &&
@@ -170,18 +176,23 @@ fi
 if ! grep -q '__INSTALLER_DIR_POOL_APTLY__' "$runtime_storage_tmpfiles" &&
    grep -q '^d /pool/aptly 0755 root root -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/.aptly 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d /pool/aptly/.managed 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d /pool/aptly/.managed/channels 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/secrets 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/requests 03770 root devops -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/results 03770 root devops -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/processing 0700 root root -$' "$aptly_tmpfiles" &&
    grep -q '/pool/aptly:/pool/aptly:rw' "$aptly_env" &&
    grep -Fq 'exec "$bridge_bin" submit "$@"' "$aptly_wrapper" &&
+   grep -Fq 'snapshot|repo|switch' "$aptly_bridge" &&
    grep -Fq 'PathExistsGlob=/pool/aptly/queue/requests/*.json' "$aptly_bridge_path" &&
    grep -q '^ExecStart=/usr/local/sbin/aptly-bridge-processor$' "$aptly_bridge_service" &&
    grep -Fq 'chown "${publish_user}:${publish_user}" "$env_file"' "$aptly_managed" &&
    grep -Fq 'runuser -u "$publish_user" -- bash -lc' "$aptly_managed" &&
-   grep -Fq '/usr/local/sbin/aptly-managed --runner-user "$RUNNER_USER" run "${request_args[@]}"' "$aptly_bridge_processor" &&
+   grep -Fq '/usr/local/sbin/aptly-managed "${managed_args[@]}"' "$aptly_bridge_processor" &&
    grep -Fq 'source /pool/aptly/bin/prepare-aptly-env.sh' "$aptly_managed" &&
+   grep -Fq 'prepare_aptly_env' "$aptly_managed" &&
+   grep -Fq 'APTLY_JOB_DIR' "$aptly_publish_helper" &&
    grep -Fq 'chown "${context_aptly_owner_user}:${context_aptly_owner_user}" "$config_path"' "$managed_helper" &&
    ! grep -q 'APTLY_CONFIG=/pool/aptly/.aptly.conf' "$managed_helper" &&
    ! grep -q 'R2_ACCESS_KEY_ID=$(runner_var' "$managed_helper"; then

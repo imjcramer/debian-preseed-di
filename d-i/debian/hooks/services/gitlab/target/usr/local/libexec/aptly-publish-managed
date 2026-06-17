@@ -1,0 +1,800 @@
+#!/usr/bin/env python3
+import dataclasses
+import datetime as dt
+import http.client
+import json
+import os
+import pathlib
+import socket
+import subprocess
+import sys
+import time
+from typing import Iterable
+
+
+PROG = pathlib.Path(__file__).name
+ROOT_PREFIX = "."
+FLAG_VALUE_OPTIONS = {
+    "-architectures",
+    "-component",
+    "-distribution",
+    "-gpg-key",
+    "-keyring",
+    "-secret-keyring",
+    "-passphrase",
+    "-passphrase-file",
+    "-origin",
+    "-label",
+    "-notautomatic",
+    "-butautomaticupgrades",
+}
+TRANSIENT_SWITCH_FLAGS = {
+    "-distribution",
+    "-origin",
+    "-label",
+    "-acquire-by-hash",
+    "-architectures",
+    "-notautomatic",
+    "-butautomaticupgrades",
+}
+TRANSIENT_UPDATE_FLAGS = TRANSIENT_SWITCH_FLAGS | {"-component"}
+
+
+def info(message: str) -> None:
+    print(f"{PROG}: {message}", file=sys.stderr)
+
+
+def die(message: str) -> "None":
+    raise SystemExit(f"{PROG}: {message}") from None
+
+
+def env_required(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        die(f"required environment variable is missing: {name}")
+    return value
+
+
+def normalize_prefix(value: str | None) -> str:
+    text = (value or "").strip()
+    return ROOT_PREFIX if text in {"", ROOT_PREFIX} else text
+
+
+def normalize_storage(value: str | None) -> str:
+    text = (value or "").strip().rstrip(":")
+    return text.split(":", 1)[0] if text else ""
+
+
+def parse_timestamp(value: str) -> dt.datetime:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(normalized)
+    except ValueError:
+        die(f"unsupported timestamp from Aptly API: {value}")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def now_utc() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def parse_target(value: str | None) -> tuple[str, str, str | None]:
+    raw = (value or "").strip()
+    if not raw:
+        return "", ROOT_PREFIX, None
+    parts = raw.split(":", 2)
+    if len(parts) == 3:
+        storage_kind = parts[0]
+        prefix = normalize_prefix(parts[2])
+        endpoint = f"{parts[0]}:{parts[1]}:"
+        return storage_kind, prefix, endpoint
+    return "", normalize_prefix(raw), raw
+
+
+def target_arg_from_endpoint(endpoint: str, prefix: str) -> str:
+    return endpoint if normalize_prefix(prefix) == ROOT_PREFIX else f"{endpoint}{prefix}"
+
+
+def ensure_regular_file(path: pathlib.Path) -> None:
+    try:
+        st = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not path.is_file() or path.is_symlink():
+        die(f"state path must be a regular file: {path}")
+    if st.st_size > 1024 * 1024:
+        die(f"state file is too large: {path}")
+
+
+@dataclasses.dataclass(frozen=True)
+class PublicationSource:
+    component: str
+    name: str
+
+    def to_json(self) -> dict[str, str]:
+        return {"component": self.component, "name": self.name}
+
+
+@dataclasses.dataclass(frozen=True)
+class ChannelPolicy:
+    name: str
+    distribution: str
+    keep_snapshots: int
+    max_age_days: int
+    storage_kind: str
+    prefix: str
+    endpoint: str
+
+    def target_arg(self) -> str | None:
+        if self.endpoint:
+            return target_arg_from_endpoint(self.endpoint, self.prefix)
+        if self.prefix == ROOT_PREFIX:
+            return None
+        return self.prefix
+
+
+@dataclasses.dataclass(frozen=True)
+class Publication:
+    storage: str
+    prefix: str
+    distribution: str
+    source_kind: str
+    sources: tuple[PublicationSource, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class PublishRequest:
+    subcommand: str
+    flags: tuple[str, ...]
+    distribution: str
+    target_raw: str | None
+    storage_kind: str
+    prefix: str
+    endpoint: str | None
+    source_names: tuple[str, ...]
+    components: tuple[str, ...]
+    component_count: int
+
+
+class UnixSocketHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: pathlib.Path):
+        super().__init__("localhost")
+        self.socket_path = str(socket_path)
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(self.socket_path)
+
+
+class AptlyApiSession:
+    def __init__(self, socket_path: pathlib.Path):
+        self.socket_path = socket_path
+        self.proc: subprocess.Popen[str] | None = None
+
+    def __enter__(self) -> "AptlyApiSession":
+        command = [
+            "/pool/aptly/bin/aptly",
+            "api",
+            "serve",
+            f"-listen=unix://{self.socket_path}",
+            "-no-lock",
+        ]
+        self.proc = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if self.proc.poll() is not None:
+                stderr = ""
+                if self.proc.stderr is not None:
+                    stderr = self.proc.stderr.read()
+                die(f"failed to start transient Aptly API server: {stderr.strip() or 'unknown error'}")
+            if self.socket_path.exists():
+                try:
+                    self.get_json("/api/publish")
+                    return self
+                except OSError:
+                    pass
+            time.sleep(0.1)
+        die("timed out waiting for transient Aptly API socket")
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.proc is None:
+            return
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=5.0)
+        try:
+            self.socket_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def get_json(self, path: str) -> object:
+        conn = UnixSocketHTTPConnection(self.socket_path)
+        conn.request("GET", path)
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        conn.close()
+        if response.status != 200:
+            die(f"Aptly API request failed for {path}: HTTP {response.status} {body.strip()}")
+        return json.loads(body or "null")
+
+
+def parse_option_tokens(tokens: list[str]) -> tuple[list[str], dict[str, str], list[str]]:
+    normalized_flags: list[str] = []
+    flag_values: dict[str, str] = {}
+    positionals: list[str] = []
+    idx = 0
+    while idx < len(tokens):
+        token = tokens[idx]
+        if token == "--":
+            positionals.extend(tokens[idx + 1 :])
+            break
+        if token.startswith("-"):
+            if "=" in token:
+                flag, value = token.split("=", 1)
+                normalized_flags.append(f"{flag}={value}")
+                if flag in FLAG_VALUE_OPTIONS:
+                    flag_values[flag] = value
+            elif token in FLAG_VALUE_OPTIONS:
+                idx += 1
+                if idx >= len(tokens):
+                    die(f"option requires a value: {token}")
+                value = tokens[idx]
+                normalized_flags.append(f"{token}={value}")
+                flag_values[token] = value
+            else:
+                normalized_flags.append(token)
+            idx += 1
+            continue
+        positionals.append(token)
+        idx += 1
+    return normalized_flags, flag_values, positionals
+
+
+def parse_request(args: list[str], default_distribution: str) -> PublishRequest:
+    if len(args) < 2 or args[0] != "publish":
+        die("managed publish helper requires an aptly publish command")
+    subcommand = args[1]
+    if subcommand not in {"repo", "snapshot", "switch", "update"}:
+        die(f"unsupported publish subcommand for managed flow: {subcommand}")
+    flags, flag_values, positionals = parse_option_tokens(args[2:])
+    component_value = flag_values.get("-component", "")
+    components = tuple(part.strip() or "main" for part in component_value.split(",")) if component_value else ("main",)
+    component_count = max(1, len(component_value.split(","))) if component_value else 1
+    distribution_flag = flag_values.get("-distribution", default_distribution)
+
+    if subcommand in {"repo", "snapshot"}:
+        if len(positionals) not in {component_count, component_count + 1}:
+            die(f"{subcommand} requires {component_count} source name(s) and an optional target")
+        target_raw = positionals[-1] if len(positionals) == component_count + 1 else None
+        source_names = tuple(positionals[:component_count])
+        storage_kind, prefix, endpoint = parse_target(target_raw)
+        return PublishRequest(
+            subcommand=subcommand,
+            flags=tuple(flags),
+            distribution=distribution_flag,
+            target_raw=target_raw,
+            storage_kind=storage_kind,
+            prefix=prefix,
+            endpoint=endpoint,
+            source_names=source_names,
+            components=components,
+            component_count=component_count,
+        )
+
+    if subcommand == "switch":
+        if len(positionals) < 2:
+            die("switch requires distribution and at least one snapshot name")
+        distribution = positionals[0]
+        remaining = positionals[1:]
+        if len(remaining) == component_count:
+            target_raw = None
+            source_names = tuple(remaining)
+        elif len(remaining) == component_count + 1:
+            target_raw = remaining[0]
+            source_names = tuple(remaining[1:])
+        else:
+            die("switch request is ambiguous; provide an explicit prefix when updating a subset of components")
+        storage_kind, prefix, endpoint = parse_target(target_raw)
+        return PublishRequest(
+            subcommand=subcommand,
+            flags=tuple(flags),
+            distribution=distribution,
+            target_raw=target_raw,
+            storage_kind=storage_kind,
+            prefix=prefix,
+            endpoint=endpoint,
+            source_names=source_names,
+            components=components,
+            component_count=component_count,
+        )
+
+    if len(positionals) not in {1, 2}:
+        die("update requires distribution and an optional target")
+    distribution = positionals[0]
+    target_raw = positionals[1] if len(positionals) == 2 else None
+    storage_kind, prefix, endpoint = parse_target(target_raw)
+    return PublishRequest(
+        subcommand=subcommand,
+        flags=tuple(flags),
+        distribution=distribution,
+        target_raw=target_raw,
+        storage_kind=storage_kind,
+        prefix=prefix,
+        endpoint=endpoint,
+        source_names=(),
+        components=components,
+        component_count=component_count,
+    )
+
+
+def publication_sources(raw: object) -> tuple[PublicationSource, ...]:
+    if not isinstance(raw, list):
+        die("Aptly API returned an invalid Sources payload")
+    sources: list[PublicationSource] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            die("Aptly API returned a malformed publication source entry")
+        component = str(entry.get("Component", "main"))
+        name = str(entry.get("Name", "")).strip()
+        if not name:
+            die("Aptly API returned a publication source without a name")
+        sources.append(PublicationSource(component=component, name=name))
+    return tuple(sources)
+
+
+def fetch_publications(api: AptlyApiSession) -> list[Publication]:
+    payload = api.get_json("/api/publish")
+    if not isinstance(payload, list):
+        die("Aptly API returned an invalid publication list")
+    result: list[Publication] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            die("Aptly API returned a malformed publication entry")
+        result.append(
+            Publication(
+                storage=normalize_storage(str(item.get("Storage", ""))),
+                prefix=normalize_prefix(str(item.get("Prefix", ROOT_PREFIX))),
+                distribution=str(item.get("Distribution", "")).strip(),
+                source_kind=str(item.get("SourceKind", "")).strip(),
+                sources=publication_sources(item.get("Sources", [])),
+            )
+        )
+    return result
+
+
+def fetch_snapshot_times(api: AptlyApiSession) -> dict[str, dt.datetime]:
+    payload = api.get_json("/api/snapshots?sort=time")
+    if not isinstance(payload, list):
+        die("Aptly API returned an invalid snapshot list")
+    snapshots: dict[str, dt.datetime] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            die("Aptly API returned a malformed snapshot entry")
+        name = str(item.get("Name", "")).strip()
+        created_at = str(item.get("CreatedAt", "")).strip()
+        if not name or not created_at:
+            die("Aptly API returned a snapshot without Name/CreatedAt")
+        snapshots[name] = parse_timestamp(created_at)
+    return snapshots
+
+
+def load_channel_policies() -> dict[str, ChannelPolicy]:
+    channel_names = env_required("GITLAB_RUNNER_APTLY_CHANNELS").split()
+    policies: dict[str, ChannelPolicy] = {}
+    for channel in channel_names:
+        upper = channel.upper().replace("-", "_")
+        distribution = env_required(f"GITLAB_RUNNER_APTLY_CHANNEL_{upper}_DISTRIBUTION")
+        keep_raw = env_required(f"GITLAB_RUNNER_APTLY_CHANNEL_{upper}_KEEP_SNAPSHOTS")
+        max_age_raw = env_required(f"GITLAB_RUNNER_APTLY_CHANNEL_{upper}_MAX_AGE_DAYS")
+        endpoint = os.environ.get(f"GITLAB_RUNNER_APTLY_CHANNEL_{upper}_ENDPOINT", "").strip()
+        prefix = normalize_prefix(os.environ.get(f"GITLAB_RUNNER_APTLY_CHANNEL_{upper}_PREFIX", ROOT_PREFIX))
+        if not keep_raw.isdigit() or int(keep_raw) < 1:
+            die(f"invalid keep count for channel {channel}: {keep_raw}")
+        if not max_age_raw.isdigit():
+            die(f"invalid max-age days for channel {channel}: {max_age_raw}")
+        policies[channel] = ChannelPolicy(
+            name=channel,
+            distribution=distribution,
+            keep_snapshots=int(keep_raw),
+            max_age_days=int(max_age_raw),
+            storage_kind=normalize_storage(endpoint),
+            prefix=prefix,
+            endpoint=endpoint.rstrip(":") + ":" if endpoint else "",
+        )
+    return policies
+
+
+def select_channel(
+    request: PublishRequest,
+    requested_channel: str | None,
+    policies: dict[str, ChannelPolicy],
+) -> ChannelPolicy | None:
+    if requested_channel:
+        policy = policies.get(requested_channel)
+        if policy is None:
+            die(f"unknown Aptly channel requested by bridge: {requested_channel}")
+        if request.distribution and request.distribution != policy.distribution:
+            die(
+                f"requested channel {policy.name} expects distribution {policy.distribution}, "
+                f"got {request.distribution}"
+            )
+        if request.target_raw:
+            if normalize_prefix(request.prefix) != policy.prefix or normalize_storage(request.storage_kind) != policy.storage_kind:
+                die(f"requested channel {policy.name} does not match the publish target {request.target_raw}")
+        return policy
+
+    if not request.distribution:
+        return None
+    matches = [policy for policy in policies.values() if policy.distribution == request.distribution]
+    if request.target_raw:
+        matches = [
+            policy
+            for policy in matches
+            if policy.prefix == normalize_prefix(request.prefix)
+            and policy.storage_kind == normalize_storage(request.storage_kind)
+        ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def find_publication(
+    publications: Iterable[Publication],
+    distribution: str,
+    prefix: str | None = None,
+    storage_kind: str | None = None,
+) -> Publication | None:
+    matches = [
+        publication
+        for publication in publications
+        if publication.distribution == distribution
+        and (prefix is None or publication.prefix == normalize_prefix(prefix))
+        and (storage_kind is None or publication.storage == normalize_storage(storage_kind))
+    ]
+    if len(matches) > 1:
+        die(
+            f"multiple published repositories match distribution={distribution} "
+            f"prefix={normalize_prefix(prefix) if prefix is not None else '*'}"
+        )
+    return matches[0] if matches else None
+
+
+def filter_flags(flags: Iterable[str], drop_names: set[str]) -> list[str]:
+    result: list[str] = []
+    for token in flags:
+        name = token.split("=", 1)[0]
+        if name not in drop_names:
+            result.append(token)
+    return result
+
+
+def make_publish_command(
+    request: PublishRequest,
+    channel: ChannelPolicy | None,
+    existing: Publication | None,
+) -> tuple[list[str], str, tuple[PublicationSource, ...], str, str | None]:
+    distribution = request.distribution or (channel.distribution if channel else "")
+    if request.subcommand in {"repo", "snapshot"} and not distribution:
+        die(f"{request.subcommand} requires an explicit distribution or a matching channel")
+
+    resolved_storage = request.storage_kind or (channel.storage_kind if channel else "")
+    resolved_prefix = request.prefix
+    resolved_target = request.target_raw
+    if not resolved_target and channel is not None:
+        resolved_prefix = channel.prefix
+        resolved_target = channel.target_arg()
+    if not resolved_target and existing is not None and existing.storage == "" and existing.prefix != ROOT_PREFIX:
+        resolved_prefix = existing.prefix
+        resolved_target = existing.prefix
+
+    expected_target_prefix = normalize_prefix(resolved_prefix)
+    expected_storage = normalize_storage(resolved_storage)
+    expected_sources = tuple(
+        PublicationSource(component=request.components[idx] if idx < len(request.components) else "main", name=name)
+        for idx, name in enumerate(request.source_names)
+    )
+
+    if request.subcommand == "snapshot":
+        if existing is not None:
+            if existing.source_kind != "snapshot":
+                die(
+                    f"distribution {distribution} is already published from a local repo; "
+                    "drop or migrate that publication before switching to snapshots"
+                )
+            command = ["publish", "switch", *filter_flags(request.flags, TRANSIENT_SWITCH_FLAGS), distribution]
+            if resolved_target:
+                command.append(resolved_target)
+            command.extend(request.source_names)
+        else:
+            command = ["publish", "snapshot", *list(request.flags)]
+            if "-distribution" not in {flag.split("=", 1)[0] for flag in request.flags}:
+                command.append(f"-distribution={distribution}")
+            command.extend(request.source_names)
+            if resolved_target:
+                command.append(resolved_target)
+        return command, "snapshot", expected_sources, expected_target_prefix, expected_storage
+
+    if request.subcommand == "repo":
+        if existing is not None:
+            if existing.source_kind != "local":
+                die(
+                    f"distribution {distribution} is already published from snapshots; "
+                    "drop or migrate that publication before updating from a local repo"
+                )
+            existing_names = tuple(source.name for source in existing.sources)
+            if existing_names and existing_names != request.source_names:
+                die(
+                    f"existing published local repo for {distribution} uses {existing_names}, "
+                    f"but the request asked for {request.source_names}"
+                )
+            command = ["publish", "update", *filter_flags(request.flags, TRANSIENT_UPDATE_FLAGS), distribution]
+            if resolved_target:
+                command.append(resolved_target)
+            expected_sources = existing.sources or expected_sources
+        else:
+            command = ["publish", "repo", *list(request.flags)]
+            if "-distribution" not in {flag.split("=", 1)[0] for flag in request.flags}:
+                command.append(f"-distribution={distribution}")
+            command.extend(request.source_names)
+            if resolved_target:
+                command.append(resolved_target)
+        return command, "local", expected_sources, expected_target_prefix, expected_storage
+
+    if request.subcommand == "switch":
+        if existing is None:
+            command = ["publish", "snapshot", *filter_flags(request.flags, {"-distribution"})]
+            if "-distribution" not in {flag.split("=", 1)[0] for flag in request.flags}:
+                command.append(f"-distribution={distribution}")
+            command.extend(request.source_names)
+            if resolved_target:
+                command.append(resolved_target)
+            return command, "snapshot", expected_sources, expected_target_prefix, expected_storage
+        if existing.source_kind != "snapshot":
+            die("publish switch requires an already-published snapshot repository")
+        command = ["publish", "switch", *list(request.flags), distribution]
+        if resolved_target:
+            command.append(resolved_target)
+        command.extend(request.source_names)
+        return command, "snapshot", expected_sources, expected_target_prefix, expected_storage
+
+    if existing is None or existing.source_kind != "local":
+        die("publish update requires an already-published local repository")
+    command = ["publish", "update", *list(request.flags), distribution]
+    if resolved_target:
+        command.append(resolved_target)
+    return command, "local", existing.sources, expected_target_prefix, expected_storage
+
+
+def ensure_publication_live(
+    publications: Iterable[Publication],
+    distribution: str,
+    prefix: str,
+    storage_kind: str,
+    source_kind: str,
+    sources: tuple[PublicationSource, ...],
+) -> Publication:
+    publication = find_publication(publications, distribution, prefix=prefix, storage_kind=storage_kind)
+    if publication is None:
+        die(f"expected publication is not live after publish: {distribution}")
+    if publication.source_kind != source_kind:
+        die(
+            f"publication live verification failed for {distribution}: "
+            f"expected source kind {source_kind}, got {publication.source_kind}"
+        )
+    if source_kind == "snapshot" and publication.sources != sources:
+        die(
+            f"publication live verification failed for {distribution}: "
+            f"expected snapshots {[source.name for source in sources]}, "
+            f"got {[source.name for source in publication.sources]}"
+        )
+    if source_kind == "local" and sources and publication.sources != sources:
+        die(
+            f"publication live verification failed for {distribution}: "
+            f"expected local repos {[source.name for source in sources]}, "
+            f"got {[source.name for source in publication.sources]}"
+        )
+    return publication
+
+
+def load_state(path: pathlib.Path) -> list[dict[str, object]]:
+    ensure_regular_file(path)
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("version") != 1:
+        die(f"unsupported channel state format: {path}")
+    releases = data.get("releases", [])
+    if not isinstance(releases, list):
+        die(f"invalid channel state releases payload: {path}")
+    return releases
+
+
+def release_sources_from_json(raw: object) -> tuple[PublicationSource, ...]:
+    if not isinstance(raw, list):
+        die("invalid snapshot release state")
+    sources: list[PublicationSource] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            die("invalid snapshot release state entry")
+        component = str(entry.get("component", "main"))
+        name = str(entry.get("name", "")).strip()
+        if not name:
+            die("snapshot release state entry is missing a name")
+        sources.append(PublicationSource(component=component, name=name))
+    return tuple(sources)
+
+
+def source_set_key(sources: tuple[PublicationSource, ...]) -> tuple[tuple[str, str], ...]:
+    return tuple((source.component, source.name) for source in sources)
+
+
+def build_release_entry(
+    sources: tuple[PublicationSource, ...],
+    snapshot_times: dict[str, dt.datetime],
+    published_at: dt.datetime,
+) -> dict[str, object]:
+    missing = [source.name for source in sources if source.name not in snapshot_times]
+    if missing:
+        die(f"missing snapshot metadata for retention-managed release: {', '.join(missing)}")
+    release_created_at = max(snapshot_times[source.name] for source in sources)
+    return {
+        "sources": [source.to_json() for source in sources],
+        "created_at": release_created_at.isoformat(),
+        "published_at": published_at.isoformat(),
+    }
+
+
+def run_retention(
+    channel: ChannelPolicy,
+    live_publication: Publication,
+    publications: list[Publication],
+    snapshot_times: dict[str, dt.datetime],
+) -> None:
+    if live_publication.source_kind != "snapshot":
+        return
+
+    state_dir = pathlib.Path(
+        os.environ.get("GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR", "/pool/aptly/.managed/channels")
+    )
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    state_path = state_dir / f"{channel.name}.json"
+    previous_releases = load_state(state_path)
+    live_sources = live_publication.sources
+    live_key = source_set_key(live_sources)
+
+    merged: list[dict[str, object]] = [build_release_entry(live_sources, snapshot_times, now_utc())]
+    seen = {live_key}
+    for release in previous_releases:
+        sources = release_sources_from_json(release.get("sources", []))
+        key = source_set_key(sources)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(
+            {
+                "sources": [source.to_json() for source in sources],
+                "created_at": str(release.get("created_at", "")),
+                "published_at": str(release.get("published_at", "")),
+            }
+        )
+
+    current_time = now_utc()
+    keep_keys = {live_key}
+    kept_releases = [merged[0]]
+    dropped_releases: list[dict[str, object]] = []
+
+    def sort_key(release: dict[str, object]) -> tuple[dt.datetime, dt.datetime]:
+        return (
+            parse_timestamp(str(release.get("created_at", ""))),
+            parse_timestamp(str(release.get("published_at", ""))),
+        )
+
+    for release in sorted(merged[1:], key=sort_key, reverse=True):
+        release_sources = release_sources_from_json(release["sources"])
+        release_key = source_set_key(release_sources)
+        created_at = parse_timestamp(str(release["created_at"]))
+        age_days = (current_time - created_at).days
+        keep_by_count = len(kept_releases) < channel.keep_snapshots
+        keep_by_age = channel.max_age_days == 0 or age_days <= channel.max_age_days
+        if keep_by_count and keep_by_age:
+            kept_releases.append(release)
+            keep_keys.add(release_key)
+        else:
+            dropped_releases.append(release)
+
+    referenced_snapshot_names = {
+        source.name
+        for publication in publications
+        if publication.source_kind == "snapshot"
+        for source in publication.sources
+    }
+    kept_snapshot_names = {
+        source.name
+        for release in kept_releases
+        for source in release_sources_from_json(release["sources"])
+    }
+    drop_snapshot_names = sorted(
+        {
+            source.name
+            for release in dropped_releases
+            for source in release_sources_from_json(release["sources"])
+            if source.name not in referenced_snapshot_names and source.name not in kept_snapshot_names
+        }
+    )
+
+    dropped_any = False
+    for snapshot_name in drop_snapshot_names:
+        info(f"dropping retired snapshot {snapshot_name} for channel {channel.name}")
+        subprocess.run(["/pool/aptly/bin/aptly", "snapshot", "drop", snapshot_name], check=True)
+        dropped_any = True
+    if dropped_any:
+        info("running aptly db cleanup after retiring unmanaged snapshot references")
+        subprocess.run(["/pool/aptly/bin/aptly", "db", "cleanup"], check=True)
+
+    state_payload = {
+        "version": 1,
+        "channel": channel.name,
+        "distribution": channel.distribution,
+        "releases": kept_releases,
+    }
+    state_path.write_text(json.dumps(state_payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(state_path, 0o600)
+
+
+def main() -> None:
+    requested_channel = None
+    args = sys.argv[1:]
+    if len(args) >= 2 and args[0] == "--channel":
+        requested_channel = args[1]
+        args = args[2:]
+    request = parse_request(args, os.environ.get("APTLY_PUBLISH_DISTRIBUTION", "").strip())
+    policies = load_channel_policies()
+    channel = select_channel(request, requested_channel, policies)
+
+    socket_root = pathlib.Path(env_required("APTLY_JOB_DIR"))
+    socket_path = socket_root / "aptly-api.sock"
+
+    with AptlyApiSession(socket_path) as api:
+        publications_before = fetch_publications(api)
+        existing = find_publication(
+            publications_before,
+            request.distribution or (channel.distribution if channel else ""),
+            prefix=(request.prefix if request.target_raw else (channel.prefix if channel else None)),
+            storage_kind=(request.storage_kind if request.target_raw else (channel.storage_kind if channel else None)),
+        )
+        command, expected_kind, expected_sources, expected_prefix, expected_storage = make_publish_command(
+            request, channel, existing
+        )
+        info(f"running {' '.join(command)}")
+        subprocess.run(["/pool/aptly/bin/aptly", *command], check=True)
+
+        publications_after = fetch_publications(api)
+        distribution = request.distribution or (channel.distribution if channel else "")
+        live_publication = ensure_publication_live(
+            publications_after,
+            distribution=distribution,
+            prefix=expected_prefix,
+            storage_kind=expected_storage,
+            source_kind=expected_kind,
+            sources=expected_sources,
+        )
+        if channel is not None:
+            snapshot_times = fetch_snapshot_times(api)
+            run_retention(channel, live_publication, publications_after, snapshot_times)
+
+
+if __name__ == "__main__":
+    main()

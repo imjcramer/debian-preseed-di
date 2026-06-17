@@ -50,7 +50,9 @@ submit_request() {
 
   python3 - "$request_path" "$request_id" "${args[@]}" <<'PY'
 import json
+import os
 import pathlib
+import re
 import sys
 
 request_path = pathlib.Path(sys.argv[1])
@@ -60,8 +62,8 @@ if len(args) < 2:
     raise SystemExit("bridge publish request requires at least two args")
 if args[0] != "publish":
     raise SystemExit("bridge only supports aptly publish requests")
-if args[1] not in {"snapshot", "repo"}:
-    raise SystemExit("bridge only supports aptly publish snapshot|repo")
+if args[1] not in {"snapshot", "repo", "switch"}:
+    raise SystemExit("bridge only supports aptly publish snapshot|repo|switch")
 for arg in args:
     if not arg:
         raise SystemExit("bridge args must not be empty")
@@ -69,11 +71,17 @@ for arg in args:
         raise SystemExit(f"bridge arg too long: {arg[:64]}")
     if any(ord(ch) < 32 for ch in arg):
         raise SystemExit("bridge args contain unsupported control characters")
+channel = os.environ.get("APTLY_CHANNEL", "").strip()
+if channel:
+    if len(channel) > 32 or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", channel):
+        raise SystemExit("APTLY_CHANNEL must be a short lowercase channel identifier")
 payload = {
-    "version": 1,
+    "version": 2,
     "request_id": request_id,
     "args": args,
 }
+if channel:
+    payload["channel"] = channel
 request_path.write_text(json.dumps(payload, indent=2) + "\n")
 PY
   chmod 0600 "$request_path"

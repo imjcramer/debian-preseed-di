@@ -11,6 +11,7 @@ APTLY_STATE_DIR_DEFAULT="/pool/aptly"
 APTLY_ROOT_DIR_DEFAULT="${APTLY_STATE_DIR_DEFAULT}/.aptly"
 APTLY_CONFIG_TEMPLATE_DEFAULT="${APTLY_STATE_DIR_DEFAULT}/.aptly.conf.template.json"
 APTLY_CONFIG_DEFAULT="${APTLY_STATE_DIR_DEFAULT}/.aptly.conf"
+APTLY_PUBLISH_HELPER="/usr/local/libexec/aptly-publish-managed"
 
 info() {
   printf '%s: %s\n' "$PROG" "$*" >&2
@@ -86,17 +87,20 @@ load_envs() {
   APTLY_ROOT_DIR="${APTLY_ROOT_DIR:-$APTLY_ROOT_DIR_DEFAULT}"
   APTLY_CONFIG_TEMPLATE="${APTLY_CONFIG_TEMPLATE:-$APTLY_CONFIG_TEMPLATE_DEFAULT}"
   APTLY_CONFIG="${APTLY_CONFIG:-$APTLY_CONFIG_DEFAULT}"
+  GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR="${GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR:-${APTLY_STATE_DIR}/.managed/channels}"
 
   validate_absolute_path APTLY_STATE_DIR "$APTLY_STATE_DIR"
   validate_absolute_path APTLY_ROOT_DIR "$APTLY_ROOT_DIR"
   validate_absolute_path APTLY_CONFIG_TEMPLATE "$APTLY_CONFIG_TEMPLATE"
   validate_absolute_path APTLY_CONFIG "$APTLY_CONFIG"
+  validate_absolute_path GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR "$GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR"
 }
 
 ensure_runtime_layout() {
   [[ -d "$APTLY_STATE_DIR" && ! -L "$APTLY_STATE_DIR" ]] || die "aptly state dir is missing: ${APTLY_STATE_DIR}"
   [[ -d "$APTLY_ROOT_DIR" && ! -L "$APTLY_ROOT_DIR" ]] || die "aptly root dir is missing: ${APTLY_ROOT_DIR}"
   [[ -r "$APTLY_CONFIG_TEMPLATE" && ! -L "$APTLY_CONFIG_TEMPLATE" ]] || die "aptly config template is missing: ${APTLY_CONFIG_TEMPLATE}"
+  [[ -x "$APTLY_PUBLISH_HELPER" && ! -L "$APTLY_PUBLISH_HELPER" ]] || die "aptly publish helper is missing: ${APTLY_PUBLISH_HELPER}"
 }
 
 export_aptly_runtime_env() {
@@ -116,6 +120,18 @@ export_aptly_runtime_env() {
   export APTLY_PUBLISH_LABEL="${GITLAB_RUNNER_APTLY_PUBLISH_LABEL:-GitLab CI}"
   export APTLY_PUBLISH_ACQUIRE_BY_HASH="${GITLAB_RUNNER_APTLY_PUBLISH_ACQUIRE_BY_HASH:-true}"
   export APTLY_SKIP_CONTENTS="${GITLAB_RUNNER_APTLY_SKIP_CONTENTS:-false}"
+  export GITLAB_RUNNER_APTLY_CHANNELS="${GITLAB_RUNNER_APTLY_CHANNELS:-stable testing}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR
+  export GITLAB_RUNNER_APTLY_CHANNEL_STABLE_DISTRIBUTION="${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_DISTRIBUTION:-stable}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_STABLE_ENDPOINT="${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_ENDPOINT:-${APTLY_PUBLISH_ENDPOINT}}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_STABLE_PREFIX="${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_PREFIX:-.}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_STABLE_KEEP_SNAPSHOTS="${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_KEEP_SNAPSHOTS:-2}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_STABLE_MAX_AGE_DAYS="${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_MAX_AGE_DAYS:-0}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_TESTING_DISTRIBUTION="${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_DISTRIBUTION:-testing}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_TESTING_ENDPOINT="${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_ENDPOINT:-${APTLY_PUBLISH_ENDPOINT}}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_TESTING_PREFIX="${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_PREFIX:-.}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_TESTING_KEEP_SNAPSHOTS="${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_KEEP_SNAPSHOTS:-3}"
+  export GITLAB_RUNNER_APTLY_CHANNEL_TESTING_MAX_AGE_DAYS="${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_MAX_AGE_DAYS:-14}"
   export R2_BUCKET_NAME="${GITLAB_RUNNER_APTLY_R2_BUCKET_NAME:-}"
   export R2_ENDPOINT_URL="${GITLAB_RUNNER_APTLY_R2_ENDPOINT_URL:-}"
   export R2_ACCOUNT_ID="${GITLAB_RUNNER_APTLY_R2_ACCOUNT_ID:-}"
@@ -123,6 +139,9 @@ export_aptly_runtime_env() {
   export R2_SECRET_ACCESS_KEY="${GITLAB_RUNNER_APTLY_R2_SECRET_ACCESS_KEY:-}"
   export GPG_SIGNING_KEY="${GITLAB_RUNNER_APTLY_GPG_SIGNING_KEY:-}"
   export GPG_SIGNING_PASSPHRASE="${GITLAB_RUNNER_APTLY_GPG_SIGNING_PASSPHRASE:-}"
+  if [[ -n "${APTLY_REAL_BIN:-}" ]]; then
+    export APTLY_REAL_BIN
+  fi
 }
 
 render_config() {
@@ -171,6 +190,7 @@ write_publish_env_file() {
   append_shell_export "$env_file" APTLY_ROOT_DIR "$APTLY_ROOT_DIR"
   append_shell_export "$env_file" APTLY_CONFIG "$APTLY_CONFIG"
   append_shell_export "$env_file" APTLY_CONFIG_TEMPLATE "$APTLY_CONFIG_TEMPLATE"
+  append_shell_export "$env_file" APTLY_PUBLISH_HELPER "$APTLY_PUBLISH_HELPER"
   append_shell_export "$env_file" APTLY_R2_ENDPOINT_NAME "${APTLY_R2_ENDPOINT_NAME}"
   append_shell_export "$env_file" APTLY_ARCHITECTURES "${APTLY_ARCHITECTURES}"
   append_shell_export "$env_file" APTLY_DOWNLOAD_CONCURRENCY "${APTLY_DOWNLOAD_CONCURRENCY}"
@@ -183,6 +203,18 @@ write_publish_env_file() {
   append_shell_export "$env_file" APTLY_PUBLISH_LABEL "${APTLY_PUBLISH_LABEL}"
   append_shell_export "$env_file" APTLY_PUBLISH_ACQUIRE_BY_HASH "${APTLY_PUBLISH_ACQUIRE_BY_HASH}"
   append_shell_export "$env_file" APTLY_SKIP_CONTENTS "${APTLY_SKIP_CONTENTS}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNELS "${GITLAB_RUNNER_APTLY_CHANNELS}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR "${GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_STABLE_DISTRIBUTION "${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_DISTRIBUTION}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_STABLE_ENDPOINT "${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_ENDPOINT}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_STABLE_PREFIX "${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_PREFIX}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_STABLE_KEEP_SNAPSHOTS "${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_KEEP_SNAPSHOTS}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_STABLE_MAX_AGE_DAYS "${GITLAB_RUNNER_APTLY_CHANNEL_STABLE_MAX_AGE_DAYS}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_TESTING_DISTRIBUTION "${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_DISTRIBUTION}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_TESTING_ENDPOINT "${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_ENDPOINT}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_TESTING_PREFIX "${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_PREFIX}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_TESTING_KEEP_SNAPSHOTS "${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_KEEP_SNAPSHOTS}"
+  append_shell_export "$env_file" GITLAB_RUNNER_APTLY_CHANNEL_TESTING_MAX_AGE_DAYS "${GITLAB_RUNNER_APTLY_CHANNEL_TESTING_MAX_AGE_DAYS}"
   append_shell_export "$env_file" R2_BUCKET_NAME "${R2_BUCKET_NAME}"
   append_shell_export "$env_file" R2_ENDPOINT_URL "${R2_ENDPOINT_URL}"
   append_shell_export "$env_file" R2_ACCOUNT_ID "${R2_ACCOUNT_ID}"
@@ -192,9 +224,12 @@ write_publish_env_file() {
   append_shell_export "$env_file" GPG_SIGNING_PASSPHRASE "${GPG_SIGNING_PASSPHRASE}"
   append_shell_export "$env_file" APTLY_ALLOW_PUBLISH "true"
   append_shell_export "$env_file" APTLY_JOB_TMP_BASE "/tmp/aptly-managed"
+  if [[ -n "${APTLY_REAL_BIN:-}" ]]; then
+    append_shell_export "$env_file" APTLY_REAL_BIN "${APTLY_REAL_BIN}"
+  fi
 }
 
-run_publish_command() {
+run_raw_aptly_command() {
   local env_file
   local -a aptly_args=("$@")
   render_config
@@ -207,8 +242,35 @@ set -Eeuo pipefail
 . "$1"
 shift
 source /pool/aptly/bin/prepare-aptly-env.sh
+prepare_aptly_env
 exec /pool/aptly/bin/aptly "$@"
 ' bash "$env_file" "${aptly_args[@]}"
+  trap - RETURN
+  rm -f -- "$env_file"
+}
+
+run_managed_publish_command() {
+  local env_file
+  local -a publish_args=("$@")
+  local -a helper_args=()
+
+  render_config
+  export_aptly_runtime_env
+  env_file="$(mktemp "${TMPDIR:-/tmp}/${PROG}.env.XXXXXX")"
+  trap 'rm -f -- "$env_file"' RETURN
+  write_publish_env_file "$env_file"
+  if [[ -n "${requested_channel:-}" ]]; then
+    helper_args+=(--channel "$requested_channel")
+  fi
+  helper_args+=(publish "${publish_args[@]}")
+  runuser -u "$publish_user" -- bash -lc '
+set -Eeuo pipefail
+. "$1"
+shift
+source /pool/aptly/bin/prepare-aptly-env.sh
+prepare_aptly_env
+exec "$APTLY_PUBLISH_HELPER" "$@"
+' bash "$env_file" "${helper_args[@]}"
   trap - RETURN
   rm -f -- "$env_file"
 }
@@ -218,7 +280,7 @@ usage() {
 usage: ${PROG} render-config
        ${PROG} run <aptly args...>
        ${PROG} publish <aptly publish args...>
-       ${PROG} [--runner-user glab-aptly] <subcommand> ...
+       ${PROG} [--runner-user glab-aptly] [--channel stable|testing] <subcommand> ...
 EOF
 }
 
@@ -228,11 +290,24 @@ parse_args() {
     exit 2
   }
   requested_runner_user=
-  if [[ "${1:-}" == "--runner-user" ]]; then
-    [[ "$#" -ge 3 ]] || die "--runner-user requires a value and subcommand"
-    requested_runner_user="$2"
-    shift 2
-  fi
+  requested_channel=
+  while [[ "$#" -gt 0 ]]; do
+    case "${1:-}" in
+      --runner-user)
+        [[ "$#" -ge 3 ]] || die "--runner-user requires a value and subcommand"
+        requested_runner_user="$2"
+        shift 2
+        ;;
+      --channel)
+        [[ "$#" -ge 3 ]] || die "--channel requires a value and subcommand"
+        requested_channel="$2"
+        shift 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
   command_name="$1"
   shift
   case "$command_name" in
@@ -262,10 +337,14 @@ main() {
       render_config
       ;;
     run)
-      run_publish_command "${command_args[@]}"
+      if [[ "${command_args[0]:-}" == "publish" ]]; then
+        run_managed_publish_command "${command_args[@]:1}"
+      else
+        run_raw_aptly_command "${command_args[@]}"
+      fi
       ;;
     publish)
-      run_publish_command publish "${command_args[@]}"
+      run_managed_publish_command "${command_args[@]}"
       ;;
   esac
 }
