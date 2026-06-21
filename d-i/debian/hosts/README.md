@@ -8,6 +8,7 @@ The host env contract is split into concrete profiles plus shared policy:
 - `hosts/shared/layout.env`
 - `hosts/shared/layout-btrfs.env` or `hosts/shared/layout-f2fs.env`
 - `hosts/shared/boot.env`
+- optional service overrides under `hosts/services/<service>/<role>.env`
 
 The loader assembles the concrete host policy env in this order:
 
@@ -18,8 +19,15 @@ The loader assembles the concrete host policy env in this order:
 5. `hosts/shared/layout.env`
 6. `hosts/shared/layout-<storage-family>.env`
 7. `hosts/shared/boot.env`
+8. selected `hosts/services/<service>/<role>.env`
 
 Account policy is loaded separately from `hosts/shared/account.env`.
+
+When the optional `service` class group is selected, the matching service env
+is appended after the shared host policy so service-owned host settings take
+precedence. The resolver first tries a service directory that matches the
+selected class name and also accepts `*-runner` classes mapping to
+`hosts/services/<prefix>/`.
 
 The concrete profile loads first because shared env files derive tmpfs, zram,
 device, GRUB, desktop or server addon policy, sysctl, and installed static

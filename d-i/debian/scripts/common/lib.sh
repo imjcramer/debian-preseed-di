@@ -2090,6 +2090,63 @@ installer_fetch_composite_env_paths() {
   installer_info "fetched host env ${composite_dest_path} from:${composite_fetched_paths:+ ${composite_fetched_paths}}"
 }
 
+installer_service_env_dir_candidates() {
+  service_name=$1
+
+  installer_validate_profile_component "service class" "$service_name"
+  printf '%s\n' "$service_name"
+  case "$service_name" in
+    *-runner)
+      service_alias=${service_name%-runner}
+      [ -n "$service_alias" ] && [ "$service_alias" != "$service_name" ] && printf '%s\n' "$service_alias"
+      ;;
+  esac
+}
+
+installer_resolve_service_env_dir() {
+  service_seed_base=$1
+  service_name=$2
+  host_variant=$3
+  seen_service_dirs=" "
+
+  while IFS= read -r service_dir || [ -n "$service_dir" ]; do
+    [ -n "$service_dir" ] || continue
+    case "$seen_service_dirs" in
+      *" $service_dir "*) continue ;;
+    esac
+    seen_service_dirs="${seen_service_dirs}${service_dir} "
+    installer_validate_profile_component "service env directory" "$service_dir"
+
+    generic_env=$(installer_repo_join_var DIR_HOSTS_SERVICES "${service_dir}/${host_variant}.env")
+    if installer_seed_path_exists "$service_seed_base" "$generic_env"; then
+      printf '%s\n' "$service_dir"
+      return 0
+    fi
+  done <<EOF
+$(installer_service_env_dir_candidates "$service_name")
+EOF
+
+  return 1
+}
+
+installer_selected_service_env_paths() {
+  service_seed_base=$1
+  host_variant=$2
+
+  service_name=${INSTALLER_SERVICE_CLASS:-$(installer_selected_class_for_purpose service 2>/dev/null || true)}
+  [ -n "$service_name" ] || return 0
+  installer_validate_profile_component "service class" "$service_name"
+
+  service_dir=$(installer_resolve_service_env_dir "$service_seed_base" "$service_name" "$host_variant" 2>/dev/null || true)
+  [ -n "$service_dir" ] || return 0
+
+  generic_env=$(installer_repo_join_var DIR_HOSTS_SERVICES "${service_dir}/${host_variant}.env")
+
+  if installer_seed_path_exists "$service_seed_base" "$generic_env"; then
+    printf '%s\n' "$generic_env"
+  fi
+}
+
 installer_fetch_host_env() {
   host_seed_base=$1
   host_profile=$2
@@ -2107,10 +2164,7 @@ installer_fetch_host_env() {
   [ -n "$host_layout_family" ] || installer_fatal "unable to derive layout family from profile: ${host_profile:-unset}"
   installer_validate_profile_component "host layout family" "$host_layout_family"
 
-  installer_fetch_composite_env_paths \
-    "$host_seed_base" \
-    "$host_dest_path" \
-    "$host_mode" \
+  set -- \
     "$(installer_repo_join_var DIR_HOSTS_PROFILES "${host_family}/${host_variant}.env")" \
     "$(installer_repo_join_var DIR_HOSTS_SHARED identity.env)" \
     "$(installer_repo_join_var DIR_HOSTS_SHARED runtime.env)" \
@@ -2118,6 +2172,19 @@ installer_fetch_host_env() {
     "$(installer_repo_join_var DIR_HOSTS_SHARED layout.env)" \
     "$(installer_repo_join_var DIR_HOSTS_SHARED "layout-${host_layout_family}.env")" \
     "$(installer_repo_join_var DIR_HOSTS_SHARED boot.env)"
+
+  while IFS= read -r host_service_env_path || [ -n "$host_service_env_path" ]; do
+    [ -n "$host_service_env_path" ] || continue
+    set -- "$@" "$host_service_env_path"
+  done <<EOF
+$(installer_selected_service_env_paths "$host_seed_base" "$host_variant" 2>/dev/null || true)
+EOF
+
+  installer_fetch_composite_env_paths \
+    "$host_seed_base" \
+    "$host_dest_path" \
+    "$host_mode" \
+    "$@"
 }
 
 installer_fetch_account_env() {

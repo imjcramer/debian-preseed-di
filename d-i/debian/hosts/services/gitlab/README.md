@@ -7,6 +7,7 @@ optional `service/gitlab-runner` class.
 
 The installer copies these files into the target host:
 
+- host policy override source: `hosts/services/gitlab/server.env`
 - `/etc/default/gitlab-runner/gitlab-runner-shared.env`
 - `/etc/default/gitlab-runner/gitlab-runner-aptly.env`
 - `/etc/default/gitlab-runner/gitlab-runner-build.env`
