@@ -1014,11 +1014,13 @@ configure_target_rootless_podman() {
     desktop|server) ;;
     *) podman_fatal "unsupported host variant for Podman policy: ${podman_role:-unset}" ;;
   esac
-  PODMAN_EFFECTIVE_USER_DAEMON=0
+  PODMAN_EFFECTIVE_USER_DAEMON=$PODMAN_USER_DAEMON
   PODMAN_EFFECTIVE_USER_API_ENV=0
   if [ "$podman_role" = server ]; then
-    [ "$PODMAN_USER_LINGER" = 1 ] || podman_fatal "server role requires PODMAN_USER_LINGER=1 so the rootless Podman socket survives outside interactive logins"
     PODMAN_EFFECTIVE_USER_DAEMON=1
+  fi
+  if [ "$PODMAN_EFFECTIVE_USER_DAEMON" = 1 ] && [ "$PODMAN_USER_LINGER" != 1 ]; then
+    podman_fatal "managed Podman user daemon requires PODMAN_USER_LINGER=1 so the rootless Podman socket survives outside interactive logins"
   fi
   PODMAN_ROOTLESS_SOCKET_URI=
   podman_require_managed_service_home
@@ -1228,7 +1230,7 @@ configure_target_rootless_podman() {
   fi
   podman_install_registry_pki
 
-  if [ "$podman_role" = server ] && [ "$PODMAN_USER_LINGER" = 1 ]; then
+  if [ "$PODMAN_EFFECTIVE_USER_DAEMON" = 1 ] && [ "$PODMAN_USER_LINGER" = 1 ]; then
     podman_render_managed_template etc/systemd/system/podman-rootless-linger.service.tmpl "/etc/systemd/system/${PODMAN_LINGER_UNIT_NAME}" 0644
     stage_target_systemd_unit_enabled "$PODMAN_LINGER_UNIT_NAME" system
   fi

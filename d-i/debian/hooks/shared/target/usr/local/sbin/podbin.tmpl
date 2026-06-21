@@ -56,6 +56,11 @@ Usage:
   podbin --start-container <username>
   podbin --connect-container <username>
   podbin --open-container <username>
+  podbin --service-env
+  podbin --service-podman <podman-args...>
+  podbin --service-systemctl <systemctl-user-args...>
+  podbin --service-journalctl <journalctl-user-args...>
+  podbin --service-shell
 
 Guide:
   /data/docs/podbin.md
@@ -373,6 +378,18 @@ user_systemd_dir() {
   printf '%s/%s\n' "$PODBIN_SYSTEMD_USER_BASE" "$1"
 }
 
+user_runtime_dir() {
+  printf '/run/user/%s\n' "$1"
+}
+
+user_bus_path() {
+  printf '%s/bus\n' "$(user_runtime_dir "$1")"
+}
+
+user_socket_uri() {
+  printf 'unix://%s/podman/podman.sock\n' "$(user_runtime_dir "$1")"
+}
+
 ensure_symlink() {
   link_path=$1
   target_path=$2
@@ -539,14 +556,24 @@ EOF
   write_subid_entry /etc/subgid "$user" "$subid_start" "$subid_count"
 }
 
+run_as_managed_user() {
+  user=$1
+  uid=$2
+  home=$3
+  shift 3
+  runtime_dir=$(user_runtime_dir "$uid")
+  bus_path=$(user_bus_path "$uid")
+  /usr/sbin/runuser -u "$user" -- \
+    env HOME="$home" XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus_path}" PATH="$PATH" \
+    "$@"
+}
+
 user_systemctl() {
   user=$1
   uid=$2
   home=$3
   shift 3
-  /usr/sbin/runuser -u "$user" -- \
-    env HOME="$home" XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" PATH="$PATH" \
-    /usr/bin/systemctl --user "$@"
+  run_as_managed_user "$user" "$uid" "$home" /usr/bin/systemctl --user "$@"
 }
 
 user_podman() {
@@ -554,9 +581,23 @@ user_podman() {
   uid=$2
   home=$3
   shift 3
-  /usr/sbin/runuser -u "$user" -- \
-    env HOME="$home" XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" PATH="$PATH" \
-    /usr/bin/podman "$@"
+  run_as_managed_user "$user" "$uid" "$home" /usr/bin/podman "$@"
+}
+
+user_journalctl() {
+  user=$1
+  uid=$2
+  home=$3
+  shift 3
+  run_as_managed_user "$user" "$uid" "$home" /usr/bin/journalctl --user "$@"
+}
+
+user_shell() {
+  user=$1
+  uid=$2
+  home=$3
+  shift 3
+  run_as_managed_user "$user" "$uid" "$home" /bin/sh "$@"
 }
 
 ensure_user_manager() {
@@ -570,7 +611,7 @@ ensure_user_manager() {
   require_command systemctl
   loginctl enable-linger "$user"
   systemctl start "user@${uid}.service"
-  bus_path="/run/user/${uid}/bus"
+  bus_path=$(user_bus_path "$uid")
   for _ in 1 2 3 4 5; do
     [ -S "$bus_path" ] && {
       user_systemctl "$user" "$uid" "$home" daemon-reload
@@ -637,6 +678,60 @@ ensure_runtime_image() {
     --tag "$image" \
     --file "${template_dir}/Containerfile" \
     "$template_dir"
+}
+
+load_service_user() {
+  uid_min=$(login_value UID_MIN 1000)
+  load_user_record "$PODBIN_SERVICE_USER" || fatal "managed Podman service account is missing: $PODBIN_SERVICE_USER"
+  [ "$PODBIN_USER_UID" -lt "$uid_min" ] || fatal "managed Podman service account must remain a system account: $PODBIN_SERVICE_USER"
+  [ "$PODBIN_USER_GROUP" = "$PODBIN_SERVICE_USER" ] || fatal "managed Podman service account primary group must be $PODBIN_SERVICE_USER, found $PODBIN_USER_GROUP"
+  require_abs_path "managed Podman service home" "$PODBIN_USER_HOME"
+  case "$PODBIN_USER_HOME" in
+    /home|/home/*|/) fatal "refusing login home for managed Podman service account: $PODBIN_USER_HOME" ;;
+  esac
+  PODBIN_SERVICE_UID=$PODBIN_USER_UID
+  PODBIN_SERVICE_GID=$PODBIN_USER_GID
+  PODBIN_SERVICE_HOME=$PODBIN_USER_HOME
+  export PODBIN_SERVICE_UID PODBIN_SERVICE_GID PODBIN_SERVICE_HOME
+}
+
+ensure_service_user_ready() {
+  load_service_user
+  ensure_user_manager "$PODBIN_SERVICE_USER" "$PODBIN_SERVICE_UID" "$PODBIN_SERVICE_HOME"
+}
+
+service_env() {
+  ensure_service_user_ready
+  printf 'PODMAN_SERVICE_USER=%s\n' "$PODBIN_SERVICE_USER"
+  printf 'PODMAN_SERVICE_UID=%s\n' "$PODBIN_SERVICE_UID"
+  printf 'PODMAN_SERVICE_GID=%s\n' "$PODBIN_SERVICE_GID"
+  printf 'PODMAN_SERVICE_HOME=%s\n' "$PODBIN_SERVICE_HOME"
+  printf 'PODMAN_RUNTIME_DIR=%s\n' "$(user_runtime_dir "$PODBIN_SERVICE_UID")"
+  printf 'PODMAN_DBUS_SESSION_BUS_ADDRESS=unix:path=%s\n' "$(user_bus_path "$PODBIN_SERVICE_UID")"
+  printf 'PODMAN_SOCKET_URI=%s\n' "$(user_socket_uri "$PODBIN_SERVICE_UID")"
+}
+
+service_podman() {
+  [ "$#" -gt 0 ] || fatal "podman arguments are required"
+  ensure_service_user_ready
+  user_podman "$PODBIN_SERVICE_USER" "$PODBIN_SERVICE_UID" "$PODBIN_SERVICE_HOME" "$@"
+}
+
+service_systemctl() {
+  [ "$#" -gt 0 ] || fatal "systemctl --user arguments are required"
+  ensure_service_user_ready
+  user_systemctl "$PODBIN_SERVICE_USER" "$PODBIN_SERVICE_UID" "$PODBIN_SERVICE_HOME" "$@"
+}
+
+service_journalctl() {
+  [ "$#" -gt 0 ] || fatal "journalctl --user arguments are required"
+  ensure_service_user_ready
+  user_journalctl "$PODBIN_SERVICE_USER" "$PODBIN_SERVICE_UID" "$PODBIN_SERVICE_HOME" "$@"
+}
+
+service_shell() {
+  ensure_service_user_ready
+  user_shell "$PODBIN_SERVICE_USER" "$PODBIN_SERVICE_UID" "$PODBIN_SERVICE_HOME" -l
 }
 
 create_user() {
@@ -1069,13 +1164,13 @@ open_container() {
     /usr/bin/podman exec --user "${PODBIN_RUNTIME_USER_UID}:${PODBIN_RUNTIME_USER_GID}" -it "$PODBIN_CONTAINER_NAME" "$PODBIN_CONTAINER_SHELL"
 }
 
-[ "$#" -eq 2 ] || {
+[ "$#" -ge 1 ] || {
   usage >&2
   exit 2
 }
 
 action=$1
-username=$2
+shift
 require_root
 require_abs_path PODBIN_USER_HOME_BASE "$PODBIN_USER_HOME_BASE"
 require_abs_path PODBIN_CONFIG_BASE "$PODBIN_CONFIG_BASE"
@@ -1113,25 +1208,79 @@ validate_account_name "$PODBIN_RUNTIME_USER_NAME"
 
 case "$action" in
   --ensure-keypair)
+    [ "$#" -le 1 ] || {
+      usage >&2
+      exit 2
+    }
+    if [ "$#" -eq 1 ] && [ "$1" != "_" ]; then
+      fatal "--ensure-keypair does not accept a username"
+    fi
     ensure_keypair
     ;;
   --create-user)
-    create_user "$username"
+    [ "$#" -eq 1 ] || {
+      usage >&2
+      exit 2
+    }
+    create_user "$1"
     ;;
   --create-container)
-    create_container "$username"
+    [ "$#" -eq 1 ] || {
+      usage >&2
+      exit 2
+    }
+    create_container "$1"
     ;;
   --delete-container)
-    delete_container "$username"
+    [ "$#" -eq 1 ] || {
+      usage >&2
+      exit 2
+    }
+    delete_container "$1"
     ;;
   --start-container)
-    start_container_action "$username"
+    [ "$#" -eq 1 ] || {
+      usage >&2
+      exit 2
+    }
+    start_container_action "$1"
     ;;
   --connect-container)
-    connect_container "$username"
+    [ "$#" -eq 1 ] || {
+      usage >&2
+      exit 2
+    }
+    connect_container "$1"
     ;;
   --open-container)
-    open_container "$username"
+    [ "$#" -eq 1 ] || {
+      usage >&2
+      exit 2
+    }
+    open_container "$1"
+    ;;
+  --service-env)
+    [ "$#" -eq 0 ] || {
+      usage >&2
+      exit 2
+    }
+    service_env
+    ;;
+  --service-podman)
+    service_podman "$@"
+    ;;
+  --service-systemctl)
+    service_systemctl "$@"
+    ;;
+  --service-journalctl)
+    service_journalctl "$@"
+    ;;
+  --service-shell)
+    [ "$#" -eq 0 ] || {
+      usage >&2
+      exit 2
+    }
+    service_shell
     ;;
   *)
     usage >&2

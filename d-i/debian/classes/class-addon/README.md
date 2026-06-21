@@ -25,7 +25,10 @@ tool database defaults for interactive development workloads, including
 when selected as `classes=...,podman`; the shared late-command Podman module
 then provisions the locked `podsvc` service account, managed `/data/config/podman`
 config roots, `/pool/podman` state roots, Quadlet defaults, and the
-server-role rootless API socket bootstrap.
+role-specific rootless API socket bootstrap. On desktop installs the staged
+`podbin` helper also lets the daily account manage the hardened `podsvc`
+runtime through `sudo podbin --service-*` without converting that account into
+an interactive login user.
 
 `dualboot.cfg` enables the reused-ESP dual-boot path when selected as
 `classes=...,dualboot`. It requires `dualboot_efi=<n>` and

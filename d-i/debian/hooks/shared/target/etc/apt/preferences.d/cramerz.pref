@@ -1,0 +1,9 @@
+# Managed by the installer apt-setup preferences generator.
+
+Package: *
+Pin: release l=home:cramerz:debian,n=Debian_Unstable
+Pin-Priority: 100
+
+Package: labwc libwlroots-0.20 libwlroots-0.20-dev libwlroots-0.20-examples
+Pin: release l=home:cramerz:debian,n=Debian_Unstable
+Pin-Priority: 900
