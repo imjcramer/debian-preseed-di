@@ -1,0 +1,136 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+command -v labwc-wofi >/dev/null 2>&1 || {
+  printf 'fatal: labwc-wofi is not installed\n' >&2
+  exit 1
+}
+
+command -v python3 >/dev/null 2>&1 || {
+  printf 'fatal: python3 is not installed\n' >&2
+  exit 1
+}
+
+selection=$(labwc-wofi --show drun --prompt dGPU \
+  -D drun-disable_prime=true \
+  -D drun-print_desktop_file=true 2>/dev/null || true)
+[ -n "$selection" ] || exit 0
+
+exec python3 - "$selection" <<'PY'
+import configparser
+import os
+import shlex
+import shutil
+import sys
+
+
+def fail(message: str) -> "NoReturn":
+    print(f"fatal: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def resolve_selection(raw_selection: str) -> tuple[str, str | None]:
+    if os.path.isfile(raw_selection):
+        return raw_selection, None
+
+    path_part, separator, action_part = raw_selection.rpartition(" ")
+    if separator and os.path.isfile(path_part):
+        return path_part, action_part or None
+
+    fail(f"selected desktop file is missing: {raw_selection}")
+
+
+def load_desktop_entry(desktop_path: str) -> configparser.ConfigParser:
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    try:
+        with open(desktop_path, encoding="utf-8") as handle:
+            parser.read_file(handle)
+    except OSError as exc:
+        fail(f"failed to read desktop entry {desktop_path}: {exc}")
+    return parser
+
+
+def expand_exec_tokens(exec_value: str, desktop_path: str, parser: configparser.ConfigParser) -> list[str]:
+    try:
+        tokens = shlex.split(exec_value, posix=True)
+    except ValueError as exc:
+        fail(f"invalid Exec command in {desktop_path}: {exc}")
+
+    icon_value = parser.get("Desktop Entry", "Icon", fallback="").strip()
+    name_value = parser.get("Desktop Entry", "Name", fallback=os.path.splitext(os.path.basename(desktop_path))[0]).strip()
+    expanded: list[str] = []
+    replace_map = {
+        "%%": "%",
+        "%c": name_value,
+        "%k": desktop_path,
+    }
+
+    for token in tokens:
+        if token in ("%f", "%F", "%u", "%U"):
+            continue
+        if token == "%i":
+            if icon_value:
+                expanded.extend(["--icon", icon_value])
+            continue
+        for field_code, replacement in replace_map.items():
+            token = token.replace(field_code, replacement)
+        expanded.append(token)
+
+    if not expanded:
+        fail(f"Exec command resolved empty for {desktop_path}")
+    return expanded
+
+
+raw_selection = sys.argv[1]
+desktop_path, action_name = resolve_selection(raw_selection)
+parser = load_desktop_entry(desktop_path)
+
+section_name = "Desktop Entry"
+if action_name:
+    candidate_section = f"Desktop Action {action_name}"
+    if parser.has_section(candidate_section):
+        section_name = candidate_section
+
+exec_value = parser.get(section_name, "Exec", fallback="").strip()
+if not exec_value:
+    fail(f"desktop entry has no Exec command: {desktop_path}")
+
+terminal = parser.getboolean(section_name, "Terminal", fallback=parser.getboolean("Desktop Entry", "Terminal", fallback=False))
+working_dir = parser.get("Desktop Entry", "Path", fallback="").strip()
+argv = expand_exec_tokens(exec_value, desktop_path, parser)
+
+if working_dir:
+    try:
+        os.chdir(working_dir)
+    except OSError as exc:
+        fail(f"failed to change working directory to {working_dir}: {exc}")
+
+env = os.environ.copy()
+switcherooctl = shutil.which("switcherooctl")
+
+if switcherooctl:
+    launch_argv = ["switcherooctl", "launch", "--"]
+    if terminal:
+        launch_argv.extend(["labwc-terminal", "-e"])
+    launch_argv.extend(argv)
+    os.execvpe(switcherooctl, launch_argv, env)
+
+env["DRI_PRIME"] = "1"
+env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
+env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
+env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
+
+if terminal:
+    argv = ["labwc-terminal", "-e", *argv]
+
+executable = shutil.which(argv[0])
+if not executable:
+    fail(f"resolved executable is not installed: {argv[0]}")
+os.execvpe(executable, argv, env)
+PY

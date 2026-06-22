@@ -69,7 +69,11 @@ for cmd in \
   wdisplays \
   waybar \
   kanshi \
+  switcherooctl \
+  vulkaninfo \
+  vainfo \
   labwc-dock \
+  labwc-dgpu-launcher \
   foot \
   kitty \
   wofi \
@@ -326,6 +330,7 @@ for path in \
   /usr/share/backgrounds/labwc/wallpapers/lock-labwall2-1920x1080.png \
   /etc/skel/.config/waybar/config \
   /etc/skel/.config/waybar/style.css \
+  /etc/skel/.config/waybar/icons/nvidia.svg \
   /etc/skel/.config/kanshi/config \
   /etc/skel/.config/foot/foot.ini \
   /etc/skel/.config/kitty/kitty.conf \
@@ -360,9 +365,11 @@ for path in \
   /etc/skel/.config/xdg-desktop-portal/portals.conf \
   /etc/xdg/xdg-desktop-portal/labwc-portals.conf \
   /etc/bluetooth/main.conf \
+  /etc/chromium.d/90-preseed-performance-flags \
   /etc/systemd/user/labwc-calendar-sync.service \
   /etc/systemd/user/labwc-calendar-sync.timer \
   /etc/systemd/system/bluetooth.service.d/10-preseed-directory-mode.conf \
+  /usr/local/bin/labwc-dgpu-launcher \
   /etc/skel/.config/wireplumber/wireplumber.conf.d/10-disable-bluez-midi.conf
 do
   check_optional_path "$path"
@@ -626,6 +633,33 @@ printf "desktop_user_slice_verification slice=%s dropin=%s\n" user-1000 "$dropin
     "${DEBIAN_SLICE_MEMORY_HIGH:-80%}"
 }
 
+desktop_verify_no_x11_payload() {
+  # shellcheck disable=SC2016
+  run_in_target "verify Labwc desktop stays X11-free" /bin/sh -c '
+set -eu
+for pkg in \
+  xwayland \
+  x11-common \
+  x11-xkb-utils \
+  dbus-x11 \
+  xserver-xorg \
+  xserver-xorg-core
+do
+  if dpkg-query -W -f=${Status} "$pkg" 2>/dev/null | grep -q "^install ok installed$"; then
+    printf "fatal: forbidden X11 package is installed: %s\n" "$pkg" >&2
+    exit 1
+  fi
+done
+
+if command -v xkbcomp >/dev/null 2>&1; then
+  printf "fatal: xkbcomp must not be installed on the Labwc target\n" >&2
+  exit 1
+fi
+
+printf "desktop_x11_absence_verification packages=ok xkbcomp=absent\n"
+' sh
+}
+
 desktop_verify_target_staging() {
   desktop_verify_required_commands
   desktop_verify_staged_files
@@ -633,4 +667,5 @@ desktop_verify_target_staging() {
   desktop_verify_greeter_access
   desktop_verify_primary_user_files
   desktop_verify_primary_user_slice_limits
+  desktop_verify_no_x11_payload
 }

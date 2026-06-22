@@ -1,0 +1,9 @@
+# Managed by the installer apt-setup preferences generator.
+
+Package: *
+Pin: release o=xanmod
+Pin-Priority: 100
+
+Package: nvidia-driver-595-open nvidia-settings nvidia-suspend-common nvidia-vaapi-driver nvidia-vdpau-driver libnvidia-egl-wayland1
+Pin: release o=xanmod
+Pin-Priority: 900

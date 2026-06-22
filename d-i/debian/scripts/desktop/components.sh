@@ -518,6 +518,33 @@ desktop_render_labwc_rc_xml() {
   desktop_log "rendered_labwc_rc_xml workspaces=${workspace_count}"
 }
 
+desktop_nvidia_dgpu_enabled() {
+  installer_selected_class_reference_is_selected addon/nvidia 2>/dev/null || return 1
+  target_nvidia_modprobe="/target${FILE_MODPROBE_NVIDIA:-/etc/modprobe.d/nvidia.conf}"
+  [ -r "$target_nvidia_modprobe" ] || return 1
+  grep -q '^options nvidia_drm modeset=1$' "$target_nvidia_modprobe"
+}
+
+desktop_waybar_dgpu_modules_left_json() {
+  if desktop_nvidia_dgpu_enabled; then
+    printf ', "custom/dgpu"'
+  fi
+}
+
+desktop_waybar_dgpu_module_definition_block() {
+  if ! desktop_nvidia_dgpu_enabled; then
+    return 0
+  fi
+
+  cat <<'EOF'
+  "custom/dgpu": {
+    "format": "GPU",
+    "tooltip": false,
+    "on-click": "labwc-dgpu-launcher"
+  },
+EOF
+}
+
 desktop_render_waybar_config() {
   waybar_path=/etc/skel/.config/waybar/config
 
@@ -525,12 +552,25 @@ desktop_render_waybar_config() {
     "etc/skel/.config/waybar/config.tmpl" \
     "$waybar_path" \
     0644 \
+    LABWC_WAYBAR_DGPU_MODULES_LEFT "$(desktop_waybar_dgpu_modules_left_json)" \
     LABWC_FILE_MANAGER_COMMAND "$(desktop_double_quote_escape "${LABWC_FILE_MANAGER_COMMAND:-thunar}")" \
     LABWC_CALENDAR_COMMAND "$(desktop_double_quote_escape "${LABWC_CALENDAR_COMMAND:-labwc-calendar}")" \
     LABWC_AUDIO_CONTROL_COMMAND "$(desktop_double_quote_escape "${LABWC_AUDIO_CONTROL_COMMAND:-pavucontrol}")" \
     LABWC_BRIGHTNESS_CONTROL_COMMAND "$(desktop_double_quote_escape "${LABWC_BRIGHTNESS_CONTROL_COMMAND:-labwc-brightness-control}")" \
     LABWC_POWER_SETTINGS_COMMAND "$(desktop_double_quote_escape "${LABWC_POWER_SETTINGS_COMMAND:-labwc-power-settings}")"
+  desktop_replace_block_placeholder_in_target \
+    "$waybar_path" \
+    "__INSTALLER_LABWC_WAYBAR_DGPU_MODULE_DEFINITION__" \
+    "$(desktop_waybar_dgpu_module_definition_block)"
   desktop_log "rendered_waybar_config native_workspaces=true"
+}
+
+desktop_render_chromium_flags() {
+  desktop_render_role_target_template \
+    "etc/chromium.d/90-preseed-performance-flags.tmpl" \
+    "/etc/chromium.d/90-preseed-performance-flags" \
+    0644
+  desktop_log "rendered_chromium_flags gpu_wayland_defaults=managed"
 }
 
 desktop_install_primary_account_slice_limits() {
@@ -620,6 +660,7 @@ desktop_stage_target_assets() {
   desktop_stage_role_asset usr/local/bin/labwc-calendar /usr/local/bin/labwc-calendar 0755
   desktop_stage_role_asset usr/local/bin/labwc-logout /usr/local/bin/labwc-logout 0755
   desktop_stage_role_asset usr/local/bin/labwc-wofi /usr/local/bin/labwc-wofi 0755
+  desktop_stage_role_asset usr/local/bin/labwc-dgpu-launcher /usr/local/bin/labwc-dgpu-launcher 0755
   desktop_stage_role_asset usr/local/bin/labwc-output-refresh /usr/local/bin/labwc-output-refresh 0755
   desktop_stage_role_asset usr/local/bin/labwc-output-watch /usr/local/bin/labwc-output-watch 0755
   desktop_stage_role_asset usr/local/bin/labwc-lock /usr/local/bin/labwc-lock 0755
@@ -660,6 +701,7 @@ desktop_stage_target_assets() {
   desktop_stage_role_asset etc/skel/.config/labwc/menu.xml /etc/skel/.config/labwc/menu.xml 0644
   desktop_render_waybar_config
   desktop_stage_role_asset etc/skel/.config/waybar/style.css /etc/skel/.config/waybar/style.css 0644
+  desktop_stage_role_asset etc/skel/.config/waybar/icons/nvidia.svg /etc/skel/.config/waybar/icons/nvidia.svg 0644
   desktop_stage_role_asset etc/skel/.config/kanshi/config /etc/skel/.config/kanshi/config 0644
   desktop_stage_role_asset etc/skel/.config/foot/foot.ini /etc/skel/.config/foot/foot.ini 0644
   desktop_stage_role_asset etc/skel/.config/kitty/kitty.conf /etc/skel/.config/kitty/kitty.conf 0644
@@ -693,6 +735,7 @@ desktop_stage_target_assets() {
   desktop_stage_role_asset etc/skel/.config/kwalletrc /etc/skel/.config/kwalletrc 0644
   desktop_stage_role_asset etc/skel/.config/xdg-desktop-portal/portals.conf /etc/skel/.config/xdg-desktop-portal/portals.conf 0644
   desktop_stage_role_asset etc/skel/.config/user-dirs.dirs /etc/skel/.config/user-dirs.dirs 0644
+  desktop_render_chromium_flags
 }
 
 desktop_install_user_config() {

@@ -36,6 +36,7 @@ window#waybar {
 }
 
 #custom-launcher,
+#custom-dgpu,
 #custom-files,
 #custom-terminal,
 #taskbar button,
@@ -70,6 +71,7 @@ window#waybar {
 #workspaces button.active,
 #taskbar button.active,
 #custom-launcher:hover,
+#custom-dgpu:hover,
 #workspaces button:hover,
 #taskbar button:hover,
 #custom-files:hover,
@@ -96,6 +98,17 @@ window#waybar {
 
 #custom-launcher {
   color: @amber;
+  font-weight: 700;
+}
+
+#custom-dgpu {
+  min-width: 46px;
+  padding-left: 28px;
+  background-image: url("icons/nvidia.svg");
+  background-repeat: no-repeat;
+  background-position: 10px center;
+  background-size: 10px 10px;
+  color: #76b900;
   font-weight: 700;
 }
 

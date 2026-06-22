@@ -1,0 +1,11 @@
+# Managed by installer automation for the Labwc desktop role.
+#
+# Debian's Chromium wrapper sources /etc/chromium.d/* before launching the
+# browser, so keep these flags conservative and shell-safe.
+#
+# Chromium's own Linux GPU docs recommend Wayland/Ozone defaults and note that
+# VAAPI on NVIDIA is still unsupported for normal use, so we intentionally do
+# not enable VaapiOnNvidiaGPUs here.
+
+CHROMIUM_FLAGS="${CHROMIUM_FLAGS:+$CHROMIUM_FLAGS }--ozone-platform-hint=auto"
+CHROMIUM_FLAGS="${CHROMIUM_FLAGS:+$CHROMIUM_FLAGS }--enable-features=AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL"

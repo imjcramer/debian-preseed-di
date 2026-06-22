@@ -85,8 +85,8 @@ printf '1..%s\n' "$TEST_COUNT"
 fallback_out="$TMP_DIR/fallback.out"
 fallback_err="$TMP_DIR/fallback.err"
 if run_case fallback "" "$fallback_out" "$fallback_err"; then
-  if [ "$(extract_value config "$fallback_out")" = "sid,forky,dbus" ] &&
-     [ "$(extract_value names "$fallback_out")" = "sid.pref,forky.pref,dbus.pref" ]; then
+  if [ "$(extract_value config "$fallback_out")" = "sid,forky,dbus,x11" ] &&
+     [ "$(extract_value names "$fallback_out")" = "sid.pref,forky.pref,dbus.pref,x11.pref" ]; then
     pass "repo.env apt preferences remain the fallback"
   else
     fail "repo.env apt preferences remain the fallback" "$fallback_out"
@@ -98,8 +98,8 @@ fi
 forky_out="$TMP_DIR/forky.out"
 forky_err="$TMP_DIR/forky.err"
 if run_case forky "addon/forky" "$forky_out" "$forky_err"; then
-  if [ "$(extract_value config "$forky_out")" = "trixie,sid,dbus" ] &&
-     [ "$(extract_value names "$forky_out")" = "trixie.pref,sid.pref,dbus.pref" ]; then
+  if [ "$(extract_value config "$forky_out")" = "trixie,sid,dbus,cramerz,x11" ] &&
+     [ "$(extract_value names "$forky_out")" = "trixie.pref,sid.pref,dbus.pref,cramerz.pref,x11.pref" ]; then
     pass "single class apt preference metadata overrides repo.env"
   else
     fail "single class apt preference metadata overrides repo.env" "$forky_out"
@@ -111,8 +111,8 @@ fi
 merged_out="$TMP_DIR/merged.out"
 merged_err="$TMP_DIR/merged.err"
 if run_case merged "addon/forky addon/testprefs" "$merged_out" "$merged_err"; then
-  if [ "$(extract_value config "$merged_out")" = "trixie,sid,dbus,forky,test" ] &&
-     [ "$(extract_value names "$merged_out")" = "trixie.pref,sid.pref,dbus.pref,forky.pref,test.pref" ]; then
+  if [ "$(extract_value config "$merged_out")" = "trixie,sid,dbus,cramerz,x11,forky,test" ] &&
+     [ "$(extract_value names "$merged_out")" = "trixie.pref,sid.pref,dbus.pref,cramerz.pref,x11.pref,forky.pref,test.pref" ]; then
     pass "multiple class apt preference metadata merges with deduplication"
   else
     fail "multiple class apt preference metadata merges with deduplication" "$merged_out"

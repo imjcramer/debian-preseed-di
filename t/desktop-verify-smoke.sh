@@ -5,7 +5,7 @@ ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/desktop-verify-smoke.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 
-TEST_COUNT=44
+TEST_COUNT=47
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -214,6 +214,27 @@ else
   fail "desktop package set installs the GVFS network backends and wsdd helper"
 fi
 
+apt_fragment_file="$ROOT_DIR/d-i/debian/fragments/apt.cfg"
+if ! grep -Eq '(^|[[:space:]])xwayland([[:space:]]|$)' "$desktop_packages_file" &&
+   ! grep -Eq '(^|[[:space:]])xkbcomp([[:space:]]|$)' "$desktop_packages_file" &&
+   grep -Eq '(^|[[:space:]])x11-xkb-utils([[:space:]]|$)' "$apt_fragment_file" &&
+   grep -Eq '(^|[[:space:]])xwayland([[:space:]]|$)' "$apt_fragment_file" &&
+   grep -q '^desktop_verify_no_x11_payload() {$' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
+   grep -q 'xkbcomp must not be installed' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh"; then
+  pass "desktop role strips explicit X11 payloads and verifies they stay absent"
+else
+  fail "desktop role strips explicit X11 payloads and verifies they stay absent"
+fi
+
+intel_cpu_class="$ROOT_DIR/d-i/debian/classes/class-auto/cpu/intel.cfg"
+intel_regdom_rule="$ROOT_DIR/d-i/debian/hooks/hardware/cpu/intel/target/etc/udev/rules.d/85-wifi-regdom.rules"
+if grep -Eq '(^|[[:space:]])iw([[:space:]]|$)' "$intel_cpu_class" &&
+   grep -q '/usr/sbin/iw reg set AU' "$intel_regdom_rule"; then
+  pass "Intel hardware policy installs iw and uses the canonical usr-sbin callout path"
+else
+  fail "Intel hardware policy installs iw and uses the canonical usr-sbin callout path"
+fi
+
 if grep -Eq '(^|[[:space:]])libspa-0\.2-libcamera([[:space:]]|$)' "$desktop_packages_file" &&
    grep -Eq '(^|[[:space:]])vdirsyncer([[:space:]]|$)' "$desktop_packages_file" &&
    grep -Eq '(^|[[:space:]])khal([[:space:]]|$)' "$desktop_packages_file" &&
@@ -293,7 +314,7 @@ if grep -q '^LABWC_LAUNCHER_COMMAND="labwc-wofi --show drun"$' "$ROOT_DIR/d-i/de
    grep -q 'exec powerprofilesctl set' "$power_settings" &&
    grep -q 'labwc-wofi --dmenu --prompt "Brightness' "$brightness_menu" &&
    grep -q 'allow_images=true' "$wofi_config" &&
-   grep -q '^image_size=30$' "$wofi_config" &&
+   grep -q '^image_size=28$' "$wofi_config" &&
    grep -q 'exec wofi "\$@"' "$wofi_wrapper" &&
    grep -q 'sudo -k -v' "$admin_wrapper" &&
    grep -q 'run_session_shutdown_hook' "$admin_wrapper" &&
@@ -504,8 +525,9 @@ fi
 
 keyboard_helper="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/usr/local/bin/labwc-keyboard-layout"
 if grep -q '"modules-center": \["clock"\]' "$waybar_template" &&
-   grep -q '"modules-left": \["custom/launcher", "ext/workspaces"' "$waybar_template" &&
+   grep -q '"modules-left": \["custom/launcher"__INSTALLER_LABWC_WAYBAR_DGPU_MODULES_LEFT__, "ext/workspaces"' "$waybar_template" &&
    grep -q '"modules-right": \["custom/keyboard", "network", "pulseaudio"' "$waybar_template" &&
+   grep -q '__INSTALLER_LABWC_WAYBAR_DGPU_MODULE_DEFINITION__' "$waybar_template" &&
    grep -q '"exec": "labwc-keyboard-layout status"' "$waybar_template" &&
    grep -q '"on-click": "labwc-keyboard-layout toggle && pkill -RTMIN+7 waybar"' "$waybar_template" &&
    grep -q 'XKB_DEFAULT_LAYOUT=%s' "$keyboard_helper" &&
@@ -537,6 +559,9 @@ fi
 
 waybar_style="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/waybar/style.css"
 if grep -q '#custom-keyboard' "$waybar_style" &&
+   grep -q '#custom-dgpu' "$waybar_style" &&
+   grep -q 'background-image: url("icons/nvidia.svg");' "$waybar_style" &&
+   grep -q 'background-size: 10px 10px;' "$waybar_style" &&
    grep -q 'min-width: 60px;' "$waybar_style" &&
    grep -q 'margin-left: 1px;' "$waybar_style" &&
    grep -q 'background: rgba(248, 113, 113, 0.16);' "$waybar_style" &&
@@ -558,6 +583,28 @@ if grep -q '^\[colors-dark\]$' "$ROOT_DIR/d-i/debian/hooks/role/desktop/target/e
   pass "Foot config uses the current colors-dark section"
 else
   fail "Foot config uses the current colors-dark section"
+fi
+
+dgpu_launcher="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/usr/local/bin/labwc-dgpu-launcher"
+chromium_flags="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/chromium.d/90-preseed-performance-flags.tmpl"
+wofi_config="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/wofi/config"
+if grep -q 'launch_argv = \["switcherooctl", "launch", "--"\]' "$dgpu_launcher" &&
+   grep -q 'drun-print_desktop_file=true' "$dgpu_launcher" &&
+   grep -q 'resolve_selection' "$dgpu_launcher" &&
+   grep -q 'expand_exec_tokens' "$dgpu_launcher" &&
+   grep -q 'desktop entry has no Exec command' "$dgpu_launcher" &&
+   grep -q 'env\["__NV_PRIME_RENDER_OFFLOAD"\] = "1"' "$dgpu_launcher" &&
+   grep -q 'env\["__GLX_VENDOR_LIBRARY_NAME"\] = "nvidia"' "$dgpu_launcher" &&
+   grep -q '^CHROMIUM_FLAGS=.*--ozone-platform-hint=auto' "$chromium_flags" &&
+   grep -q 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL' "$chromium_flags" &&
+   ! grep -q '^CHROMIUM_FLAGS=.*VaapiOnNvidiaGPUs' "$chromium_flags" &&
+   grep -q '^width=780$' "$wofi_config" &&
+   grep -q '^height=650$' "$wofi_config" &&
+   grep -q '^lines=14$' "$wofi_config" &&
+   grep -q '^image_size=28$' "$wofi_config"; then
+  pass "dGPU launcher, Chromium flags, and compact Wofi defaults are staged coherently"
+else
+  fail "dGPU launcher, Chromium flags, and compact Wofi defaults are staged coherently"
 fi
 
 profile_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.profile"

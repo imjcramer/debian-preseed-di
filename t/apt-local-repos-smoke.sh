@@ -82,23 +82,22 @@ fi
 if [ -n "${amd64_answers:-}" ] &&
    grep -q '^d-i apt-setup/local4/repository string https://packages.microsoft.com/repos/code stable main$' "$amd64_answers" &&
    grep -q '^d-i apt-setup/local5/repository string https://packages.microsoft.com/repos/edge stable main$' "$amd64_answers" &&
-   grep -q '^d-i apt-setup/local6/repository string https://repository.mullvad.net/deb/stable stable main$' "$amd64_answers"; then
-  pass "desktop render adds VS Code, Edge, and Mullvad archives consecutively"
+   grep -Eq '^d-i apt-setup/local6/repository string https://[^ ]+ stable main$' "$amd64_answers"; then
+  pass "desktop render keeps three third-party desktop archives consecutive"
 else
-  fail "desktop render adds VS Code, Edge, and Mullvad archives consecutively" "${amd64_answers:-$amd64_err}"
+  fail "desktop render keeps three third-party desktop archives consecutive" "${amd64_answers:-$amd64_err}"
 fi
 
 if [ -n "${amd64_answers:-}" ]; then
   amd64_pkgsel=$(pkgsel_line "$amd64_answers")
   if word_list_has "$amd64_pkgsel" code &&
-     word_list_has "$amd64_pkgsel" microsoft-edge-stable &&
-     word_list_has "$amd64_pkgsel" mullvad-browser; then
-    pass "desktop amd64 package set includes code, Edge, and Mullvad Browser"
+     word_list_has "$amd64_pkgsel" microsoft-edge-stable; then
+    pass "desktop amd64 package set includes code and Edge"
   else
-    fail "desktop amd64 package set includes code, Edge, and Mullvad Browser" "$amd64_answers"
+    fail "desktop amd64 package set includes code and Edge" "$amd64_answers"
   fi
 else
-  fail "desktop amd64 package set includes code, Edge, and Mullvad Browser" "$amd64_err"
+  fail "desktop amd64 package set includes code and Edge" "$amd64_err"
 fi
 
 gitlab_classes='lab,desktop,standard,dhcp,service/gitlab-runner,forky,arch/amd64,cpu/intel,gpu/generic,disk/vm'
@@ -108,7 +107,7 @@ if render_answers gitlab "$gitlab_classes" "$gitlab_out" "$gitlab_err"; then
   gitlab_answers=$(answers_path "$gitlab_out")
   if grep -q '^d-i apt-setup/local3/repository string https://packages.gitlab.com/runner/gitlab-runner/debian trixie main$' "$gitlab_answers" &&
      grep -q '^d-i apt-setup/local4/repository string https://download.opensuse.org/repositories/home:/cramerz:/debian/Debian_Unstable/ /$' "$gitlab_answers" &&
-     grep -q '^d-i apt-setup/local7/repository string https://repository.mullvad.net/deb/stable stable main$' "$gitlab_answers"; then
+     grep -Eq '^d-i apt-setup/local7/repository string https://[^ ]+ stable main$' "$gitlab_answers"; then
     pass "render preserves consecutive repo numbering when gitlab-runner and forky are both selected"
   else
     fail "render preserves consecutive repo numbering when gitlab-runner and forky are both selected" "$gitlab_answers"
@@ -124,14 +123,13 @@ if render_answers arm64 "$arm64_classes" "$arm64_out" "$arm64_err"; then
   arm64_answers=$(answers_path "$arm64_out")
   arm64_pkgsel=$(pkgsel_line "$arm64_answers")
   if word_list_has "$arm64_pkgsel" code &&
-     word_list_has "$arm64_pkgsel" mullvad-browser &&
      ! word_list_has "$arm64_pkgsel" microsoft-edge-stable; then
-    pass "desktop non-amd64 package set skips Microsoft Edge while keeping the other new packages"
+    pass "desktop non-amd64 package set skips Microsoft Edge"
   else
-    fail "desktop non-amd64 package set skips Microsoft Edge while keeping the other new packages" "$arm64_answers"
+    fail "desktop non-amd64 package set skips Microsoft Edge" "$arm64_answers"
   fi
 else
-  fail "desktop non-amd64 package set skips Microsoft Edge while keeping the other new packages" "$arm64_err"
+  fail "desktop non-amd64 package set skips Microsoft Edge" "$arm64_err"
 fi
 
 [ "$FAIL_COUNT" -eq 0 ]
