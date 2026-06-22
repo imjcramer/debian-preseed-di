@@ -508,6 +508,52 @@ selected_fragment_applies_to_detected_hardware() {
   esac
 }
 
+selected_arch_class() {
+  if [ -n "${PRESEED_SELECTED_ARCH_CLASS:-}" ]; then
+    printf '%s\n' "$PRESEED_SELECTED_ARCH_CLASS"
+    return 0
+  fi
+
+  PRESEED_SELECTED_ARCH_CLASS=${INSTALLER_ARCH_CLASS:-$(installer_selected_class_for_purpose arch 2>/dev/null || true)}
+  [ -n "$PRESEED_SELECTED_ARCH_CLASS" ] ||
+    installer_fatal "selected arch class is unavailable while resolving pkgsel/include"
+  printf '%s\n' "$PRESEED_SELECTED_ARCH_CLASS"
+}
+
+pkgsel_include_word_supported_for_selected_arch() {
+  package_word=$1
+  package_name=${package_word%%/*}
+  arch_class=$(selected_arch_class)
+
+  case "$package_name" in
+    microsoft-edge-stable)
+      [ "$arch_class" = amd64 ]
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+append_filtered_pkgsel_include_word_list() {
+  list_words=$1
+  skipped_words=
+  skipped_arch=
+
+  for word in $list_words; do
+    [ -n "$word" ] || continue
+    if pkgsel_include_word_supported_for_selected_arch "$word"; then
+      append_unique_words PKGSEL_INCLUDE "$word"
+    else
+      skipped_words="${skipped_words:+$skipped_words }${word}"
+      [ -n "$skipped_arch" ] || skipped_arch=$(selected_arch_class)
+    fi
+  done
+
+  [ -z "$skipped_words" ] ||
+    installer_info "skipping arch-incompatible pkgsel/include packages for ${skipped_arch}: ${skipped_words}"
+}
+
 append_debconf_word_list() {
   question=$1
   var_name=$2
@@ -549,7 +595,7 @@ parse_preseed_record() {
 
   case "$owner:$question:$value_type" in
     d-i:pkgsel/include:string)
-      append_unique_word_list PKGSEL_INCLUDE "$value"
+      append_filtered_pkgsel_include_word_list "$value"
       ;;
     d-i:anna/choose_modules:multiselect)
       append_unique_word_list ANNA_CHOOSE_MODULES "$value"
@@ -581,6 +627,153 @@ parse_preseed_fragment() {
   done <"$path"
 
   [ -z "$logical_line" ] || parse_preseed_record "$logical_line"
+}
+
+append_fragment_apt_setup_local_records() {
+  path=$1
+  records_file=$2
+  logical_line=
+
+  [ -r "$path" ] || installer_fatal "preseed fragment is not readable for apt-setup/local extraction: ${path}"
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *\\)
+        line=${line%\\}
+        logical_line="${logical_line:+$logical_line }$line"
+        continue
+        ;;
+      *)
+        logical_line="${logical_line:+$logical_line }$line"
+        ;;
+    esac
+
+    if preseed_parse_selection_fields "$logical_line"; then
+      case "$PRESEED_RECORD_OWNER:$PRESEED_RECORD_QUESTION" in
+        d-i:apt-setup/local[0-9]/*)
+          local_field=${PRESEED_RECORD_QUESTION#apt-setup/local}
+          local_slot=${local_field%%/*}
+          local_name=${local_field#*/}
+          case "$local_slot" in
+            [0-9]) ;;
+            *) installer_fatal "unsupported apt-setup/local slot in preseed fragment: ${PRESEED_RECORD_QUESTION}" ;;
+          esac
+          [ -n "$local_name" ] ||
+            installer_fatal "missing apt-setup/local field name in preseed fragment: ${PRESEED_RECORD_QUESTION}"
+          printf '%s\t%s\t%s\t%s\n' \
+            "$local_slot" \
+            "$local_name" \
+            "$PRESEED_RECORD_TYPE" \
+            "$PRESEED_RECORD_VALUE" >>"$records_file"
+          ;;
+      esac
+    else
+      parse_status=$?
+      [ "$parse_status" -eq 1 ] || installer_fatal "malformed preseed fragment record while extracting apt-setup/local answers"
+    fi
+
+    logical_line=
+  done <"$path"
+
+  if [ -n "$logical_line" ]; then
+    if preseed_parse_selection_fields "$logical_line"; then
+      case "$PRESEED_RECORD_OWNER:$PRESEED_RECORD_QUESTION" in
+        d-i:apt-setup/local[0-9]/*)
+          local_field=${PRESEED_RECORD_QUESTION#apt-setup/local}
+          local_slot=${local_field%%/*}
+          local_name=${local_field#*/}
+          case "$local_slot" in
+            [0-9]) ;;
+            *) installer_fatal "unsupported trailing apt-setup/local slot in preseed fragment: ${PRESEED_RECORD_QUESTION}" ;;
+          esac
+          [ -n "$local_name" ] ||
+            installer_fatal "missing trailing apt-setup/local field name in preseed fragment: ${PRESEED_RECORD_QUESTION}"
+          printf '%s\t%s\t%s\t%s\n' \
+            "$local_slot" \
+            "$local_name" \
+            "$PRESEED_RECORD_TYPE" \
+            "$PRESEED_RECORD_VALUE" >>"$records_file"
+          ;;
+      esac
+    else
+      parse_status=$?
+      [ "$parse_status" -eq 1 ] || installer_fatal "malformed trailing preseed fragment record while extracting apt-setup/local answers"
+    fi
+  fi
+}
+
+collect_apt_setup_local_records() {
+  records_file=$1
+  base_fragment=$(ensure_cached_preseed_fragment "fragments/apt.cfg")
+
+  : >"$records_file"
+  append_fragment_apt_setup_local_records "$base_fragment" "$records_file"
+  while IFS= read -r rel_path || [ -n "$rel_path" ]; do
+    [ -n "$rel_path" ] || continue
+    selected_fragment_applies_to_detected_hardware "$rel_path" || continue
+    cached_path=$(ensure_cached_preseed_fragment "$rel_path")
+    append_fragment_apt_setup_local_records "$cached_path" "$records_file"
+  done <"$INCLUDE_LIST_FILE"
+  chmod 0600 "$records_file"
+}
+
+write_compacted_apt_setup_local_answers() {
+  output_file=$1
+  records_file="${CACHE_DIR}/preseed.apt-setup-local.tsv"
+  compacted_file="${CACHE_DIR}/preseed.apt-setup-local.cfg"
+
+  collect_apt_setup_local_records "$records_file"
+  [ -s "$records_file" ] || return 0
+
+  awk -F '\t' '
+    {
+      slot = $1 + 0
+      field = $2
+      type = $3
+      value = ""
+      if (NF > 3) {
+        value = $4
+        for (i = 5; i <= NF; i++) {
+          value = value FS $i
+        }
+      }
+      slot_seen[slot] = 1
+      key = slot SUBSEP field
+      if (!(key in field_seen)) {
+        fields[slot] = fields[slot] (fields[slot] == "" ? "" : "\034") field
+        field_seen[key] = 1
+      }
+      types[key] = type
+      values[key] = value
+    }
+    END {
+      next_slot = 0
+      for (slot = 0; slot <= 9; slot++) {
+        if (!(slot in slot_seen)) {
+          continue
+        }
+        repo_key = slot SUBSEP "repository"
+        if (!(repo_key in types)) {
+          printf("fatal: merged apt-setup/local%d is missing a repository field\n", slot) > "/dev/stderr"
+          exit 1
+        }
+        field_count = split(fields[slot], ordered_fields, /\034/)
+        for (field_index = 1; field_index <= field_count; field_index++) {
+          field = ordered_fields[field_index]
+          key = slot SUBSEP field
+          printf("d-i apt-setup/local%d/%s %s", next_slot, field, types[key])
+          if (length(values[key]) > 0) {
+            printf(" %s", values[key])
+          }
+          printf("\n")
+        }
+        next_slot++
+      }
+    }
+  ' "$records_file" >"$compacted_file"
+  [ -s "$compacted_file" ] || return 0
+  cat "$compacted_file" >>"$output_file"
+  printf '\n' >>"$output_file"
 }
 
 word_list_contains() {
@@ -637,7 +830,7 @@ collect_selected_fragments() {
     fi
     cached_path=$(ensure_cached_preseed_fragment "$rel_path")
     parse_preseed_fragment "$cached_path"
-    grep -E -v '^d-i[[:space:]]+(anna/choose_modules|pkgsel/include)[[:space:]]+' "$cached_path" >>"$merged_file" || true
+    grep -E -v '^d-i[[:space:]]+(anna/choose_modules|pkgsel/include|apt-setup/local[0-9]/)[[:space:]]+' "$cached_path" >>"$merged_file" || true
     printf '\n' >>"$merged_file"
   done <"$INCLUDE_LIST_FILE"
   chmod 0600 "$merged_file"
@@ -670,6 +863,7 @@ fragment_pkgsel_include_words() {
         d-i:pkgsel/include:string)
           for word in $PRESEED_RECORD_VALUE; do
             [ -n "$word" ] || continue
+            pkgsel_include_word_supported_for_selected_arch "$word" || continue
             printf '%s\n' "$word"
           done
           ;;
@@ -687,6 +881,7 @@ fragment_pkgsel_include_words() {
         d-i:pkgsel/include:string)
           for word in $PRESEED_RECORD_VALUE; do
             [ -n "$word" ] || continue
+            pkgsel_include_word_supported_for_selected_arch "$word" || continue
             printf '%s\n' "$word"
           done
           ;;
@@ -735,6 +930,7 @@ write_answers_file() {
   [ -r "$merged_file" ] || installer_fatal "merged preseed fragment file is not readable: ${merged_file}"
   install -d -m 0700 "$(dirname "$answers_file")"
   cat "$merged_file" >"$answers_file"
+  write_compacted_apt_setup_local_answers "$answers_file"
 
   {
     printf '# Generated by scripts/preseed/answers.sh from selected preseed cfg fragments\n'
