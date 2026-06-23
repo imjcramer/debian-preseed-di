@@ -24,20 +24,25 @@ action=${1:-}
 [ -n "$action" ] || fatal "usage: labwc-admin-action <suspend|reboot|poweroff>"
 shutdown_mode=keep-session
 
+require_command systemctl
+systemctl_cmd=$(command -v systemctl)
+[ -n "$systemctl_cmd" ] || fatal "systemctl command lookup returned an empty path"
+require_executable "$systemctl_cmd"
+
 case "$action" in
   suspend)
     shift
-    set -- /usr/bin/systemctl suspend "$@"
+    set -- "$systemctl_cmd" suspend "$@"
     ;;
   reboot)
     shutdown_mode=shutdown
     shift
-    set -- /usr/bin/systemctl reboot "$@"
+    set -- "$systemctl_cmd" reboot "$@"
     ;;
   poweroff)
     shutdown_mode=shutdown
     shift
-    set -- /usr/bin/systemctl poweroff "$@"
+    set -- "$systemctl_cmd" poweroff "$@"
     ;;
   *)
     fatal "unsupported privileged desktop action: ${action}"
@@ -45,12 +50,12 @@ case "$action" in
 esac
 
 [ "$#" -ge 2 ] || fatal "no privileged command was selected"
-
-require_executable "$1"
-require_command systemctl
-
-if [ "$shutdown_mode" = shutdown ]; then
-  run_session_shutdown_hook
+if "$@"; then
+  if [ "$shutdown_mode" = shutdown ]; then
+    run_session_shutdown_hook
+  fi
+  exit 0
+else
+  command_status=$?
+  exit "$command_status"
 fi
-
-exec "$@"

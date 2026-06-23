@@ -1,6 +1,19 @@
 #!/bin/sh
 set -eu
 
+skip_initial_refresh=false
+case "${1:-}" in
+  '')
+    ;;
+  --skip-initial-refresh)
+    skip_initial_refresh=true
+    ;;
+  *)
+    printf 'usage: labwc-output-watch [--skip-initial-refresh]\n' >&2
+    exit 2
+    ;;
+esac
+
 if [ -r /etc/default/labwc-desktop ]; then
   # shellcheck disable=SC1091
   . /etc/default/labwc-desktop
@@ -8,7 +21,9 @@ fi
 
 debounce_seconds=${LABWC_OUTPUT_HOTPLUG_DEBOUNCE_SECONDS:-2}
 
-labwc-output-refresh || true
+if [ "$skip_initial_refresh" != true ]; then
+  labwc-output-refresh || true
+fi
 
 command -v udevadm >/dev/null 2>&1 || exit 0
 

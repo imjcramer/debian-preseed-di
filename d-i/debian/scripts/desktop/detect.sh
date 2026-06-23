@@ -218,7 +218,7 @@ desktop_validate_policy_env() {
   desktop_validate_output_mode_policy
   desktop_validate_decimal_range LABWC_OUTPUT_SCALE "${LABWC_OUTPUT_SCALE:-1}" 0.5 3
   desktop_validate_decimal_range LABWC_OUTPUT_INTERNAL_SCALE "${LABWC_OUTPUT_INTERNAL_SCALE:-1}" 0.5 3
-  desktop_validate_decimal_range LABWC_OUTPUT_EXTERNAL_SCALE "${LABWC_OUTPUT_EXTERNAL_SCALE:-1.35}" 0.5 3
+  desktop_validate_decimal_range LABWC_OUTPUT_EXTERNAL_SCALE "${LABWC_OUTPUT_EXTERNAL_SCALE:-1.80}" 0.5 3
   desktop_validate_uint_range LABWC_OUTPUT_FALLBACK_REFRESH_HZ "${LABWC_OUTPUT_FALLBACK_REFRESH_HZ:-60}" 24 1000
   desktop_validate_uint_range LABWC_OUTPUT_HOTPLUG_DEBOUNCE_SECONDS "${LABWC_OUTPUT_HOTPLUG_DEBOUNCE_SECONDS:-2}" 0 30
   desktop_validate_uint_range LABWC_IDLE_LOCK_SECONDS "${LABWC_IDLE_LOCK_SECONDS:-900}" 60 86400
@@ -344,7 +344,7 @@ desktop_write_default_config() {
     write_shell_config_var LABWC_OUTPUT_FALLBACK_REFRESH_HZ "${LABWC_OUTPUT_FALLBACK_REFRESH_HZ:-60}"
     write_shell_config_var LABWC_OUTPUT_SCALE "${LABWC_OUTPUT_SCALE:-1}"
     write_shell_config_var LABWC_OUTPUT_INTERNAL_SCALE "${LABWC_OUTPUT_INTERNAL_SCALE:-1}"
-    write_shell_config_var LABWC_OUTPUT_EXTERNAL_SCALE "${LABWC_OUTPUT_EXTERNAL_SCALE:-1.35}"
+    write_shell_config_var LABWC_OUTPUT_EXTERNAL_SCALE "${LABWC_OUTPUT_EXTERNAL_SCALE:-1.80}"
     write_shell_config_var LABWC_OUTPUT_HOTPLUG_DEBOUNCE_SECONDS "${LABWC_OUTPUT_HOTPLUG_DEBOUNCE_SECONDS:-2}"
     write_shell_config_var LABWC_DETECTED_OUTPUTS "${LABWC_DETECTED_OUTPUTS:-}"
     write_shell_config_var LABWC_DETECTED_INTERNAL_OUTPUTS "${LABWC_DETECTED_INTERNAL_OUTPUTS:-}"

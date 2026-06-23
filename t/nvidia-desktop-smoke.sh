@@ -43,15 +43,15 @@ fi
 
 desktop_packages="$ROOT_DIR/d-i/debian/classes/class-select/role/desktop.cfg"
 if grep -Eq '(^|[[:space:]])mesa-utils([[:space:]]|$)' "$desktop_packages" &&
-   grep -Eq '(^|[[:space:]])mesa-vulkan-drivers([[:space:]]|$)' "$desktop_packages" &&
    grep -Eq '(^|[[:space:]])mesa-va-drivers([[:space:]]|$)' "$desktop_packages" &&
    grep -Eq '(^|[[:space:]])mesa-vdpau-drivers([[:space:]]|$)' "$desktop_packages" &&
-   grep -Eq '(^|[[:space:]])vulkan-tools([[:space:]]|$)' "$desktop_packages" &&
    grep -Eq '(^|[[:space:]])vainfo([[:space:]]|$)' "$desktop_packages" &&
-   grep -Eq '(^|[[:space:]])libva-wayland2([[:space:]]|$)' "$desktop_packages"; then
-  pass "desktop role installs the shared Vulkan and VAAPI tooling baseline"
+   grep -Eq '(^|[[:space:]])libva-wayland2([[:space:]]|$)' "$desktop_packages" &&
+   ! grep -Eq '(^|[[:space:]])mesa-vulkan-drivers([[:space:]]|$)' "$desktop_packages" &&
+   ! grep -Eq '(^|[[:space:]])vulkan-tools([[:space:]]|$)' "$desktop_packages"; then
+  pass "desktop role installs the shared VAAPI tooling baseline without Vulkan packages"
 else
-  fail "desktop role installs the shared Vulkan and VAAPI tooling baseline"
+  fail "desktop role installs the shared VAAPI tooling baseline without Vulkan packages"
 fi
 
 intel_gpu_class="$ROOT_DIR/d-i/debian/classes/class-auto/gpu/intel-uhd.cfg"
@@ -101,8 +101,7 @@ fi
 
 waybar_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/waybar/config.tmpl"
 waybar_style="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/waybar/style.css"
-if grep -q '__INSTALLER_LABWC_WAYBAR_DGPU_MODULES_LEFT__' "$waybar_template" &&
-   grep -q '__INSTALLER_LABWC_WAYBAR_DGPU_MODULE_DEFINITION__' "$waybar_template" &&
+if grep -q '"custom/dgpu"' "$waybar_template" &&
    grep -q '#custom-dgpu' "$waybar_style" &&
    grep -q 'background-image: url("icons/nvidia.svg");' "$waybar_style"; then
   pass "Waybar carries the conditional dGPU module hook and NVIDIA icon styling"

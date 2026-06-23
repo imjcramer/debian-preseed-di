@@ -12,4 +12,6 @@ configuration must not include X11 startup assets such as `xinitrc`. Crystal
 Dock reads per-desktop configuration from `~/.config/crystal-dock/labwc/`; the
 role also stages the same preset under `/etc/xdg/crystal-dock/labwc/` so
 Crystal Dock can copy it on first run when a home directory does not already
-contain a dock configuration.
+contain a dock configuration. The managed `labwc-output-refresh` helper
+serializes output changes and re-seats session chrome after real topology
+changes so Waybar and Crystal Dock stay aligned across hotplug and resume.

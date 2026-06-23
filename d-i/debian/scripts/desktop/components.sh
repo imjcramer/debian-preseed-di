@@ -685,9 +685,9 @@ desktop_render_waybar_config() {
     "$waybar_path" \
     0644 \
     LABWC_WAYBAR_NAME main \
-    LABWC_WAYBAR_HEIGHT 58 \
-    LABWC_WAYBAR_TASKBAR_ICON_SIZE 22 \
-    LABWC_WAYBAR_TRAY_ICON_SIZE 18 \
+    LABWC_WAYBAR_HEIGHT 44 \
+    LABWC_WAYBAR_TASKBAR_ICON_SIZE 18 \
+    LABWC_WAYBAR_TRAY_ICON_SIZE 16 \
     LABWC_FILE_MANAGER_COMMAND "$(desktop_double_quote_escape "${LABWC_FILE_MANAGER_COMMAND:-thunar}")" \
     LABWC_CALENDAR_COMMAND "$(desktop_double_quote_escape "${LABWC_CALENDAR_COMMAND:-labwc-calendar}")" \
     LABWC_AUDIO_CONTROL_COMMAND "$(desktop_double_quote_escape "${LABWC_AUDIO_CONTROL_COMMAND:-pavucontrol}")" \

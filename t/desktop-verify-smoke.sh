@@ -314,11 +314,11 @@ if grep -q '^LABWC_LAUNCHER_COMMAND="labwc-wofi --show drun"$' "$ROOT_DIR/d-i/de
    grep -q 'exec powerprofilesctl set' "$power_settings" &&
    grep -q 'labwc-wofi --dmenu --prompt "Brightness' "$brightness_menu" &&
    grep -q 'allow_images=true' "$wofi_config" &&
-   grep -q '^image_size=28$' "$wofi_config" &&
+   grep -q '^image_size=20$' "$wofi_config" &&
    grep -q 'exec wofi "\$@"' "$wofi_wrapper" &&
-   grep -q 'sudo -k -v' "$admin_wrapper" &&
+   grep -q '^systemctl_cmd=$(command -v systemctl)$' "$admin_wrapper" &&
+   grep -q 'if "$@"; then' "$admin_wrapper" &&
    grep -q 'run_session_shutdown_hook' "$admin_wrapper" &&
-   grep -q 'sudo -- "\$@"' "$admin_wrapper" &&
    ! grep -q '/bin/sh -lc' "$admin_wrapper" &&
    grep -q 'loginctl terminate-session' "$logout_wrapper"; then
   pass "Wofi helpers keep icons and the power actions use the explicit wrappers"
@@ -525,9 +525,8 @@ fi
 
 keyboard_helper="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/usr/local/bin/labwc-keyboard-layout"
 if grep -q '"modules-center": \["clock"\]' "$waybar_template" &&
-   grep -q '"modules-left": \["custom/launcher"__INSTALLER_LABWC_WAYBAR_DGPU_MODULES_LEFT__, "ext/workspaces"' "$waybar_template" &&
+   grep -q '"modules-left": \["custom/launcher", "custom/dgpu", "ext/workspaces", "custom/files", "custom/terminal", "wlr/taskbar"\]' "$waybar_template" &&
    grep -q '"modules-right": \["custom/keyboard", "network", "pulseaudio"' "$waybar_template" &&
-   grep -q '__INSTALLER_LABWC_WAYBAR_DGPU_MODULE_DEFINITION__' "$waybar_template" &&
    grep -q '"exec": "labwc-keyboard-layout status"' "$waybar_template" &&
    grep -q '"on-click": "labwc-keyboard-layout toggle && pkill -RTMIN+7 waybar"' "$waybar_template" &&
    grep -q 'XKB_DEFAULT_LAYOUT=%s' "$keyboard_helper" &&
@@ -543,9 +542,13 @@ fi
 if grep -q '"format-ethernet": "🖧 LAN"' "$waybar_template" &&
    grep -q '"format": "🔊 {volume}%"' "$waybar_template" &&
    grep -q '"format": "🖴 {percentage_used}%"' "$waybar_template" &&
-   grep -q '"height": 58' "$waybar_template" &&
-   grep -q '"spacing": 6' "$waybar_template" &&
+   grep -q '"height": __INSTALLER_LABWC_WAYBAR_HEIGHT__' "$waybar_template" &&
+   grep -q '"icon-size": __INSTALLER_LABWC_WAYBAR_TASKBAR_ICON_SIZE__' "$waybar_template" &&
+   grep -q '"icon-size": __INSTALLER_LABWC_WAYBAR_TRAY_ICON_SIZE__' "$waybar_template" &&
    grep -q '"spacing": 4' "$waybar_template" &&
+   grep -q 'LABWC_WAYBAR_HEIGHT 44' "$waybar_generator" &&
+   grep -q 'LABWC_WAYBAR_TASKBAR_ICON_SIZE 18' "$waybar_generator" &&
+   grep -q 'LABWC_WAYBAR_TRAY_ICON_SIZE 16' "$waybar_generator" &&
    grep -q '"on-click": "labwc-terminal -e btop"' "$waybar_template" &&
    grep -q '"on-click": "labwc-terminal -e ncdu /"' "$waybar_template" &&
    grep -q '"on-click": "labwc-terminal -e nmtui"' "$waybar_template" &&
@@ -561,8 +564,8 @@ waybar_style="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/wa
 if grep -q '#custom-keyboard' "$waybar_style" &&
    grep -q '#custom-dgpu' "$waybar_style" &&
    grep -q 'background-image: url("icons/nvidia.svg");' "$waybar_style" &&
-   grep -q 'background-size: 10px 10px;' "$waybar_style" &&
-   grep -q 'min-width: 60px;' "$waybar_style" &&
+   grep -q 'background-size: 9px 9px;' "$waybar_style" &&
+   grep -q 'min-width: 56px;' "$waybar_style" &&
    grep -q 'margin-left: 1px;' "$waybar_style" &&
    grep -q 'background: rgba(248, 113, 113, 0.16);' "$waybar_style" &&
    grep -q '#custom-power:hover' "$waybar_style"; then
@@ -598,10 +601,10 @@ if grep -q 'launch_argv = \["switcherooctl", "launch", "--"\]' "$dgpu_launcher" 
    grep -q '^CHROMIUM_FLAGS=.*--ozone-platform-hint=auto' "$chromium_flags" &&
    grep -q 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL' "$chromium_flags" &&
    ! grep -q '^CHROMIUM_FLAGS=.*VaapiOnNvidiaGPUs' "$chromium_flags" &&
-   grep -q '^width=780$' "$wofi_config" &&
-   grep -q '^height=650$' "$wofi_config" &&
-   grep -q '^lines=14$' "$wofi_config" &&
-   grep -q '^image_size=28$' "$wofi_config"; then
+   grep -q '^width=680$' "$wofi_config" &&
+   grep -q '^height=540$' "$wofi_config" &&
+   grep -q '^lines=12$' "$wofi_config" &&
+   grep -q '^image_size=20$' "$wofi_config"; then
   pass "dGPU launcher, Chromium flags, and compact Wofi defaults are staged coherently"
 else
   fail "dGPU launcher, Chromium flags, and compact Wofi defaults are staged coherently"

@@ -17,6 +17,7 @@ state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/labwc"
 install -d -m 0700 "$state_dir"
 log_path="${state_dir}/crystal-dock.log"
 pid_path="${state_dir}/crystal-dock.pid"
+lock_path="${state_dir}/crystal-dock.lock"
 
 desktop_enabled "${LABWC_ENABLE_CRYSTAL_DOCK:-true}" || exit 0
 
@@ -31,6 +32,14 @@ esac
 dock_binary=${dock_command%% *}
 dock_process=${dock_binary##*/}
 dock_user_id=$(id -u)
+
+timestamp() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+log_message() {
+  printf '%s %s\n' "$(timestamp)" "$1" >>"$log_path"
+}
 
 clear_pid_file() {
   rm -f "$pid_path"
@@ -52,57 +61,90 @@ read_pid_file() {
   printf '%s\n' "$dock_pid"
 }
 
+with_lock() {
+  if ! command -v flock >/dev/null 2>&1; then
+    "$@"
+    return
+  fi
+
+  (
+    exec 9>"$lock_path"
+    flock -w 5 9 || exit 0
+    "$@"
+  )
+}
+
+stop_running_dock() {
+  dock_pid=$(read_pid_file 2>/dev/null || true)
+  if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
+    kill "$dock_pid" >/dev/null 2>&1 || true
+  else
+    pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+  fi
+  clear_pid_file
+}
+
+start_dock_process() {
+  set -f
+  # The validated command string intentionally contains only simple argv tokens.
+  # shellcheck disable=SC2086
+  set -- $dock_command
+  set +f
+
+  (
+    exec 9>&- 2>/dev/null || true
+    export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-labwc:wlroots}"
+    export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland}"
+    export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-qt6ct}"
+    export QT_STYLE_OVERRIDE="${QT_STYLE_OVERRIDE:-adwaita-dark}"
+    exec >>"$log_path" 2>&1
+    exec "$@"
+  ) &
+  dock_pid=$!
+  printf '%s\n' "$dock_pid" >"$pid_path"
+}
+
+start_if_needed_locked() {
+  dock_pid=$(read_pid_file 2>/dev/null || true)
+  if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
+    return 0
+  fi
+
+  clear_pid_file
+  if command -v pgrep >/dev/null 2>&1 &&
+     pgrep -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  start_dock_process
+}
+
+restart_locked() {
+  stop_running_dock
+  sleep "${LABWC_CRYSTAL_DOCK_RESTART_DELAY_SECONDS:-1}"
+  start_if_needed_locked
+}
+
 if ! command -v "$dock_binary" >/dev/null 2>&1; then
-  printf '%s missing crystal-dock binary\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$log_path"
+  log_message 'missing crystal-dock binary'
   exit 0
 fi
 
 case "${1:-}" in
   --stop)
-    dock_pid=$(read_pid_file 2>/dev/null || true)
-    if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
-      kill "$dock_pid" >/dev/null 2>&1 || true
-    else
-      pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
-    fi
-    clear_pid_file
+    with_lock stop_running_dock
     exit 0
     ;;
   --restart)
-    dock_pid=$(read_pid_file 2>/dev/null || true)
-    if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
-      kill "$dock_pid" >/dev/null 2>&1 || true
-    else
-      pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
-    fi
-    clear_pid_file
-    sleep "${LABWC_CRYSTAL_DOCK_RESTART_DELAY_SECONDS:-1}"
+    with_lock restart_locked
+    exit 0
     ;;
   '')
-    dock_pid=$(read_pid_file 2>/dev/null || true)
-    if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
-      exit 0
-    fi
-    clear_pid_file
-    if pgrep -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1; then
-      exit 0
-    fi
+    with_lock start_if_needed_locked
+    exit 0
     ;;
   *)
-    printf '%s unsupported labwc-dock argument: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >>"$log_path"
+    log_message "unsupported labwc-dock argument: $1"
     exit 1
     ;;
 esac
-
-export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-labwc:wlroots}"
-export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland}"
-export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-qt6ct}"
-export QT_STYLE_OVERRIDE="${QT_STYLE_OVERRIDE:-adwaita-dark}"
-
-set -f
-# The validated command string intentionally contains only simple argv tokens.
-# shellcheck disable=SC2086
-set -- $dock_command
-set +f
-printf '%s\n' "$$" >"$pid_path"
-exec "$@" >>"$log_path" 2>&1

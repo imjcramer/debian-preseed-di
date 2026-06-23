@@ -53,6 +53,11 @@ find_first_executable() {
   return 1
 }
 
+refresh_outputs_now() {
+  command -v labwc-output-refresh >/dev/null 2>&1 || return 0
+  labwc-output-refresh >/dev/null 2>&1 || true
+}
+
 waybar_running() {
   process_running_for_user waybar
 }
@@ -107,7 +112,8 @@ if desktop_enabled "${LABWC_ENABLE_SWAYBG:-true}" &&
   start_background swaybg -m fill -i "$wallpaper_path"
 fi
 
-start_background labwc-output-watch
+refresh_outputs_now
+start_background labwc-output-watch --skip-initial-refresh
 
 if desktop_enabled "${LABWC_ENABLE_KANSHI:-true}" && [ -r "$HOME/.config/kanshi/config" ]; then
   start_background kanshi

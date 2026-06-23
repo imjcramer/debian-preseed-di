@@ -1,11 +1,11 @@
 {
   "layer": "top",
   "position": "top",
-  "height": 62,
-  "spacing": 6,
-  "margin-top": 14,
-  "margin-left": 20,
-  "margin-right": 20,
+  "height": __INSTALLER_LABWC_WAYBAR_HEIGHT__,
+  "spacing": 4,
+  "margin-top": 8,
+  "margin-left": 12,
+  "margin-right": 12,
   "modules-left": ["custom/launcher", "custom/dgpu", "ext/workspaces", "custom/files", "custom/terminal", "wlr/taskbar"],
   "modules-center": ["clock"],
   "modules-right": ["custom/keyboard", "network", "pulseaudio", "backlight", "battery", "disk", "cpu", "memory", "tray", "custom/dnd", "custom/lock", "custom/power"],
@@ -18,7 +18,7 @@
   },
   "wlr/taskbar": {
     "format": "{icon}",
-    "icon-size": 24,
+    "icon-size": __INSTALLER_LABWC_WAYBAR_TASKBAR_ICON_SIZE__,
     "icon-theme": "Papirus-Dark",
     "tooltip-format": "{name}\n{title}",
     "on-click": "activate",
@@ -149,8 +149,8 @@
     }
   },
   "tray": {
-    "icon-size": 20,
-    "spacing": 4
+    "icon-size": __INSTALLER_LABWC_WAYBAR_TRAY_ICON_SIZE__,
+    "spacing": 3
   },
   "custom/dnd": {
     "format": "🔕",

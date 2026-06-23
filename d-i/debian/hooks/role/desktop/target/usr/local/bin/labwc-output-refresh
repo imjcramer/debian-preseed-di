@@ -2,14 +2,22 @@
 use strict;
 use warnings;
 
+use Fcntl qw(:flock);
+use File::Path qw(make_path);
+use Time::HiRes qw(usleep);
+
 my %defaults = load_defaults('/etc/default/labwc-desktop');
 apply_env_overrides(
     \%defaults,
     qw(
+      LABWC_CRYSTAL_DOCK_COMMAND
+      LABWC_ENABLE_CRYSTAL_DOCK
+      LABWC_ENABLE_WAYBAR
       LABWC_OUTPUT_EXTERNAL_PREFERRED_HEIGHT
       LABWC_OUTPUT_EXTERNAL_PREFERRED_REFRESH_HZ
       LABWC_OUTPUT_EXTERNAL_PREFERRED_WIDTH
       LABWC_OUTPUT_EXTERNAL_SCALE
+      LABWC_OUTPUT_FALLBACK_REFRESH_HZ
       LABWC_OUTPUT_INTERNAL_PREFIXES
       LABWC_OUTPUT_INTERNAL_SCALE
       LABWC_OUTPUT_POLICY
@@ -17,56 +25,73 @@ apply_env_overrides(
     )
 );
 
-if (($ARGV[0] // q{}) eq '--dpms-off') {
-    run_optional('wlopm', '--off', '*');
-    exit 0;
-}
+my $requested_mode = $ARGV[0] // q{};
+exit 64 if $requested_mode ne q{} && $requested_mode ne '--dpms-off';
 
-my $wlr_randr = find_command('wlr-randr');
-exit 0 if !defined $wlr_randr;
-
-run_optional('wlopm', '--on', '*');
-
-my $state = capture_command($wlr_randr);
-exit 0 if $state eq q{};
-
-my @lines = split /\n/, $state;
-my @outputs = connected_outputs(@lines);
-exit 0 if !@outputs;
-
-my (@internal_outputs, @external_outputs);
-for my $output_name (@outputs) {
-    if (is_internal_output($output_name)) {
-        push @internal_outputs, $output_name;
-    } else {
-        push @external_outputs, $output_name;
+my $restart_session_chrome = with_refresh_lock(
+    sub {
+        return refresh_outputs($requested_mode);
     }
+);
+
+restart_session_components() if $restart_session_chrome;
+exit 0;
+
+sub refresh_outputs {
+    my ($mode) = @_;
+
+    if ($mode eq '--dpms-off') {
+        run_optional('wlopm', '--off', '*');
+        return 0;
+    }
+
+    my $wlr_randr = find_command('wlr-randr');
+    return 0 if !defined $wlr_randr;
+
+    run_optional('wlopm', '--on', '*');
+
+    my $state_before = capture_command($wlr_randr);
+    return 0 if $state_before eq q{};
+
+    my @lines = split /\n/, $state_before;
+    my @outputs = connected_outputs(@lines);
+    return 0 if !@outputs;
+
+    my ($selected_output, $selected_mode, @outputs_to_disable) = selection_plan(\@lines, @outputs);
+    return 0 if !defined $selected_output;
+
+    enable_output($wlr_randr, $selected_output, $selected_mode) or return 0;
+    for my $output_name (@outputs_to_disable) {
+        disable_output($wlr_randr, $output_name);
+    }
+
+    usleep(250_000);
+    my $state_after = capture_command($wlr_randr);
+    return topology_changed($state_before, $state_after);
 }
 
-my $selected_output = $external_outputs[0];
-if (defined $selected_output) {
-    my $selected_mode = mode_for_output(\@lines, $selected_output);
-    enable_output($wlr_randr, $selected_output, $selected_mode) or exit 0;
+sub selection_plan {
+    my ($state_lines, @outputs) = @_;
+    my (@internal_outputs, @external_outputs);
 
-    if (($defaults{LABWC_OUTPUT_POLICY} // 'external-only') eq 'external-only') {
-        for my $output_name (@internal_outputs) {
-            disable_output($wlr_randr, $output_name);
-        }
-        for my $output_name (@external_outputs) {
-            next if $output_name eq $selected_output;
-            disable_output($wlr_randr, $output_name);
+    for my $output_name (@outputs) {
+        if (is_internal_output($output_name)) {
+            push @internal_outputs, $output_name;
+        } else {
+            push @external_outputs, $output_name;
         }
     }
-    exit 0;
-}
 
-$selected_output = $internal_outputs[0];
-exit 0 if !defined $selected_output;
+    my $selected_output = $external_outputs[0] // $internal_outputs[0];
+    return if !defined $selected_output;
 
-enable_output($wlr_randr, $selected_output, undef) or exit 0;
-for my $output_name (@internal_outputs) {
-    next if $output_name eq $selected_output;
-    disable_output($wlr_randr, $output_name);
+    my $selected_mode;
+    if (!is_internal_output($selected_output)) {
+        $selected_mode = mode_for_output($state_lines, $selected_output);
+    }
+
+    my @outputs_to_disable = grep { $_ ne $selected_output } @outputs;
+    return ($selected_output, $selected_mode, @outputs_to_disable);
 }
 
 sub load_defaults {
@@ -104,6 +129,34 @@ sub apply_env_overrides {
     return;
 }
 
+sub with_refresh_lock {
+    my ($callback) = @_;
+    my $state_dir = session_state_dir();
+    return $callback->() if !defined $state_dir;
+
+    my $lock_path = "${state_dir}/output-refresh.lock";
+    open my $lock_fh, '>>', $lock_path or return $callback->();
+    flock($lock_fh, LOCK_EX) or return $callback->();
+    my $result = $callback->();
+    close $lock_fh;
+    return $result;
+}
+
+sub session_state_dir {
+    my $base = $ENV{XDG_STATE_HOME} // q{};
+    if ($base eq q{}) {
+        my $home = $ENV{HOME} // q{};
+        $base = $home ne q{} ? "${home}/.local/state" : "/tmp/labwc-$<";
+    }
+
+    my $dir = "${base}/labwc";
+    eval {
+        make_path($dir, { mode => 0700 }) if !-d $dir;
+        1;
+    } or return undef;
+    return $dir;
+}
+
 sub find_command {
     my ($command_name) = @_;
     for my $dir (split /:/, ($ENV{PATH} // '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')) {
@@ -135,7 +188,7 @@ sub run_optional {
     my $command = find_command($command_name);
     return 0 if !defined $command;
     system {$command} $command, @args;
-    return 1;
+    return $? == 0 ? 1 : 0;
 }
 
 sub connected_outputs {
@@ -156,6 +209,11 @@ sub output_name_safe {
     return defined $output_name && $output_name =~ /\A[A-Za-z0-9._-]+\z/;
 }
 
+sub process_name_safe {
+    my ($process_name) = @_;
+    return defined $process_name && $process_name =~ /\A[A-Za-z0-9._+-]+\z/;
+}
+
 sub is_internal_output {
     my ($output_name) = @_;
     my @prefixes = split /[[:space:]]+/, ($defaults{LABWC_OUTPUT_INTERNAL_PREFIXES} // 'eDP LVDS DSI');
@@ -166,23 +224,10 @@ sub is_internal_output {
     return 0;
 }
 
-sub mode_for_output {
+sub output_modes {
     my ($state_lines, $output_name) = @_;
-    my $preferred_width  = $defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_WIDTH}  // q{};
-    my $preferred_height = $defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_HEIGHT} // q{};
-    my $preferred_hz     = $defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_REFRESH_HZ} // q{};
-    my $preferred_size   = q{};
-    my $configured_mode  = q{};
-    my $connector_preferred_mode = q{};
-    my $largest_mode = q{};
-    my $largest_area = 0;
+    my @modes;
     my $in_output = 0;
-
-    if ($preferred_width =~ /\A\d+\z/ && $preferred_height =~ /\A\d+\z/) {
-        $preferred_size = "${preferred_width}x${preferred_height}";
-    } else {
-        $preferred_hz = q{};
-    }
 
     for my $line (@{$state_lines}) {
         if ($line =~ /^\Q$output_name\E\b/) {
@@ -190,51 +235,104 @@ sub mode_for_output {
             next;
         }
         if ($line !~ /^[[:space:]]/ && $in_output) {
-            $in_output = 0;
-        }
-        next if !$in_output;
-        next if $line !~ /^\s+(\d+x\d+)\s+px,\s+([0-9.]+)\s+Hz\b(.*)$/;
-
-        my ($mode_size, $mode_hz, $mode_flags) = ($1, $2, $3 // q{});
-        my ($mode_width, $mode_height) = split /x/, $mode_size, 2;
-        next if !defined $mode_width || !defined $mode_height;
-        next if $mode_width !~ /\A\d+\z/ || $mode_height !~ /\A\d+\z/;
-
-        my $mode_value = sprintf '%s@%sHz', $mode_size, $mode_hz;
-        my $mode_area = $mode_width * $mode_height;
-        if ($mode_area > $largest_area) {
-            $largest_area = $mode_area;
-            $largest_mode = $mode_value;
-        }
-
-        if ($mode_flags =~ /preferred/ && $connector_preferred_mode eq q{}) {
-            $connector_preferred_mode = $mode_value;
-        }
-
-        next if $preferred_size eq q{} || $mode_size ne $preferred_size;
-        if ($preferred_hz eq q{}) {
-            $configured_mode = $mode_value;
             last;
         }
-        my $rounded_hz = int($mode_hz + 0.5);
-        next if $rounded_hz != $preferred_hz;
-        $configured_mode = $mode_value;
-        last;
+        next if !$in_output;
+        next if $line !~ /^\s+(\d+)x(\d+)\s+px,\s+([0-9.]+)\s+Hz\b(.*)$/;
+
+        my ($width, $height, $hz, $flags) = ($1, $2, $3, $4 // q{});
+        my $size = "${width}x${height}";
+        push @modes, {
+            area       => $width * $height,
+            flags      => $flags,
+            hz         => $hz + 0,
+            preferred  => ($flags =~ /preferred/) ? 1 : 0,
+            rounded_hz => int(($hz + 0) + 0.5),
+            size       => $size,
+            value      => sprintf('%s@%sHz', $size, $hz),
+        };
     }
 
-    return $configured_mode if $configured_mode ne q{};
-    return $connector_preferred_mode if $preferred_size eq q{} && $connector_preferred_mode ne q{};
-    return $largest_mode if $preferred_size eq q{} && $largest_mode ne q{};
+    return @modes;
+}
+
+sub mode_for_output {
+    my ($state_lines, $output_name) = @_;
+    my @modes = output_modes($state_lines, $output_name);
+    return undef if !@modes;
+
+    my $preferred_width  = optional_uint($defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_WIDTH});
+    my $preferred_height = optional_uint($defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_HEIGHT});
+    my $preferred_hz     = optional_uint($defaults{LABWC_OUTPUT_EXTERNAL_PREFERRED_REFRESH_HZ});
+    my $fallback_hz      = optional_uint($defaults{LABWC_OUTPUT_FALLBACK_REFRESH_HZ});
+
+    if (defined $preferred_width && defined $preferred_height) {
+        my $preferred_size = "${preferred_width}x${preferred_height}";
+        my @size_matches = grep { $_->{size} eq $preferred_size } @modes;
+        if (@size_matches) {
+            if (defined $preferred_hz) {
+                my ($exact_mode) = grep { $_->{rounded_hz} == $preferred_hz } @size_matches;
+                return $exact_mode->{value} if defined $exact_mode;
+            }
+
+            my ($preferred_mode) = grep { $_->{preferred} } @size_matches;
+            return $preferred_mode->{value} if defined $preferred_mode;
+
+            my $fallback_mode = best_mode(\@size_matches, $fallback_hz);
+            return $fallback_mode->{value} if defined $fallback_mode;
+        }
+    }
+
+    my ($connector_preferred_mode) = grep { $_->{preferred} } @modes;
+    return $connector_preferred_mode->{value} if defined $connector_preferred_mode;
+
+    my $largest_area = 0;
+    for my $mode (@modes) {
+        $largest_area = $mode->{area} if $mode->{area} > $largest_area;
+    }
+    my @largest_modes = grep { $_->{area} == $largest_area } @modes;
+    my $largest_mode = best_mode(\@largest_modes, $fallback_hz);
+    return $largest_mode->{value} if defined $largest_mode;
+
     return undef;
+}
+
+sub optional_uint {
+    my ($value) = @_;
+    return undef if !defined $value || $value eq q{} || $value !~ /\A\d+\z/;
+    return int($value);
+}
+
+sub best_mode {
+    my ($modes, $preferred_hz) = @_;
+    return undef if !@{$modes};
+
+    my @sorted = sort {
+        mode_sort_key($a, $preferred_hz) <=> mode_sort_key($b, $preferred_hz)
+          ||
+        $b->{hz} <=> $a->{hz}
+    } @{$modes};
+
+    return $sorted[0];
+}
+
+sub mode_sort_key {
+    my ($mode, $preferred_hz) = @_;
+    return 0 if !defined $preferred_hz;
+    return abs($mode->{rounded_hz} - $preferred_hz);
 }
 
 sub scale_for_output {
     my ($output_name) = @_;
+    my $scale_value;
 
     if (is_internal_output($output_name)) {
-        return $defaults{LABWC_OUTPUT_INTERNAL_SCALE} // $defaults{LABWC_OUTPUT_SCALE} // '1';
+        $scale_value = $defaults{LABWC_OUTPUT_INTERNAL_SCALE} // $defaults{LABWC_OUTPUT_SCALE} // '1';
+    } else {
+        $scale_value = $defaults{LABWC_OUTPUT_EXTERNAL_SCALE} // $defaults{LABWC_OUTPUT_SCALE} // '1';
     }
-    return $defaults{LABWC_OUTPUT_EXTERNAL_SCALE} // $defaults{LABWC_OUTPUT_SCALE} // '1';
+
+    return $scale_value =~ /\A\d+(?:\.\d+)?\z/ ? $scale_value : '1';
 }
 
 sub enable_output {
@@ -258,4 +356,111 @@ sub disable_output {
     return if !output_name_safe($output_name);
     system {$wlr_randr} $wlr_randr, '--output', $output_name, '--off';
     return;
+}
+
+sub topology_changed {
+    my ($state_before, $state_after) = @_;
+    return 0 if $state_before eq q{} || $state_after eq q{};
+    return normalized_state($state_before) ne normalized_state($state_after) ? 1 : 0;
+}
+
+sub normalized_state {
+    my ($state) = @_;
+    my @lines = map {
+        my $line = $_;
+        $line =~ s/\s+$//;
+        $line;
+    } split /\n/, $state;
+    return join "\n", @lines;
+}
+
+sub restart_session_components {
+    return if !session_is_wayland_active();
+    usleep(300_000);
+    restart_waybar();
+    restart_dock();
+    return;
+}
+
+sub session_is_wayland_active {
+    return 1 if defined $ENV{WAYLAND_DISPLAY} && $ENV{WAYLAND_DISPLAY} ne q{};
+    return 1 if defined $ENV{SWAYSOCK} && $ENV{SWAYSOCK} ne q{};
+    return (($ENV{XDG_SESSION_TYPE} // q{}) eq 'wayland') ? 1 : 0;
+}
+
+sub enabled_setting {
+    my ($value) = @_;
+    return 1 if !defined $value;
+    return $value =~ /\A(?:true|yes|1|on)\z/i ? 1 : 0;
+}
+
+sub process_running {
+    my ($process_name) = @_;
+    return 0 if !process_name_safe($process_name);
+
+    my $pgrep = find_command('pgrep');
+    return 0 if !defined $pgrep;
+
+    system {$pgrep} $pgrep, '-U', $<, '-x', $process_name;
+    return $? == 0 ? 1 : 0;
+}
+
+sub restart_waybar {
+    return if !enabled_setting($defaults{LABWC_ENABLE_WAYBAR});
+    return if !process_running('waybar');
+
+    my $waybar = find_command('waybar');
+    my $pkill  = find_command('pkill');
+    return if !defined $waybar || !defined $pkill;
+
+    system {$pkill} $pkill, '-u', $<, '-x', 'waybar';
+    usleep(250_000);
+
+    my @command = ($waybar);
+    my $home = $ENV{HOME} // q{};
+    if ($home ne q{}) {
+        my $config_path = "${home}/.config/waybar/config";
+        my $style_path  = "${home}/.config/waybar/style.css";
+        if (-r $config_path && -r $style_path) {
+            push @command, '-c', $config_path, '-s', $style_path;
+        }
+    }
+
+    start_detached(@command);
+    return;
+}
+
+sub restart_dock {
+    return if !enabled_setting($defaults{LABWC_ENABLE_CRYSTAL_DOCK});
+
+    my $labwc_dock = find_command('labwc-dock');
+    return if !defined $labwc_dock;
+
+    system {$labwc_dock} $labwc_dock, '--restart';
+    return;
+}
+
+sub dock_process_name {
+    my $dock_command = $defaults{LABWC_CRYSTAL_DOCK_COMMAND} // 'crystal-dock';
+    my ($dock_binary) = split /[[:space:]]+/, $dock_command, 2;
+    return undef if !defined $dock_binary || $dock_binary eq q{};
+    $dock_binary =~ s{.*/}{};
+    return process_name_safe($dock_binary) ? $dock_binary : undef;
+}
+
+sub start_detached {
+    my (@command) = @_;
+    return 0 if !@command;
+
+    my $pid = fork();
+    return 0 if !defined $pid;
+    if ($pid == 0) {
+        open STDIN,  '<', '/dev/null' or exit 1;
+        open STDOUT, '>', '/dev/null' or exit 1;
+        open STDERR, '>', '/dev/null' or exit 1;
+        exec { $command[0] } @command;
+        exit 1;
+    }
+
+    return 1;
 }
