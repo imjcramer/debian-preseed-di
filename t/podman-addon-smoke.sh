@@ -43,6 +43,7 @@ podbin_runtime_containerfile="$ROOT_DIR/d-i/debian/hooks/shared/target/data/conf
 podbin_runtime_entrypoint="$ROOT_DIR/d-i/debian/hooks/shared/target/data/config/podman/templates/podbin/images/runtime/entrypoint.sh.tmpl"
 podbin_runtime_sshd="$ROOT_DIR/d-i/debian/hooks/shared/target/data/config/podman/templates/podbin/images/runtime/sshd_config.tmpl"
 podbin_doc="$ROOT_DIR/d-i/debian/hooks/shared/target/data/docs/podbin.md"
+podbin_service_bridge_doc="$ROOT_DIR/d-i/debian/hooks/shared/target/data/docs/podbin-service-bridge.md"
 account_sudoers="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/sudoers.d/account.tmpl"
 desktop_podman_policy=$(grep '^PODMAN_' "$desktop_env")
 server_podman_policy=$(grep '^PODMAN_' "$server_env")
@@ -199,8 +200,9 @@ if grep -q '^PODBIN_KEY_DIR="__INSTALLER_PODBIN_KEY_DIR__"$' "$podbin_default" &
    grep -q ': "${PODBIN_RUNTIME_USER_NAME:=poduser}"' "$helper" &&
    grep -q ': "${PODBIN_DEFAULT_CONTAINER_SSH_USER:=$PODBIN_RUNTIME_USER_NAME}"' "$helper" &&
    grep -q 'PODBIN_TEMPLATE_DIR=$PODBIN_TEMPLATE_DIR' "$helper" &&
-   grep -q 'stage_target_helper_doc podbin.md podbin.md' "$helper" &&
+   grep -q 'stage_target_helper_docs podbin.md podbin-service-bridge.md' "$helper" &&
    [ -r "$podbin_doc" ] &&
+   [ -r "$podbin_service_bridge_doc" ] &&
    grep -q '/usr/local/sbin/podbin --ensure-keypair _' "$helper"; then
   pass "podbin defaults render the managed non-root image and host SSH policy through staged target assets"
 else

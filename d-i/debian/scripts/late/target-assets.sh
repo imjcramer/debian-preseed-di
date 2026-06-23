@@ -159,6 +159,15 @@ stage_target_helper_doc() {
   target_chown_helper_doc_path "$doc_target_path"
 }
 
+stage_target_helper_docs() {
+  [ "$#" -gt 0 ] || return 0
+
+  while [ "$#" -gt 0 ]; do
+    stage_target_helper_doc "$1" "$1"
+    shift
+  done
+}
+
 remove_target_asset_and_empty_parent() {
   target_path=$1
   target_host_path=$(target_asset_host_path "$target_path")

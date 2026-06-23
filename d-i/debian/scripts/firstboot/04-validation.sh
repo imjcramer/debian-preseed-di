@@ -142,6 +142,8 @@ validate_desktop_role() {
     /etc/skel/.config/labwc/rc.xml \
     /etc/skel/.config/labwc/menu.xml \
     /etc/skel/.config/systemd/user/labwc-session.target \
+    /etc/skel/.config/mpv/mpv.conf \
+    /etc/skel/.config/mpv/input.conf \
     /etc/systemd/user/labwc-calendar-sync.service \
     /etc/systemd/user/labwc-calendar-sync.timer \
     /etc/skel/.config/Thunar/uca.xml \
@@ -202,6 +204,7 @@ validate_desktop_role() {
     thunar \
     nnn \
     mousepad \
+    mpv \
     qimgv \
     zathura \
 	    xarchiver \

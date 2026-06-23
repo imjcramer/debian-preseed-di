@@ -12,8 +12,13 @@ box#body {
   box-shadow: 0 18px 56px rgba(0, 0, 0, 0.48);
   color: #f3ead7;
   margin: 40px;
-  padding: 26px;
-  font-size: 16px;
+  min-width: 720px;
+  padding: 36px 40px;
+  font-size: 20px;
+}
+
+label {
+  font-size: 18px;
 }
 
 entry, combobox, button {
@@ -21,8 +26,14 @@ entry, combobox, button {
   border: 1px solid rgba(245, 239, 221, 0.22);
   border-radius: 8px;
   color: #f3ead7;
-  padding: 10px 14px;
-  font-size: 15px;
+  min-height: 34px;
+  min-width: 420px;
+  padding: 16px 20px;
+  font-size: 20px;
+}
+
+button {
+  min-width: 240px;
 }
 
 button:hover, button:focus {

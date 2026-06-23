@@ -837,6 +837,8 @@ desktop_stage_target_assets() {
   desktop_stage_role_asset etc/skel/.config/kanshi/config /etc/skel/.config/kanshi/config 0644
   desktop_stage_role_asset etc/skel/.config/foot/foot.ini /etc/skel/.config/foot/foot.ini 0644
   desktop_stage_role_asset etc/skel/.config/kitty/kitty.conf /etc/skel/.config/kitty/kitty.conf 0644
+  desktop_stage_role_asset etc/skel/.config/mpv/mpv.conf /etc/skel/.config/mpv/mpv.conf 0644
+  desktop_stage_role_asset etc/skel/.config/mpv/input.conf /etc/skel/.config/mpv/input.conf 0644
   desktop_stage_role_asset etc/skel/.config/xdg-terminals.list /etc/skel/.config/xdg-terminals.list 0644
   desktop_stage_role_asset etc/skel/.config/xfce4/helpers.rc /etc/skel/.config/xfce4/helpers.rc 0644
   desktop_stage_role_asset usr/share/xfce4/helpers/foot.desktop /usr/share/xfce4/helpers/foot.desktop 0644
@@ -904,6 +906,7 @@ gid=$(id -g "$account_user")
     .config/kanshi \
     .config/foot \
     .config/kitty \
+    .config/mpv \
     .config/xfce4 \
     .config/btop \
     .config/fzf \

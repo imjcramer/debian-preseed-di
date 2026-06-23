@@ -1225,7 +1225,7 @@ configure_target_rootless_podman() {
 
   if [ "$PODMAN_PODBIN_ENABLE" = 1 ]; then
     podman_stage_podbin_assets
-    stage_target_helper_doc podbin.md podbin.md
+    stage_target_helper_docs podbin.md podbin-service-bridge.md
     run_in_target "generate podbin SSH keypair" /usr/local/sbin/podbin --ensure-keypair _
   fi
   podman_install_registry_pki
