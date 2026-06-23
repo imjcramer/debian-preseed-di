@@ -22,6 +22,13 @@ grub_id_fragment() {
   printf '%s\n' "$1" | sed 's/[^A-Za-z0-9_]/_/g'
 }
 
+emit_grub_linux_display_policy() {
+  local prefix=${1:-}
+
+  [[ -n "${grub_gfxpayload_linux:-}" ]] || return 0
+  printf "%sset gfxpayload='%s'\n" "$prefix" "$(grub_single_quote "$grub_gfxpayload_linux")"
+}
+
 list_bootable_kernel_images() {
   local img ver
 
@@ -152,7 +159,7 @@ menuentry 'No BTRFS snapshots available' {
     echo 'No BTRFS snapshots are available.'
 }
 
-menuentry 'Return to main menu' {
+menuentry 'Return to main menu' --id 'installer-snapshot-return' --class os {
     configfile $prefix/grub.cfg
 }
 EOF
@@ -315,7 +322,7 @@ main() {
 
           kernel_title_escaped=$(grub_single_quote "[${profile_label}] ${kernel_ver}")
           {
-            printf "    menuentry '%s' --id '%s' {\n" \
+            printf "    menuentry '%s' --id '%s' --class debian --class gnu-linux --class gnu --class os {\n" \
               "$kernel_title_escaped" \
               "${snapshot_entry_id}_$(grub_id_fragment "$profile_name")_$(grub_id_fragment "$kernel_ver")"
             printf '%s\n' '        if [ -s $prefix/grubenv ]; then'
@@ -329,6 +336,7 @@ main() {
             printf '%s\n' '        insmod part_gpt'
             printf '%s\n' '        insmod ext2'
             printf '        %s\n' "$boot_search"
+            emit_grub_linux_display_policy '        '
             printf '        linux   /vmlinuz-%s %s ro %s %s bootprofile=%s %s\n' \
               "$kernel_ver" \
               "$root_arg" \
@@ -343,7 +351,9 @@ main() {
         done <<<"$kernel_images"
 
         if [[ "$profile_has_entries" == true ]]; then
-          printf "submenu '%s' {\n" "$(grub_single_quote "$profile_label")"
+          printf "submenu '%s' --id '%s' --class debian --class gnu-linux --class gnu --class os {\n" \
+            "$(grub_single_quote "$profile_label")" \
+            "${snapshot_entry_id}_$(grub_id_fragment "$profile_name")"
           cat "$profile_body"
           printf "}\n"
           snapshot_has_entries=true
@@ -359,7 +369,9 @@ main() {
     } >"$snapshot_body"
 
     if [[ "$snapshot_has_entries" == true ]]; then
-      printf "submenu '%s' {\n" "$snapshot_title_escaped" >>"$tmp_output"
+      printf "submenu '%s' --id '%s' --class snapshots --class btrfs --class os {\n" \
+        "$snapshot_title_escaped" \
+        "${snapshot_entry_id}" >>"$tmp_output"
       cat "$snapshot_body" >>"$tmp_output"
       printf "}\n\n" >>"$tmp_output"
       rendered_snapshot=true
@@ -377,7 +389,7 @@ main() {
     write_fallback_menu "$tmp_output"
   else
     cat <<'EOF' >>"$tmp_output"
-menuentry 'Return to main menu' {
+menuentry 'Return to main menu' --id 'installer-snapshot-return' --class os {
     configfile $prefix/grub.cfg
 }
 EOF

@@ -362,31 +362,36 @@ load_target_btrfs_optional_package_state() {
 
   require_in_target "Btrfs optional package detection"
   TARGET_HAS_BTRFSMAINTENANCE_PACKAGE=0
-  TARGET_HAS_TIMESHIFT_PACKAGE=0
 
   target_btrfs_package_state=$(
     capture_in_target "detect target Btrfs optional packages" /bin/sh -c '
 set -eu
 
-check_package() {
-  package_name=$1
-  pkg_status=$(dpkg-query -W -f='${Status}' "$package_name" 2>/dev/null || true)
-  if [ "$pkg_status" = "install ok installed" ]; then
-    printf "1\n"
-  else
-    printf "0\n"
-  fi
+check_payload_paths() {
+  for payload_path in "$@"; do
+    [ -n "$payload_path" ] || continue
+    if [ -x "$payload_path" ] || [ -e "$payload_path" ]; then
+      printf "1\n"
+      return 0
+    fi
+  done
+
+  printf "0\n"
 }
 
-printf "TARGET_HAS_BTRFSMAINTENANCE_PACKAGE=%s\n" "$(check_package btrfsmaintenance)"
-printf "TARGET_HAS_TIMESHIFT_PACKAGE=%s\n" "$(check_package timeshift)"
+printf "TARGET_HAS_BTRFSMAINTENANCE_PACKAGE=%s\n" "$(
+  check_payload_paths \
+    /etc/default/btrfsmaintenance \
+    /usr/lib/systemd/system/btrfs-scrub.timer \
+    /usr/share/btrfsmaintenance/btrfs-scrub.sh
+)"
 ' sh
   )
 
   while IFS='=' read -r state_name state_value || [ -n "${state_name:-}" ]; do
     [ -n "${state_name:-}" ] || continue
     case "$state_name:$state_value" in
-      TARGET_HAS_BTRFSMAINTENANCE_PACKAGE:0|TARGET_HAS_BTRFSMAINTENANCE_PACKAGE:1|TARGET_HAS_TIMESHIFT_PACKAGE:0|TARGET_HAS_TIMESHIFT_PACKAGE:1)
+      TARGET_HAS_BTRFSMAINTENANCE_PACKAGE:0|TARGET_HAS_BTRFSMAINTENANCE_PACKAGE:1)
         eval "$state_name=$state_value"
         ;;
       *)
@@ -472,10 +477,6 @@ configure_target_timeshift() {
     return 0
   fi
   target_has_btrfs_filesystems || fatal "addon/timeshift requires a Btrfs-root target"
-  load_target_btrfs_optional_package_state
-  if [ "${TARGET_HAS_TIMESHIFT_PACKAGE}" != 1 ]; then
-    fatal "addon/timeshift selected, but the timeshift package is missing in target"
-  fi
 
   btrfs_render_shared_target_asset_with_placeholder_map \
     etc/timeshift/timeshift.json.tmpl \
@@ -653,7 +654,7 @@ grub_refresh_helper=${10}
 grub_refresh_service=${11}
 grub_refresh_path=${12}
 
-require_command timeshift
+require_executable /usr/bin/timeshift
 require_readable "$timeshift_config"
 require_executable "$snapshot_helper"
 require_readable "$daily_service"

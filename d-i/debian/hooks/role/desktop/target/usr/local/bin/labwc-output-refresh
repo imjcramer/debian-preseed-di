@@ -9,7 +9,9 @@ apply_env_overrides(
       LABWC_OUTPUT_EXTERNAL_PREFERRED_HEIGHT
       LABWC_OUTPUT_EXTERNAL_PREFERRED_REFRESH_HZ
       LABWC_OUTPUT_EXTERNAL_PREFERRED_WIDTH
+      LABWC_OUTPUT_EXTERNAL_SCALE
       LABWC_OUTPUT_INTERNAL_PREFIXES
+      LABWC_OUTPUT_INTERNAL_SCALE
       LABWC_OUTPUT_POLICY
       LABWC_OUTPUT_SCALE
     )
@@ -226,11 +228,20 @@ sub mode_for_output {
     return undef;
 }
 
+sub scale_for_output {
+    my ($output_name) = @_;
+
+    if (is_internal_output($output_name)) {
+        return $defaults{LABWC_OUTPUT_INTERNAL_SCALE} // $defaults{LABWC_OUTPUT_SCALE} // '1';
+    }
+    return $defaults{LABWC_OUTPUT_EXTERNAL_SCALE} // $defaults{LABWC_OUTPUT_SCALE} // '1';
+}
+
 sub enable_output {
     my ($wlr_randr, $output_name, $output_mode) = @_;
     return 0 if !output_name_safe($output_name);
 
-    my $output_scale = $defaults{LABWC_OUTPUT_SCALE} // '1';
+    my $output_scale = scale_for_output($output_name);
     my @base_args = ('--output', $output_name, '--on', '--scale', $output_scale, '--pos', '0,0');
 
     if (defined $output_mode && $output_mode ne q{}) {

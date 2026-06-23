@@ -3392,6 +3392,48 @@ installer_merge_auto_classes() {
   printf '%s\n' "$merged_tokens"
 }
 
+installer_raw_class_reference_matches() {
+  raw_tokens=$1
+  class_reference=$2
+
+  installer_class_token_parts "$class_reference" >/dev/null
+  wanted_group=${INSTALLER_CLASS_TOKEN_GROUP:-}
+  wanted_name=$INSTALLER_CLASS_TOKEN_NAME
+
+  case "$wanted_group" in
+    class-addon) wanted_group=addon ;;
+  esac
+
+  for raw_token in $(printf '%s\n' "$raw_tokens" | tr ';,' ' ' | sed '/^[[:space:]]*$/d'); do
+    [ -n "$raw_token" ] || continue
+    installer_class_token_parts "$raw_token" >/dev/null
+    token_group=${INSTALLER_CLASS_TOKEN_GROUP:-}
+    token_name=$INSTALLER_CLASS_TOKEN_NAME
+
+    case "$token_group" in
+      class-addon) token_group=addon ;;
+    esac
+
+    [ "$token_name" = "$wanted_name" ] || continue
+    [ -z "$token_group" ] && return 0
+    [ "$token_group" = "$wanted_group" ] && return 0
+  done
+
+  return 1
+}
+
+installer_append_implicit_class_tokens() {
+  raw_tokens=$1
+  merged_tokens=$raw_tokens
+
+  if installer_raw_class_reference_matches "$raw_tokens" role/desktop &&
+     ! installer_raw_class_reference_matches "$raw_tokens" addon/apps; then
+    merged_tokens="${merged_tokens:+$merged_tokens,}addon/apps"
+  fi
+
+  printf '%s\n' "$merged_tokens"
+}
+
 installer_classes_raw() {
   seed_base=${1:-}
   if [ -n "${INSTALLER_CLASSES_RAW_CACHE:-}" ]; then
@@ -3432,6 +3474,7 @@ installer_classes_raw() {
 $(installer_auto_class_tokens "$(installer_seed_base "$seed_base")")
 EOF
   normalized_raw=$(installer_merge_auto_classes "$normalized_raw" "$auto_tokens")
+  normalized_raw=$(installer_append_implicit_class_tokens "$normalized_raw")
   [ -n "$normalized_raw" ] || installer_fatal "kernel cmdline must include classes=<class>,<class>,... for class-select values; arch/cpu/gpu/disk are auto-detected"
   INSTALLER_CLASSES_RAW_CACHE=$normalized_raw
   install -d -m 0700 "$(dirname "$raw_cache_path")"

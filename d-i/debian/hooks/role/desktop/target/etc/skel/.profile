@@ -41,6 +41,15 @@ export PAGER="${PAGER:-less}"
 export LESS="${LESS:--FRSX}"
 export LESSHISTFILE="${LESSHISTFILE:--}"
 
+if command -v dircolors >/dev/null 2>&1; then
+  if [ -r "$HOME/.dircolors" ]; then
+    eval "$(dircolors -b "$HOME/.dircolors")"
+  else
+    eval "$(dircolors -b)"
+  fi
+  export LS_COLORS
+fi
+
 if [ -r "$XDG_CONFIG_HOME/starship.toml" ]; then
   export STARSHIP_CONFIG="$XDG_CONFIG_HOME/starship.toml"
 fi

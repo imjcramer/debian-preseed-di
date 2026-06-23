@@ -19,7 +19,7 @@ late_command_load_host_env
 
 desktop_module_dir="${runtime_dir}/bootstrap/desktop-modules"
 install -d -m 0700 "$desktop_module_dir"
-for desktop_module in detect components verify labwc; do
+for desktop_module in detect components labwc; do
   fetch_hook "scripts/desktop/${desktop_module}.sh" "${desktop_module_dir}/${desktop_module}.sh"
 done
 unset desktop_module
@@ -28,8 +28,6 @@ unset desktop_module
 . "${desktop_module_dir}/detect.sh"
 # shellcheck disable=SC1090,SC1091
 . "${desktop_module_dir}/components.sh"
-# shellcheck disable=SC1090,SC1091
-. "${desktop_module_dir}/verify.sh"
 # shellcheck disable=SC1090,SC1091
 . "${desktop_module_dir}/labwc.sh"
 

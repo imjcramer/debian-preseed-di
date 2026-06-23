@@ -490,7 +490,7 @@ write_static_network_answers() {
 write_include_list() {
   include_file=$1
   install -d -m 0700 "$(dirname "$include_file")"
-  installer_selected_class_paths | sed '/^[[:space:]]*$/d' >"$include_file"
+  installer_selected_class_paths | sed '/^[[:space:]]*$/d' | awk '!seen[$0]++' >"$include_file"
   chmod 0600 "$include_file"
 }
 

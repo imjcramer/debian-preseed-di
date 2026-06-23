@@ -1,12 +1,12 @@
 {
   "layer": "top",
   "position": "top",
-  "height": 58,
+  "height": 62,
   "spacing": 6,
   "margin-top": 14,
   "margin-left": 20,
   "margin-right": 20,
-  "modules-left": ["custom/launcher"__INSTALLER_LABWC_WAYBAR_DGPU_MODULES_LEFT__, "ext/workspaces", "custom/files", "custom/terminal", "wlr/taskbar"],
+  "modules-left": ["custom/launcher", "custom/dgpu", "ext/workspaces", "custom/files", "custom/terminal", "wlr/taskbar"],
   "modules-center": ["clock"],
   "modules-right": ["custom/keyboard", "network", "pulseaudio", "backlight", "battery", "disk", "cpu", "memory", "tray", "custom/dnd", "custom/lock", "custom/power"],
   "ext/workspaces": {
@@ -18,7 +18,7 @@
   },
   "wlr/taskbar": {
     "format": "{icon}",
-    "icon-size": 22,
+    "icon-size": 24,
     "icon-theme": "Papirus-Dark",
     "tooltip-format": "{name}\n{title}",
     "on-click": "activate",
@@ -34,7 +34,12 @@
     "tooltip": false,
     "on-click": "labwc-run"
   },
-__INSTALLER_LABWC_WAYBAR_DGPU_MODULE_DEFINITION__
+  "custom/dgpu": {
+    "format": "dGPU",
+    "tooltip": true,
+    "tooltip-format": "Launch the selected app with switcheroo-control or PRIME offload",
+    "on-click": "labwc-dgpu-launcher"
+  },
   "custom/files": {
     "format": "Files",
     "tooltip": false,
@@ -144,7 +149,7 @@ __INSTALLER_LABWC_WAYBAR_DGPU_MODULE_DEFINITION__
     }
   },
   "tray": {
-    "icon-size": 18,
+    "icon-size": 20,
     "spacing": 4
   },
   "custom/dnd": {

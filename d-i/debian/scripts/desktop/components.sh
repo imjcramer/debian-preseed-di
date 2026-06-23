@@ -324,6 +324,155 @@ desktop_install_primary_account_calendar_stack() {
   desktop_log "rendered_calendar_stack user=${ACCOUNT_USERNAME} vdirsyncer=${vdirsyncer_config} khal=${khal_config} todoman=${todoman_config}"
 }
 
+desktop_primary_account_gpg_user_id() {
+  if [ -n "${SYSTEM_HOSTNAME:-}" ]; then
+    printf '%s (%s@%s)\n' "$ACCOUNT_FULLNAME" "$ACCOUNT_USERNAME" "$SYSTEM_HOSTNAME"
+    return 0
+  fi
+
+  printf '%s (%s)\n' "$ACCOUNT_FULLNAME" "$ACCOUNT_USERNAME"
+}
+
+desktop_bootstrap_primary_account_gpg_key() {
+  : "${ACCOUNT_USERNAME:?ACCOUNT_USERNAME must be set}"
+  : "${ACCOUNT_HOME:?ACCOUNT_HOME must be set}"
+  : "${ACCOUNT_FULLNAME:?ACCOUNT_FULLNAME must be set}"
+
+  case "${ACCOUNT_PASSWORD_IS_PLAIN:-false}" in
+    true) ;;
+    *)
+      installer_fatal "desktop GPG bootstrap requires ACCOUNT_PASSWORD sourced from the primary_password kernel cmdline"
+      ;;
+  esac
+  [ -n "${ACCOUNT_PASSWORD:-}" ] || installer_fatal "desktop GPG bootstrap requires a non-empty ACCOUNT_PASSWORD"
+
+  desktop_require_absolute_account_home
+
+  gpg_user_id=$(desktop_primary_account_gpg_user_id)
+  gpg_passphrase_file="${TMP_ENV_DIR}/desktop-gpg-passphrase"
+  gpg_passphrase_target=/tmp/desktop-gpg-passphrase.$$
+  umask 077
+  printf '%s\n' "$ACCOUNT_PASSWORD" >"$gpg_passphrase_file"
+  install -d -m 1777 /target/tmp
+  install -m 0600 "$gpg_passphrase_file" "/target${gpg_passphrase_target}"
+
+  # shellcheck disable=SC2016
+  if ! attempt_in_target "bootstrap primary account GPG key for KWallet" /bin/sh -c '
+set -eu
+account_user=$1
+account_home=$2
+gpg_user_id=$3
+passphrase_file=$4
+gnupg_dir="${account_home}/.gnupg"
+gpg_agent_conf="${gnupg_dir}/gpg-agent.conf"
+
+fatal() {
+  printf "fatal: %s\n" "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fatal "required command is missing: $1"
+}
+
+gpg_key_material_present() {
+  private_key_dir="${gnupg_dir}/private-keys-v1.d"
+
+  [ -d "$private_key_dir" ] || return 1
+  find "$private_key_dir" -mindepth 1 -maxdepth 1 -type f | grep -q . || return 1
+
+  [ -e "${gnupg_dir}/pubring.kbx" ] ||
+    [ -e "${gnupg_dir}/pubring.db" ] ||
+    [ -e "${gnupg_dir}/pubring.gpg" ]
+}
+
+case "$account_home" in
+  /*) ;;
+  *) fatal "account home must be absolute: $account_home" ;;
+esac
+case "$account_home" in
+  /|*..*|*//*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*)
+    fatal "account home contains unsupported path syntax: $account_home"
+    ;;
+esac
+
+require_cmd gpg
+require_cmd gpgconf
+require_cmd pinentry-qt
+require_cmd runuser
+
+[ -r "$passphrase_file" ] || fatal "GPG bootstrap passphrase file is missing: $passphrase_file"
+trap '\''rm -f "$passphrase_file"'\'' EXIT HUP INT TERM
+
+uid=$(id -u "$account_user")
+gid=$(id -g "$account_user")
+install -d -m 0700 "$gnupg_dir"
+cat >"$gpg_agent_conf" <<'"'"'EOF'"'"'
+pinentry-program /usr/bin/pinentry-qt
+default-cache-ttl 900
+max-cache-ttl 7200
+no-allow-external-cache
+EOF
+chmod 0600 "$gpg_agent_conf"
+chown -R "$uid:$gid" "$gnupg_dir"
+
+IFS= read -r account_password <"$passphrase_file" || fatal "failed to read the primary account password for GPG bootstrap"
+[ -n "$account_password" ] || fatal "primary account password for GPG bootstrap is empty"
+
+if gpg_key_material_present; then
+  runuser -u "$account_user" -- env \
+    HOME="$account_home" \
+    USER="$account_user" \
+    LOGNAME="$account_user" \
+    GNUPGHOME="$gnupg_dir" \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+  printf "desktop_gpg_bootstrap user=%s status=present gnupg=%s\n" "$account_user" "$gnupg_dir"
+  exit 0
+fi
+
+if command -v timeout >/dev/null 2>&1; then
+  printf "%s\n" "$account_password" | timeout 120 runuser -u "$account_user" -- env \
+    HOME="$account_home" \
+    USER="$account_user" \
+    LOGNAME="$account_user" \
+    GNUPGHOME="$gnupg_dir" \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+      --quick-generate-key "$gpg_user_id" default default never || \
+    fatal "GPG bootstrap key generation failed or timed out"
+else
+  printf "%s\n" "$account_password" | runuser -u "$account_user" -- env \
+    HOME="$account_home" \
+    USER="$account_user" \
+    LOGNAME="$account_user" \
+    GNUPGHOME="$gnupg_dir" \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+      --quick-generate-key "$gpg_user_id" default default never || \
+    fatal "GPG bootstrap key generation failed"
+fi
+
+gpg_key_material_present || fatal "GPG bootstrap did not create local key material"
+
+chown -R "$uid:$gid" "$gnupg_dir"
+runuser -u "$account_user" -- env \
+  HOME="$account_home" \
+  USER="$account_user" \
+  LOGNAME="$account_user" \
+  GNUPGHOME="$gnupg_dir" \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+printf "desktop_gpg_bootstrap user=%s status=generated gnupg=%s\n" "$account_user" "$gnupg_dir"
+' sh "$ACCOUNT_USERNAME" "$ACCOUNT_HOME" "$gpg_user_id" "$gpg_passphrase_target"; then
+    rm -f "$gpg_passphrase_file" "/target${gpg_passphrase_target}"
+    installer_fatal "failed to bootstrap primary account GPG key for KWallet"
+  fi
+
+  rm -f "$gpg_passphrase_file" "/target${gpg_passphrase_target}"
+  desktop_log "bootstrapped_primary_account_gpg_key user=${ACCOUNT_USERNAME}"
+}
+
 desktop_stage_user_unit_dropin() {
   unit=$1
   dropin_name=$2
@@ -506,7 +655,10 @@ desktop_render_labwc_rc_xml() {
     LABWC_WORKSPACE_COUNT "$workspace_count" \
     LABWC_ICON_THEME "$(desktop_xml_attribute_escape "${LABWC_ICON_THEME:-Papirus-Dark}")" \
     LABWC_FILE_MANAGER_COMMAND "$(desktop_xml_attribute_escape "${LABWC_FILE_MANAGER_COMMAND:-thunar}")" \
-    LABWC_AUDIO_CONTROL_COMMAND "$(desktop_xml_attribute_escape "${LABWC_AUDIO_CONTROL_COMMAND:-pavucontrol}")"
+    LABWC_AUDIO_CONTROL_COMMAND "$(desktop_xml_attribute_escape "${LABWC_AUDIO_CONTROL_COMMAND:-pavucontrol}")" \
+    LABWC_FONT_WINDOW_SIZE 11 \
+    LABWC_FONT_MENU_SIZE 12 \
+    LABWC_FONT_OSD_SIZE 12
   desktop_replace_block_placeholder_in_target \
     "$rc_path" \
     "__INSTALLER_LABWC_WORKSPACE_NAME_LINES__" \
@@ -522,27 +674,7 @@ desktop_nvidia_dgpu_enabled() {
   installer_selected_class_reference_is_selected addon/nvidia 2>/dev/null || return 1
   target_nvidia_modprobe="/target${FILE_MODPROBE_NVIDIA:-/etc/modprobe.d/nvidia.conf}"
   [ -r "$target_nvidia_modprobe" ] || return 1
-  grep -q '^options nvidia_drm modeset=1$' "$target_nvidia_modprobe"
-}
-
-desktop_waybar_dgpu_modules_left_json() {
-  if desktop_nvidia_dgpu_enabled; then
-    printf ', "custom/dgpu"'
-  fi
-}
-
-desktop_waybar_dgpu_module_definition_block() {
-  if ! desktop_nvidia_dgpu_enabled; then
-    return 0
-  fi
-
-  cat <<'EOF'
-  "custom/dgpu": {
-    "format": "GPU",
-    "tooltip": false,
-    "on-click": "labwc-dgpu-launcher"
-  },
-EOF
+  grep -Eq '^options[[:space:]]+nvidia_drm([[:space:]].*)?modeset=1([[:space:]]|$)' "$target_nvidia_modprobe"
 }
 
 desktop_render_waybar_config() {
@@ -552,16 +684,15 @@ desktop_render_waybar_config() {
     "etc/skel/.config/waybar/config.tmpl" \
     "$waybar_path" \
     0644 \
-    LABWC_WAYBAR_DGPU_MODULES_LEFT "$(desktop_waybar_dgpu_modules_left_json)" \
+    LABWC_WAYBAR_NAME main \
+    LABWC_WAYBAR_HEIGHT 58 \
+    LABWC_WAYBAR_TASKBAR_ICON_SIZE 22 \
+    LABWC_WAYBAR_TRAY_ICON_SIZE 18 \
     LABWC_FILE_MANAGER_COMMAND "$(desktop_double_quote_escape "${LABWC_FILE_MANAGER_COMMAND:-thunar}")" \
     LABWC_CALENDAR_COMMAND "$(desktop_double_quote_escape "${LABWC_CALENDAR_COMMAND:-labwc-calendar}")" \
     LABWC_AUDIO_CONTROL_COMMAND "$(desktop_double_quote_escape "${LABWC_AUDIO_CONTROL_COMMAND:-pavucontrol}")" \
     LABWC_BRIGHTNESS_CONTROL_COMMAND "$(desktop_double_quote_escape "${LABWC_BRIGHTNESS_CONTROL_COMMAND:-labwc-brightness-control}")" \
     LABWC_POWER_SETTINGS_COMMAND "$(desktop_double_quote_escape "${LABWC_POWER_SETTINGS_COMMAND:-labwc-power-settings}")"
-  desktop_replace_block_placeholder_in_target \
-    "$waybar_path" \
-    "__INSTALLER_LABWC_WAYBAR_DGPU_MODULE_DEFINITION__" \
-    "$(desktop_waybar_dgpu_module_definition_block)"
   desktop_log "rendered_waybar_config native_workspaces=true"
 }
 
@@ -610,6 +741,7 @@ desktop_configure_greeter_access() {
 
   # The greeter runs before any real user session exists, so grant the
   # compositor access paths it needs up front.
+  # shellcheck disable=SC2016
   run_in_target "configure Labwc greeter seat and DRM access" /bin/sh -c '
 set -eu
 greeter_user=$1
@@ -814,6 +946,7 @@ account_shell=$(getent passwd "$account_user" | cut -d: -f7)
 printf "desktop_account_config user=%s home=%s copied_dirs=%s copied_files=%s shell=%s\n" "$account_user" "$account_home" "$copied_dirs" "$copied_files" "$account_shell"
 ' sh "$ACCOUNT_USERNAME" "$ACCOUNT_HOME"
   desktop_install_primary_account_calendar_stack
+  desktop_bootstrap_primary_account_gpg_key
   desktop_log "installed primary account desktop config user=${ACCOUNT_USERNAME}"
 }
 

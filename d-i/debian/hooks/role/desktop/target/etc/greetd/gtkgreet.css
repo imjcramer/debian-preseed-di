@@ -12,7 +12,8 @@ box#body {
   box-shadow: 0 22px 80px rgba(0, 0, 0, 0.55);
   color: #f3ead7;
   margin: 56px;
-  padding: 28px;
+  padding: 34px;
+  font-size: 19px;
 }
 
 entry, combobox, button {
@@ -20,7 +21,8 @@ entry, combobox, button {
   border: 1px solid rgba(245, 239, 221, 0.22);
   border-radius: 10px;
   color: #f3ead7;
-  padding: 10px 14px;
+  padding: 14px 18px;
+  font-size: 18px;
 }
 
 button:hover, button:focus {

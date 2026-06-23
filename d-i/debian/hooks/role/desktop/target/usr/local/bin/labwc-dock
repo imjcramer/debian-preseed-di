@@ -16,6 +16,7 @@ desktop_enabled() {
 state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/labwc"
 install -d -m 0700 "$state_dir"
 log_path="${state_dir}/crystal-dock.log"
+pid_path="${state_dir}/crystal-dock.pid"
 
 desktop_enabled "${LABWC_ENABLE_CRYSTAL_DOCK:-true}" || exit 0
 
@@ -31,6 +32,26 @@ dock_binary=${dock_command%% *}
 dock_process=${dock_binary##*/}
 dock_user_id=$(id -u)
 
+clear_pid_file() {
+  rm -f "$pid_path"
+}
+
+dock_pid_is_running() {
+  dock_pid=$1
+  [ -n "$dock_pid" ] || return 1
+  kill -0 "$dock_pid" >/dev/null 2>&1 || return 1
+  command -v ps >/dev/null 2>&1 || return 0
+  running_comm=$(ps -p "$dock_pid" -o comm= 2>/dev/null | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' || true)
+  [ "$running_comm" = "$dock_process" ]
+}
+
+read_pid_file() {
+  [ -r "$pid_path" ] || return 1
+  IFS= read -r dock_pid <"$pid_path" || return 1
+  [ -n "$dock_pid" ] || return 1
+  printf '%s\n' "$dock_pid"
+}
+
 if ! command -v "$dock_binary" >/dev/null 2>&1; then
   printf '%s missing crystal-dock binary\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"$log_path"
   exit 0
@@ -38,14 +59,31 @@ fi
 
 case "${1:-}" in
   --stop)
-    pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+    dock_pid=$(read_pid_file 2>/dev/null || true)
+    if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
+      kill "$dock_pid" >/dev/null 2>&1 || true
+    else
+      pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+    fi
+    clear_pid_file
     exit 0
     ;;
   --restart)
-    pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+    dock_pid=$(read_pid_file 2>/dev/null || true)
+    if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
+      kill "$dock_pid" >/dev/null 2>&1 || true
+    else
+      pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+    fi
+    clear_pid_file
     sleep "${LABWC_CRYSTAL_DOCK_RESTART_DELAY_SECONDS:-1}"
     ;;
   '')
+    dock_pid=$(read_pid_file 2>/dev/null || true)
+    if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
+      exit 0
+    fi
+    clear_pid_file
     if pgrep -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1; then
       exit 0
     fi
@@ -63,6 +101,8 @@ export QT_STYLE_OVERRIDE="${QT_STYLE_OVERRIDE:-adwaita-dark}"
 
 set -f
 # The validated command string intentionally contains only simple argv tokens.
+# shellcheck disable=SC2086
 set -- $dock_command
 set +f
+printf '%s\n' "$$" >"$pid_path"
 exec "$@" >>"$log_path" 2>&1

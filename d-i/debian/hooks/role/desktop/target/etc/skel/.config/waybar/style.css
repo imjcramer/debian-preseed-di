@@ -16,7 +16,7 @@
   border: none;
   border-radius: 0;
   font-family: "Noto Sans", "Noto Color Emoji", "Symbola", "Font Awesome 6 Free", "Material Design Icons";
-  font-size: 17px;
+  font-size: 18px;
   min-height: 0;
   font-feature-settings: "tnum";
 }
@@ -55,7 +55,7 @@ window#waybar {
 #custom-lock,
 #custom-power {
   margin: 9px 5px;
-  padding: 0 18px;
+  padding: 0 20px;
   border-radius: 999px;
   background: @panel_alt;
   border: 1px solid @border;
@@ -63,8 +63,8 @@ window#waybar {
 }
 
 #workspaces button {
-  min-width: 32px;
-  padding: 0 16px;
+  min-width: 36px;
+  padding: 0 18px;
   font-weight: 700;
 }
 
@@ -102,12 +102,12 @@ window#waybar {
 }
 
 #custom-dgpu {
-  min-width: 46px;
-  padding-left: 28px;
+  min-width: 50px;
+  padding-left: 30px;
   background-image: url("icons/nvidia.svg");
   background-repeat: no-repeat;
-  background-position: 10px center;
-  background-size: 10px 10px;
+  background-position: 11px center;
+  background-size: 11px 11px;
   color: #76b900;
   font-weight: 700;
 }
@@ -141,14 +141,14 @@ window#waybar {
 #disk,
 #cpu,
 #memory {
-  min-width: 60px;
+  min-width: 68px;
 }
 
 #custom-keyboard,
 #custom-dnd,
 #custom-lock,
 #custom-power {
-  min-width: 28px;
+  min-width: 34px;
 }
 
 #custom-keyboard {
@@ -161,6 +161,8 @@ window#waybar {
   border-color: rgba(248, 113, 113, 0.66);
   color: @red;
   font-weight: 700;
+  padding-left: 12px;
+  padding-right: 12px;
 }
 
 #custom-power:hover {

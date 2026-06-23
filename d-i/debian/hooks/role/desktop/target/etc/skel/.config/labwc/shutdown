@@ -1,9 +1,13 @@
 #!/bin/sh
 set -eu
 
-for process_name in waybar kanshi mako swayidle crystal-dock; do
+for process_name in waybar kanshi mako swayidle; do
   pkill -x "$process_name" >/dev/null 2>&1 || true
 done
+
+if command -v labwc-dock >/dev/null 2>&1; then
+  labwc-dock --stop >/dev/null 2>&1 || true
+fi
 
 unmount_gvfs_fuse() {
   [ -n "${XDG_RUNTIME_DIR:-}" ] || return 0
@@ -30,10 +34,6 @@ unmount_gvfs_fuse
 
 if command -v wl-copy >/dev/null 2>&1; then
   wl-copy --clear >/dev/null 2>&1 || true
-fi
-
-if command -v pkill >/dev/null 2>&1; then
-  pkill -x polkit-kde-authentication-agent-1 >/dev/null 2>&1 || true
 fi
 
 if command -v systemctl >/dev/null 2>&1; then

@@ -8,6 +8,12 @@ example, `testing.cfg` can be selected on the installer kernel command line as
 `classes=...,nvidia` and an NVIDIA PCI display adapter is detected. NVIDIA is
 intentionally not auto-selected from PCI detection.
 
+`apps.cfg` stages the Microsoft Visual Studio Code, Microsoft Edge, and
+Mullvad Browser archives plus the matching `pkgsel/include` packages when
+selected as `classes=...,apps`. Desktop installs add this class automatically
+so the desktop role keeps its core package baseline separate from external
+application archives.
+
 `ssh.cfg` installs the target OpenSSH server package and enables the
 shared late-command SSH configuration/key staging path when selected as
 `classes=...,ssh`.

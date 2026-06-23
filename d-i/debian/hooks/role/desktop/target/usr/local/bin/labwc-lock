@@ -8,4 +8,15 @@ fi
 
 command -v swaylock >/dev/null 2>&1 || exit 1
 
-exec swaylock -f
+config_path=${XDG_CONFIG_HOME:-${HOME}/.config}/swaylock/config
+lock_background_path=${LABWC_LOCK_BACKGROUND_PATH:-/usr/share/backgrounds/labwc/wallpapers/lock-labwall2-1920x1080.png}
+
+if [ -r "$config_path" ]; then
+  exec swaylock -f -c "$config_path" "$@"
+fi
+
+if [ -r "$lock_background_path" ]; then
+  exec swaylock -f --image "$lock_background_path" --scaling fill "$@"
+fi
+
+exec swaylock -f "$@"

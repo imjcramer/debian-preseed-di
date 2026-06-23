@@ -13,7 +13,7 @@
 
 window {
   margin: 0;
-  padding: 20px;
+  padding: 22px;
   border: 1px solid @border_strong;
   border-radius: 28px;
   background:
@@ -21,7 +21,7 @@ window {
     rgba(8, 17, 31, 0.98);
   color: @text;
   font-family: "Noto Sans", "Noto Color Emoji", "Font Awesome 6 Free";
-  font-size: 15px;
+  font-size: 17px;
   box-shadow:
     0 24px 80px rgba(0, 0, 0, 0.56),
     0 0 0 10px rgba(12, 16, 23, 0.18);
@@ -36,8 +36,8 @@ window {
 }
 
 #input {
-  margin: 0 0 16px 0;
-  padding: 15px 18px;
+  margin: 0 0 18px 0;
+  padding: 16px 20px;
   border: 1px solid @border;
   border-radius: 18px;
   background:
@@ -53,7 +53,7 @@ window {
 
 #entry {
   margin: 4px 0;
-  padding: 13px 15px;
+  padding: 15px 17px;
   border: 1px solid transparent;
   border-radius: 17px;
   color: @text;
@@ -72,8 +72,8 @@ window {
 }
 
 #img {
-  margin-right: 14px;
-  border-radius: 12px;
+  margin-right: 16px;
+  border-radius: 13px;
 }
 
 #text {

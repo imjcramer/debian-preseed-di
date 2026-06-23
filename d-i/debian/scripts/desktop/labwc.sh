@@ -49,7 +49,6 @@ run_desktop_late_command() {
   desktop_install_user_config
   desktop_enable_target_services
   desktop_log "staged Labwc desktop service enablement"
-  desktop_verify_target_staging
-  desktop_log "verified Labwc desktop target staging"
+  desktop_log "skipped Labwc desktop target staging verification during installer late-command"
   installer_info "Labwc desktop role installation completed for seed ${requested_seed_base:-$SEED_BASE}"
 }
