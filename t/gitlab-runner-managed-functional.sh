@@ -5,7 +5,7 @@ IFS=$'\n\t'
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/gitlab-runner-managed"
 
-TEST_COUNT=10
+TEST_COUNT=11
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -121,7 +121,22 @@ GITLAB_RUNNER_TASK_EXTRA_VOLUMES=""
 EOF
   cat >"$ENV_DIR/gitlab-runner-aptly.env" <<EOF
 GITLAB_RUNNER_APTLY_USERNAME="glab-aptly"
+GITLAB_RUNNER_APTLY_OWNER_USERNAME="aptly"
+GITLAB_RUNNER_APTLY_GITLAB_URL="https://gitlab.com"
 GITLAB_RUNNER_APTLY_TOKEN=""
+GITLAB_RUNNER_APTLY_NAME="aptly"
+GITLAB_RUNNER_APTLY_TAGS="aptly"
+GITLAB_RUNNER_APTLY_METRICS_ADDRESS="127.0.0.1:9271"
+GITLAB_RUNNER_APTLY_IMAGE="localhost/gitlab-runner-aptly:trixie"
+GITLAB_RUNNER_APTLY_IMAGE_BUILD_MODE="containerfile"
+GITLAB_RUNNER_APTLY_IMAGE_CONTEXT="$TMP_ROOT/pool/aptly"
+GITLAB_RUNNER_APTLY_IMAGE_CONTAINERFILE="$TMP_ROOT/pool/aptly/Containerfile"
+GITLAB_RUNNER_APTLY_BUILDS_DIR="$TMP_ROOT/pool/build/aptly"
+GITLAB_RUNNER_APTLY_GITLAB_CACHE_DIR="$TMP_ROOT/pool/cache/aptly/gitlab"
+GITLAB_RUNNER_APTLY_CACHE_ROOT="$TMP_ROOT/pool/cache/aptly/tools"
+GITLAB_RUNNER_APTLY_ALLOWED_IMAGES="debian:*"
+GITLAB_RUNNER_APTLY_ALLOWED_SERVICES="postgres:*"
+GITLAB_RUNNER_APTLY_EXTRA_VOLUMES=""
 EOF
 }
 
@@ -140,15 +155,25 @@ CONFIG_PATH="$STATE_BASE/glab-user/config.toml"
 SYSTEMCTL_LOG="$TMP_ROOT/systemctl.log"
 SYSTEMCTL_STATE="$TMP_ROOT/systemctl.state"
 SYSTEMCTL_EVENTS="$TMP_ROOT/systemctl.events"
+PODMAN_LOG="$TMP_ROOT/podman.log"
 PATCHED_HELPER="$TMP_ROOT/gitlab-runner-managed"
 MOCK_BIN="$TMP_ROOT/bin"
 CURRENT_UID=$(id -u)
 CURRENT_GID=$(id -g)
 
-mkdir -p "$ENV_DIR" "$MOCK_BIN" "$RUNTIME_BASE/$CURRENT_UID" "$STATE_BASE/glab-user"
+mkdir -p "$ENV_DIR" "$MOCK_BIN" "$RUNTIME_BASE/$CURRENT_UID" "$STATE_BASE/glab-user" "$TMP_ROOT/pool/aptly"
 : >"$STATE_BASE/glab-user/.runner_system_id"
 write_shared_env
 write_runner_envs ""
+cat >"$TMP_ROOT/pool/aptly/Containerfile" <<'EOF'
+FROM docker.io/library/debian:trixie-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends aptly python3 \
+    && rm -rf /var/lib/apt/lists/*
+EOF
+mkdir -p "$TMP_ROOT/pool/aptly/.aptly"
+chmod 000 "$TMP_ROOT/pool/aptly/.aptly"
 
 cat >"$MOCK_BIN/getent" <<EOF
 #!/usr/bin/env bash
@@ -264,6 +289,54 @@ case "${1:-}" in
     printf 'true|netavark\n'
     exit 0
     ;;
+  image)
+    if [[ "${2:-}" == "exists" ]]; then
+      [[ "${TEST_PODMAN_IMAGE_EXISTS:-false}" == "true" ]] && exit 0
+      exit 1
+    fi
+    ;;
+  build)
+    printf '%s\n' "$*" >>"$TEST_PODMAN_LOG"
+    context_path="${*: -1}"
+    containerfile_path=
+    prev=
+    for arg in "$@"; do
+      if [[ "$prev" == "-f" ]]; then
+        containerfile_path="$arg"
+        break
+      fi
+      prev="$arg"
+    done
+    [[ -n "$containerfile_path" ]] || {
+      printf 'missing containerfile build arg\n' >&2
+      exit 1
+    }
+    [[ "$context_path" != "$TEST_FORBIDDEN_CONTEXT" ]] || {
+      printf 'forbidden build context reused: %s\n' "$context_path" >&2
+      exit 1
+    }
+    [[ "$containerfile_path" != "$TEST_FORBIDDEN_CONTAINERFILE" ]] || {
+      printf 'forbidden containerfile path reused: %s\n' "$containerfile_path" >&2
+      exit 1
+    }
+    [[ -d "$context_path" ]] || {
+      printf 'synthetic build context missing: %s\n' "$context_path" >&2
+      exit 1
+    }
+    [[ -r "$containerfile_path" ]] || {
+      printf 'synthetic containerfile missing: %s\n' "$containerfile_path" >&2
+      exit 1
+    }
+    [[ ! -e "$context_path/.aptly" ]] || {
+      printf 'synthetic build context leaked aptly state: %s\n' "$context_path/.aptly" >&2
+      exit 1
+    }
+    grep -Fq 'FROM docker.io/library/debian:trixie-slim' "$containerfile_path" || {
+      printf 'unexpected containerfile contents: %s\n' "$containerfile_path" >&2
+      exit 1
+    }
+    exit 0
+    ;;
   ps)
     exit 0
     ;;
@@ -285,8 +358,11 @@ export PATH="$MOCK_BIN:$PATH"
 export TEST_SYSTEMCTL_LOG="$SYSTEMCTL_LOG"
 export TEST_SYSTEMCTL_STATE="$SYSTEMCTL_STATE"
 export TEST_SYSTEMCTL_EVENTS="$SYSTEMCTL_EVENTS"
+export TEST_PODMAN_LOG="$PODMAN_LOG"
 export TEST_EXPECTED_PODMAN_HOME="$HOME_BASE/glab-user"
 export TEST_EXPECTED_XDG_RUNTIME_DIR="/run/user/$CURRENT_UID"
+export TEST_FORBIDDEN_CONTEXT="$TMP_ROOT/pool/aptly"
+export TEST_FORBIDDEN_CONTAINERFILE="$TMP_ROOT/pool/aptly/Containerfile"
 
 if bash "$PATCHED_HELPER" --user glab-user refresh --require-active >"$TMP_ROOT/first.stdout" 2>"$TMP_ROOT/first.stderr"; then
   pass "refresh succeeds with only the build token populated"
@@ -366,6 +442,20 @@ if assert_not_contains "$CONFIG_PATH" 'DOCKER_HOST=' &&
   pass "rerendered shared config still avoids recursive socket injection after task enablement"
 else
   fail "rerendered shared config still avoids recursive socket injection after task enablement"
+fi
+
+mkdir -p "$STATE_BASE/glab-aptly"
+: >"$STATE_BASE/glab-aptly/.runner_system_id"
+sed -i 's/^GITLAB_RUNNER_APTLY_TOKEN=""/GITLAB_RUNNER_APTLY_TOKEN="aptly-token"/' "$ENV_DIR/gitlab-runner-aptly.env"
+export TEST_EXPECTED_PODMAN_HOME="$HOME_BASE/glab-aptly"
+export TEST_PODMAN_IMAGE_EXISTS="false"
+
+if bash "$PATCHED_HELPER" --user glab-aptly ensure-images >"$TMP_ROOT/aptly-images.stdout" 2>"$TMP_ROOT/aptly-images.stderr" &&
+   assert_contains "$PODMAN_LOG" "build --pull=missing --tag localhost/gitlab-runner-aptly:trixie" &&
+   assert_not_contains "$PODMAN_LOG" " $TMP_ROOT/pool/aptly"; then
+  pass "aptly runner builds from a synthetic readable context instead of traversing protected aptly state"
+else
+  fail "aptly runner builds from a synthetic readable context instead of traversing protected aptly state"
 fi
 
 [ "$FAIL_COUNT" -eq 0 ]

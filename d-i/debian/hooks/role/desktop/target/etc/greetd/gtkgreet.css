@@ -3,40 +3,65 @@ window {
   background-image: url("file:///usr/share/backgrounds/labwc/wallpapers/regreet-labwall2-1920x1080.png");
   background-size: cover;
   background-position: center;
+  color: #f3ead7;
 }
 
 box#body {
   background-color: rgba(17, 19, 24, 0.78);
   border: 1px solid rgba(228, 221, 202, 0.18);
-  border-radius: 14px;
+  border-radius: 16px;
   box-shadow: 0 18px 56px rgba(0, 0, 0, 0.48);
   color: #f3ead7;
   margin: 40px;
-  min-width: 720px;
-  padding: 36px 40px;
-  font-size: 20px;
+  min-width: 600px;
+  padding: 30px 34px;
 }
 
-label {
-  font-size: 18px;
+box#body label {
+  color: #f3ead7;
+  font-size: 16px;
+  font-weight: 600;
 }
 
-entry, combobox, button {
+box#body entry,
+box#body combobox {
   background-color: rgba(245, 239, 221, 0.10);
   border: 1px solid rgba(245, 239, 221, 0.22);
-  border-radius: 8px;
+  border-radius: 10px;
   color: #f3ead7;
-  min-height: 34px;
-  min-width: 420px;
-  padding: 16px 20px;
-  font-size: 20px;
+  font-size: 18px;
+  min-height: 22px;
+  min-width: 440px;
+  padding: 14px 16px;
 }
 
-button {
-  min-width: 240px;
+box#body > button {
+  background-color: rgba(245, 239, 221, 0.10);
+  border: 1px solid rgba(245, 239, 221, 0.22);
+  border-radius: 10px;
+  color: #f3ead7;
+  font-size: 18px;
+  min-height: 22px;
+  min-width: 220px;
+  padding: 14px 18px;
 }
 
-button:hover, button:focus {
+box#body combobox button {
+  background-color: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: #f3ead7;
+  font-size: 18px;
+  min-height: 22px;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+box#body entry:focus,
+box#body combobox:focus,
+box#body > button:hover,
+box#body > button:focus {
   background-color: rgba(236, 184, 96, 0.22);
   border-color: rgba(236, 184, 96, 0.78);
 }

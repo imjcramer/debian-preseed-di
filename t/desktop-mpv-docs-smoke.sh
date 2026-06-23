@@ -3,7 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
-TEST_COUNT=7
+TEST_COUNT=8
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -24,6 +24,7 @@ desktop_packages="$ROOT_DIR/d-i/debian/classes/class-select/role/desktop.cfg"
 desktop_components="$ROOT_DIR/d-i/debian/scripts/desktop/components.sh"
 firstboot_validation="$ROOT_DIR/d-i/debian/scripts/firstboot/04-validation.sh"
 gtkgreet_css="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/greetd/gtkgreet.css"
+crystal_dock_appearance="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/crystal-dock/labwc/appearance.conf"
 mpv_conf="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/mpv/mpv.conf"
 mpv_input="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/mpv/input.conf"
 target_assets="$ROOT_DIR/d-i/debian/scripts/late/target-assets.sh"
@@ -42,7 +43,7 @@ fi
 
 if grep -q '/etc/skel/.config/mpv/mpv.conf' "$desktop_components" &&
    grep -q '/etc/skel/.config/mpv/input.conf' "$desktop_components" &&
-   grep -q '.config/mpv \\' "$desktop_components" &&
+   grep -Fq ".config/mpv \\" "$desktop_components" &&
    grep -q '/etc/skel/.config/mpv/mpv.conf' "$firstboot_validation" &&
    grep -q '/etc/skel/.config/mpv/input.conf' "$firstboot_validation" &&
    grep -Eq '^[[:space:]]+mpv[[:space:]]+\\$' "$firstboot_validation"; then
@@ -63,15 +64,19 @@ else
   fail "mpv defaults are tuned for Wayland playback and practical desktop controls"
 fi
 
-if grep -q '^  min-width: 720px;$' "$gtkgreet_css" &&
-   grep -q '^  padding: 36px 40px;$' "$gtkgreet_css" &&
-   grep -q '^  font-size: 20px;$' "$gtkgreet_css" &&
-   grep -q '^  min-height: 34px;$' "$gtkgreet_css" &&
-   grep -q '^  min-width: 420px;$' "$gtkgreet_css" &&
-   grep -q '^  min-width: 240px;$' "$gtkgreet_css"; then
-  pass "gtkgreet CSS enlarges the login card and entry controls"
+if grep -q '^  min-width: 600px;$' "$gtkgreet_css" &&
+   grep -q '^  padding: 30px 34px;$' "$gtkgreet_css" &&
+   grep -q '^box#body label {$' "$gtkgreet_css" &&
+   grep -q '^  font-size: 16px;$' "$gtkgreet_css" &&
+   grep -q '^box#body entry,$' "$gtkgreet_css" &&
+   grep -q '^  min-width: 440px;$' "$gtkgreet_css" &&
+   grep -q '^box#body combobox button {$' "$gtkgreet_css" &&
+   grep -q '^  min-width: 0;$' "$gtkgreet_css" &&
+   grep -q '^box#body > button {$' "$gtkgreet_css" &&
+   grep -q '^  min-width: 220px;$' "$gtkgreet_css"; then
+  pass "gtkgreet CSS enlarges the real login widgets without distorting combobox alignment"
 else
-  fail "gtkgreet CSS enlarges the login card and entry controls"
+  fail "gtkgreet CSS enlarges the real login widgets without distorting combobox alignment"
 fi
 
 if grep -q '^stage_target_helper_docs() {$' "$target_assets" &&
@@ -84,7 +89,7 @@ else
 fi
 
 if grep -q 'installer always stages this index' "$docs_index" &&
-   grep -q '`podbin-service-bridge.md`' "$docs_index" &&
+   grep -Fq 'podbin-service-bridge.md' "$docs_index" &&
    grep -q '^## Root-admin lifecycle$' "$podbin_doc" &&
    grep -q '^## Daily-account bridge to the managed podsvc service$' "$podbin_doc" &&
    grep -q '^## Security model$' "$podbin_doc" &&
@@ -94,6 +99,19 @@ if grep -q 'installer always stages this index' "$docs_index" &&
   pass "staged podbin docs cover lifecycle, service bridge, and troubleshooting"
 else
   fail "staged podbin docs cover lifecycle, service bridge, and troubleshooting"
+fi
+
+if grep -q '^minimumIconSize=42$' "$crystal_dock_appearance" &&
+   grep -q '^maximumIconSize=68$' "$crystal_dock_appearance" &&
+   grep -q '^spacingFactor=0.56$' "$crystal_dock_appearance" &&
+   grep -q '^tooltipFontSize=12$' "$crystal_dock_appearance" &&
+   grep -q '^floatingMargin=5$' "$crystal_dock_appearance" &&
+   grep -q '^iconSize=34$' "$crystal_dock_appearance" &&
+   grep -q '^fontSize=14$' "$crystal_dock_appearance" &&
+   grep -q '^fontScaleFactor=0.92$' "$crystal_dock_appearance"; then
+  pass "crystal dock defaults use a larger icon and label scale"
+else
+  fail "crystal dock defaults use a larger icon and label scale"
 fi
 
 if grep -q '^sudo podbin --create-user alice$' "$podbin_doc" &&

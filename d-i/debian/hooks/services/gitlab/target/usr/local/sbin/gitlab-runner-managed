@@ -23,6 +23,13 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+cleanup_path_if_present() {
+  local value="${1:-}"
+  [[ -n "$value" ]] || return 0
+  [[ "$value" == /* ]] || return 0
+  rm -rf -- "$value"
+}
+
 trim() {
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -1032,7 +1039,7 @@ ensure_images_loaded_context() {
         validate_absolute_path "${id_upper} IMAGE_CONTEXT" "$image_context"
         validate_absolute_path "${id_upper} IMAGE_CONTAINERFILE" "$image_containerfile"
         run_podman_as_context_user image exists "$image_ref" >/dev/null 2>&1 && continue
-        run_podman_as_context_user build --pull=missing --tag "$image_ref" -f "$image_containerfile" "$image_context"
+        build_runner_image_from_containerfile "$id_upper" "$image_ref" "$image_context" "$image_containerfile"
         built_count=$((built_count + 1))
         ;;
       *)
@@ -1046,6 +1053,79 @@ ensure_images_loaded_context() {
   else
     info "built ${built_count} runner image(s) for ${context_user}"
   fi
+}
+
+containerfile_requires_local_context() {
+  local containerfile_path="$1"
+  [[ -r "$containerfile_path" && ! -L "$containerfile_path" ]] ||
+    die "containerfile is not readable: ${containerfile_path}"
+
+  python3 - "$containerfile_path" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+for raw_line in path.read_text().splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    if not re.match(r"^(ADD|COPY)\b", line, re.IGNORECASE):
+        continue
+    if re.search(r"--from=", line, re.IGNORECASE):
+        continue
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+  local rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) die "failed to inspect containerfile for local context requirements: ${containerfile_path}" ;;
+  esac
+}
+
+prepare_containerfile_build_context() {
+  local id_upper="$1"
+  local image_containerfile="$2"
+  local tmp_context_dir tmp_containerfile
+
+  validate_absolute_path "${id_upper} IMAGE_CONTAINERFILE" "$image_containerfile"
+  [[ -r "$image_containerfile" && ! -L "$image_containerfile" ]] ||
+    die "${id_upper} IMAGE_CONTAINERFILE is not readable: ${image_containerfile}"
+
+  tmp_context_dir="$(mktemp -d "${context_tmp_dir%/}/containerfile-context.XXXXXXXXXX")"
+  tmp_containerfile="${tmp_context_dir}/Containerfile"
+  install -m 0644 "$image_containerfile" "$tmp_containerfile"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown -R "${context_uid}:${context_gid}" "$tmp_context_dir"
+  fi
+  printf '%s\n%s\n' "$tmp_context_dir" "$tmp_containerfile"
+}
+
+build_runner_image_from_containerfile() {
+  local id_upper="$1"
+  local image_ref="$2"
+  local image_context="$3"
+  local image_containerfile="$4"
+  local build_context="$image_context"
+  local build_containerfile="$image_containerfile"
+  local synthetic_context= context_info build_rc
+
+  if ! containerfile_requires_local_context "$image_containerfile"; then
+    context_info="$(prepare_containerfile_build_context "$id_upper" "$image_containerfile")"
+    synthetic_context="${context_info%%$'\n'*}"
+    build_containerfile="${context_info#*$'\n'}"
+    build_context="$synthetic_context"
+  fi
+
+  if ! run_podman_as_context_user build --pull=missing --tag "$image_ref" -f "$build_containerfile" "$build_context"; then
+    build_rc=$?
+    cleanup_path_if_present "$synthetic_context"
+    return "$build_rc"
+  fi
+
+  cleanup_path_if_present "$synthetic_context"
 }
 
 preflight_executor() {

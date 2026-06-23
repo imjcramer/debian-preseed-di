@@ -19,6 +19,7 @@ apply_env_overrides(
       LABWC_OUTPUT_EXTERNAL_SCALE
       LABWC_OUTPUT_FALLBACK_REFRESH_HZ
       LABWC_OUTPUT_INTERNAL_PREFIXES
+      LABWC_OUTPUT_INTERNAL_REFRESH_DELAY_SECONDS
       LABWC_OUTPUT_INTERNAL_SCALE
       LABWC_OUTPUT_POLICY
       LABWC_OUTPUT_SCALE
@@ -34,7 +35,7 @@ my $restart_session_chrome = with_refresh_lock(
     }
 );
 
-restart_session_components() if $restart_session_chrome;
+restart_session_components($restart_session_chrome) if $restart_session_chrome;
 exit 0;
 
 sub refresh_outputs {
@@ -59,6 +60,7 @@ sub refresh_outputs {
 
     my ($selected_output, $selected_mode, @outputs_to_disable) = selection_plan(\@lines, @outputs);
     return 0 if !defined $selected_output;
+    my $restart_delay_us = topology_restart_delay_us($selected_output, @outputs_to_disable);
 
     enable_output($wlr_randr, $selected_output, $selected_mode) or return 0;
     for my $output_name (@outputs_to_disable) {
@@ -67,7 +69,7 @@ sub refresh_outputs {
 
     usleep(250_000);
     my $state_after = capture_command($wlr_randr);
-    return topology_changed($state_before, $state_after);
+    return topology_changed($state_before, $state_after) ? $restart_delay_us : 0;
 }
 
 sub selection_plan {
@@ -375,11 +377,25 @@ sub normalized_state {
 }
 
 sub restart_session_components {
+    my ($delay_us) = @_;
     return if !session_is_wayland_active();
-    usleep(300_000);
+    $delay_us = 300_000 if !defined $delay_us || $delay_us !~ /\A\d+\z/;
+    usleep($delay_us);
     restart_waybar();
     restart_dock();
     return;
+}
+
+sub topology_restart_delay_us {
+    my ($selected_output, @outputs_to_disable) = @_;
+    my $delay_us = 300_000;
+
+    return $delay_us if !defined $selected_output || !is_internal_output($selected_output);
+    return $delay_us if !grep { !is_internal_output($_) } @outputs_to_disable;
+
+    my $extra_delay_seconds = optional_uint($defaults{LABWC_OUTPUT_INTERNAL_REFRESH_DELAY_SECONDS});
+    $extra_delay_seconds = 1 if !defined $extra_delay_seconds;
+    return $delay_us + ($extra_delay_seconds * 1_000_000);
 }
 
 sub session_is_wayland_active {

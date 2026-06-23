@@ -32,6 +32,7 @@ esac
 dock_binary=${dock_command%% *}
 dock_process=${dock_binary##*/}
 dock_user_id=$(id -u)
+dock_stop_timeout_seconds=${LABWC_CRYSTAL_DOCK_STOP_TIMEOUT_SECONDS:-4}
 
 timestamp() {
   date -u '+%Y-%m-%dT%H:%M:%SZ'
@@ -39,6 +40,15 @@ timestamp() {
 
 log_message() {
   printf '%s %s\n' "$(timestamp)" "$1" >>"$log_path"
+}
+
+require_non_negative_integer() {
+  case "${2:-}" in
+    ''|*[!0123456789]*)
+      log_message "invalid integer for $1: ${2:-unset}"
+      exit 1
+      ;;
+  esac
 }
 
 clear_pid_file() {
@@ -61,6 +71,37 @@ read_pid_file() {
   printf '%s\n' "$dock_pid"
 }
 
+dock_process_running() {
+  if command -v pgrep >/dev/null 2>&1 &&
+     pgrep -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+wait_for_dock_exit() {
+  require_non_negative_integer LABWC_CRYSTAL_DOCK_STOP_TIMEOUT_SECONDS "$dock_stop_timeout_seconds"
+  ticks=$((dock_stop_timeout_seconds * 5))
+
+  while :; do
+    dock_pid=$(read_pid_file 2>/dev/null || true)
+    if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
+      :
+    elif dock_process_running; then
+      :
+    else
+      clear_pid_file
+      return 0
+    fi
+
+    [ "$ticks" -gt 0 ] || break
+    sleep 0.2
+    ticks=$((ticks - 1))
+  done
+
+  return 1
+}
+
 with_lock() {
   if ! command -v flock >/dev/null 2>&1; then
     "$@"
@@ -80,6 +121,14 @@ stop_running_dock() {
     kill "$dock_pid" >/dev/null 2>&1 || true
   else
     pkill -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+  fi
+  if ! wait_for_dock_exit; then
+    if [ -n "$dock_pid" ] && dock_pid_is_running "$dock_pid"; then
+      kill -KILL "$dock_pid" >/dev/null 2>&1 || true
+    else
+      pkill -KILL -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1 || true
+    fi
+    wait_for_dock_exit || true
   fi
   clear_pid_file
 }
@@ -111,8 +160,7 @@ start_if_needed_locked() {
   fi
 
   clear_pid_file
-  if command -v pgrep >/dev/null 2>&1 &&
-     pgrep -u "$dock_user_id" -x "$dock_process" >/dev/null 2>&1; then
+  if dock_process_running; then
     return 0
   fi
 
