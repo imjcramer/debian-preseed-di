@@ -22,6 +22,8 @@ render_target_template_placeholder_map() {
   zram_backing_raw_device="/dev/disk/by-partuuid/${zram_backing_raw_partuuid}"
   account_username=${ACCOUNT_USERNAME:-}
   usbmedia_gid=${USBMEDIA_GID:-}
+  gitlab_runner_aptly_username=${GITLAB_RUNNER_APTLY_USERNAME:-}
+  gitlab_runner_build_username=${GITLAB_RUNNER_BUILD_USERNAME:-}
   gitlab_runner_aptly_owner_username=${GITLAB_RUNNER_APTLY_OWNER_USERNAME:-}
 
   cat <<EOF
@@ -62,7 +64,8 @@ DIR_POLKIT_LOCAL_RULES_D=${DIR_POLKIT_LOCAL_RULES_D:-}
 DIR_POLKIT_RUNTIME_RULES_D=${DIR_POLKIT_RUNTIME_RULES_D:-}
 ACCOUNT_USERNAME=$account_username
 USBMEDIA_GID=$usbmedia_gid
-GITLAB_RUNNER_APTLY_USERNAME=${GITLAB_RUNNER_APTLY_USERNAME:-}
+GITLAB_RUNNER_APTLY_USERNAME=$gitlab_runner_aptly_username
+GITLAB_RUNNER_BUILD_USERNAME=$gitlab_runner_build_username
 GITLAB_RUNNER_APTLY_OWNER_USERNAME=$gitlab_runner_aptly_owner_username
 SYSTEM_HOSTNAME=${SYSTEM_HOSTNAME:-}
 SYSTEM_DOMAIN=${SYSTEM_DOMAIN:-}

@@ -15,10 +15,10 @@ debugging path.
 Persistent Podman storage for those runners stays under `/pool/podman/<user>`.
 The shared `/pool/podman` parent stays traversal-only so rootless OCI helpers
 can still reach those per-user graphroots even if they momentarily lose
-supplemental groups during container startup. Rootless Podman runtime state now
-stays under `/run/user/<uid>/run` and `/run/user/<uid>/libpod/tmp` so helpers
-such as `pasta` write PID and runtime files on the user runtime filesystem
-instead of under `/pool`.
+supplemental groups during container startup. Rootless Podman image-copy temp
+and Buildah temp stay under `/pool/podman/<user>/tmp`, while runtime PID/lock
+state stays under `/run/user/<uid>/run`, `/run/user/<uid>/libpod/tmp`, and
+`/run/user/<uid>/gitlab-runner/tmp`.
 
 ## Managed files
 
@@ -73,7 +73,8 @@ sudo glab-helper --user glab-user gitlab-runner-managed ensure-images
   is reachable and still rootless over `netavark`
 - `ensure-images`: builds only the managed local runner images that are missing
 - `once`: runs `refresh --require-active`, then `preflight`, then
-  `ensure-images`, and finally starts or reloads the user service
+  `ensure-images`, and finally starts or restarts the user service so updated
+  unit settings and rendered config take effect immediately
 
 Use `aptly-managed` for the persistent Aptly state:
 

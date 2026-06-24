@@ -1575,7 +1575,7 @@ installer_loaded_repo_dir_value() {
     DIR_HOOKS_HARDWARE_GPU) printf '%s\n' "${DIR_HOOKS_HARDWARE_GPU:-}" ;;
     DIR_HOOKS_ROLE_DESKTOP) printf '%s\n' "${DIR_HOOKS_ROLE_DESKTOP:-}" ;;
     DIR_HOOKS_ROLE_SERVER) printf '%s\n' "${DIR_HOOKS_ROLE_SERVER:-}" ;;
-    DIR_HOOKS_SERVICES_GITLAB) printf '%s\n' "${DIR_HOOKS_SERVICES_GITLAB:-}" ;;
+    DIR_HOOKS_SERVICES_GITLAB_RUNNER) printf '%s\n' "${DIR_HOOKS_SERVICES_GITLAB_RUNNER:-}" ;;
     DIR_HOOKS_SHARED_APT_SETUP_GENERATORS) printf '%s\n' "${DIR_HOOKS_SHARED_APT_SETUP_GENERATORS:-}" ;;
     DIR_HOOKS_SHARED_BASE_STAGE_D) printf '%s\n' "${DIR_HOOKS_SHARED_BASE_STAGE_D:-}" ;;
     DIR_HOOKS_SHARED_D_I) printf '%s\n' "${DIR_HOOKS_SHARED_D_I:-}" ;;
@@ -1731,7 +1731,7 @@ hooks/hardware/disk|DIR_HOOKS_HARDWARE_DISK|
 hooks/hardware/gpu|DIR_HOOKS_HARDWARE_GPU|
 hooks/role/desktop|DIR_HOOKS_ROLE_DESKTOP|
 hooks/role/server|DIR_HOOKS_ROLE_SERVER|
-hooks/services/gitlab|DIR_HOOKS_SERVICES_GITLAB|
+hooks/services/gitlab-runner|DIR_HOOKS_SERVICES_GITLAB_RUNNER|
 scripts/common|DIR_SCRIPTS_COMMON|
 scripts/desktop|DIR_SCRIPTS_DESKTOP|
 scripts/early|DIR_SCRIPTS_EARLY|
@@ -2095,12 +2095,6 @@ installer_service_env_dir_candidates() {
 
   installer_validate_profile_component "service class" "$service_name"
   printf '%s\n' "$service_name"
-  case "$service_name" in
-    *-runner)
-      service_alias=${service_name%-runner}
-      [ -n "$service_alias" ] && [ "$service_alias" != "$service_name" ] && printf '%s\n' "$service_alias"
-      ;;
-  esac
 }
 
 installer_resolve_service_env_dir() {
@@ -2129,6 +2123,18 @@ EOF
   return 1
 }
 
+installer_selected_service_env_cache_path() {
+  service_seed_base=$1
+  service_name=$2
+  host_variant=$3
+
+  printf '%s/service-env/%s/%s/%s.path\n' \
+    "$(installer_runtime_cache_dir)" \
+    "$(installer_seed_cache_key "$service_seed_base")" \
+    "$(installer_file_safe_token "$service_name")" \
+    "$(installer_file_safe_token "$host_variant")"
+}
+
 installer_selected_service_env_paths() {
   service_seed_base=$1
   host_variant=$2
@@ -2137,14 +2143,25 @@ installer_selected_service_env_paths() {
   [ -n "$service_name" ] || return 0
   installer_validate_profile_component "service class" "$service_name"
 
+  service_cache_path=$(installer_selected_service_env_cache_path "$service_seed_base" "$service_name" "$host_variant")
+  if [ -r "$service_cache_path" ] && [ ! -L "$service_cache_path" ]; then
+    cached_service_env=$(sed -n '1p' "$service_cache_path")
+    if [ -n "$cached_service_env" ]; then
+      installer_validate_relative_seed_path "$cached_service_env"
+      printf '%s\n' "$cached_service_env"
+      return 0
+    fi
+  fi
+
   service_dir=$(installer_resolve_service_env_dir "$service_seed_base" "$service_name" "$host_variant" 2>/dev/null || true)
   [ -n "$service_dir" ] || return 0
 
   generic_env=$(installer_repo_join_var DIR_HOSTS_SERVICES "${service_dir}/${host_variant}.env")
-
-  if installer_seed_path_exists "$service_seed_base" "$generic_env"; then
-    printf '%s\n' "$generic_env"
-  fi
+  service_cache_dir=$(dirname "$service_cache_path")
+  [ -d "$service_cache_dir" ] || install -d -m 0700 "$service_cache_dir"
+  printf '%s\n' "$generic_env" >"$service_cache_path"
+  chmod 0600 "$service_cache_path"
+  printf '%s\n' "$generic_env"
 }
 
 installer_fetch_host_env() {

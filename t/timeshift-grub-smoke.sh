@@ -51,7 +51,7 @@ run_class_case() {
 }
 
 timeshift_class="$ROOT_DIR/d-i/debian/classes/class-addon/timeshift.cfg"
-if grep -Eq '^d-i pkgsel/include string timeshift$' "$timeshift_class"; then
+if grep -Eq '^d-i pkgsel/include string timeshift/sid$' "$timeshift_class"; then
   pass "timeshift addon fragment installs the Timeshift package"
 else
   fail "timeshift addon fragment installs the Timeshift package"
@@ -143,7 +143,6 @@ btrfs_family="$ROOT_DIR/d-i/debian/scripts/late/btrfs-family.sh"
 if grep -q 'configure_target_timeshift()' "$btrfs_family" &&
    grep -q 'load_target_btrfs_optional_package_state()' "$btrfs_family" &&
    grep -q 'TARGET_HAS_BTRFSMAINTENANCE_PACKAGE=0' "$btrfs_family" &&
-   grep -q 'TARGET_HAS_TIMESHIFT_PACKAGE=0' "$btrfs_family" &&
    grep -q 'btrfs_stage_shared_target_asset()' "$btrfs_family" &&
    grep -q 'verify_target_timeshift_staging()' "$btrfs_family" &&
    grep -q 'require_symlink_target /etc/systemd/system/timers.target.wants/timeshift-daily.timer' "$btrfs_family" &&

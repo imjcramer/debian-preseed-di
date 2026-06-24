@@ -3,7 +3,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/gitlab-runner-managed"
+MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/gitlab-runner-managed"
 
 TEST_COUNT=11
 TEST_INDEX=0
@@ -214,6 +214,32 @@ case "$*" in
   "--user reset-failed gitlab-runner.service")
     exit 0
     ;;
+  "--user reset-failed podman.service")
+    exit 0
+    ;;
+  "--user reset-failed podman.socket")
+    exit 0
+    ;;
+  "--user restart podman.service")
+    printf 'podman-restart\n' >>"$TEST_SYSTEMCTL_EVENTS"
+    exit 0
+    ;;
+  "--user restart podman.socket")
+    printf 'podman-socket-restart\n' >>"$TEST_SYSTEMCTL_EVENTS"
+    exit 0
+    ;;
+  "--user restart gitlab-runner.service")
+    rm -f "${TEST_SYSTEMCTL_STATE}.active-count"
+    if [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "failed" ]]; then
+      printf 'failed\n' >"$TEST_SYSTEMCTL_STATE"
+    elif [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "flap" ]]; then
+      printf 'active\n' >"$TEST_SYSTEMCTL_STATE"
+    else
+      printf 'active\n' >"$TEST_SYSTEMCTL_STATE"
+    fi
+    printf 'restart\n' >>"$TEST_SYSTEMCTL_EVENTS"
+    exit 0
+    ;;
   "--user start gitlab-runner.service")
     rm -f "${TEST_SYSTEMCTL_STATE}.active-count"
     if [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "failed" ]]; then
@@ -242,13 +268,11 @@ case "$*" in
     fi
     exit 3
     ;;
-  "--user kill --signal=HUP --kill-whom=main gitlab-runner.service")
-    if [[ "${TEST_SYSTEMCTL_KILL_FAIL:-false}" == "true" ]]; then
-      printf 'failed\n' >"$TEST_SYSTEMCTL_STATE"
-      exit 1
+  "--user is-active --quiet podman.service")
+    if [[ "${TEST_PODMAN_SERVICE_ACTIVE:-true}" == "true" ]]; then
+      exit 0
     fi
-    printf 'hup\n' >>"$TEST_SYSTEMCTL_EVENTS"
-    exit 0
+    exit 3
     ;;
 esac
 printf 'unexpected systemctl args: %s\n' "$*" >&2
@@ -349,6 +373,7 @@ chmod +x "$MOCK_BIN/podman"
 sed \
   -e "s|^ENV_DIR=.*|ENV_DIR=\"$ENV_DIR\"|" \
   -e "s|context_runtime_root=\"/run/user/\${context_uid}/gitlab-runner\"|context_runtime_root=\"$RUNTIME_BASE/\${context_uid}/gitlab-runner\"|" \
+  -e "s|context_podman_runtime_root=\"/run/user/\${context_uid}\"|context_podman_runtime_root=\"$RUNTIME_BASE/\${context_uid}\"|" \
   -e "s|context_podman_runtime_libpod_dir=\"/run/user/\${context_uid}/libpod\"|context_podman_runtime_libpod_dir=\"$RUNTIME_BASE/\${context_uid}/libpod\"|" \
   -e "s|context_podman_runroot=\"/run/user/\${context_uid}/run\"|context_podman_runroot=\"$RUNTIME_BASE/\${context_uid}/run\"|" \
   "$MANAGED_HELPER" >"$PATCHED_HELPER"
@@ -383,20 +408,20 @@ else
   fail "single-token render keeps only the build runner stanza"
 fi
 
-if [[ -f "$STATE_BASE/glab-user/.runner_system_id" ]] &&
-   [[ ! -e "$STATE_BASE/glab-user/work/.runner_system_id" ]]; then
+if [ -f "$STATE_BASE/glab-user/.runner_system_id" ] &&
+   [ ! -e "$STATE_BASE/glab-user/work/.runner_system_id" ]; then
   pass "runner system-id state is created alongside config.toml instead of under the writable work subtree"
 else
   fail "runner system-id state is created alongside config.toml instead of under the writable work subtree"
 fi
 
-if [[ -d "$RUNTIME_BASE/$CURRENT_UID/run/networks/rootless-netns" ]] &&
-   [[ -d "$RUNTIME_BASE/$CURRENT_UID/libpod/tmp" ]] &&
-   [[ -d "$PODMAN_STATE_BASE/glab-user/storage" ]] &&
-   [[ -d "$PODMAN_STATE_BASE/glab-user/libpod" ]]; then
-  pass "preflight prepares rootless Podman runtime state under /run plus persistent storage state under /pool"
+if [ -d "$RUNTIME_BASE/$CURRENT_UID/run/networks/rootless-netns" ] &&
+   [ -d "$RUNTIME_BASE/$CURRENT_UID/libpod/tmp" ] &&
+   [ -d "$PODMAN_STATE_BASE/glab-user/storage" ] &&
+   [ -d "$PODMAN_STATE_BASE/glab-user/libpod" ]; then
+  pass "preflight prepares rootless Podman runtime state under /run and persistent storage state under /pool"
 else
-  fail "preflight prepares rootless Podman runtime state under /run plus persistent storage state under /pool"
+  fail "preflight prepares rootless Podman runtime state under /run and persistent storage state under /pool"
 fi
 
 if assert_not_contains "$CONFIG_PATH" 'DOCKER_HOST=' &&

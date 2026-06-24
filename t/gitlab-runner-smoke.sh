@@ -32,29 +32,29 @@ common_lib="$ROOT_DIR/d-i/debian/scripts/common/lib.sh"
 gitlab_late="$ROOT_DIR/d-i/debian/scripts/late/gitlab-runner.sh"
 podman_late="$ROOT_DIR/d-i/debian/scripts/late/podman.sh"
 security_script="$ROOT_DIR/d-i/debian/scripts/late/security.sh"
-shared_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-shared.env"
+shared_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-shared.env"
 runtime_storage_tmpfiles="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/tmpfiles.d/10-runtime-storage-roots.conf"
-aptly_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-aptly.env"
-build_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-build.env"
-task_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab/gitlab-runner-task.env"
-managed_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/gitlab-runner-managed"
-aptly_managed="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/aptly-managed"
-aptly_bridge_processor="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/aptly-bridge-processor"
-aptly_publish_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/libexec/aptly-publish-managed"
-operator_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/glab-helper"
-service_template="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/data/config/runners/templates/gitlab-runner.service.tmpl"
-aptly_tmpfiles="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/etc/tmpfiles.d/80-gitlab-runner-storage.conf.tmpl"
-aptly_prepare="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/pool/aptly/bin/prepare-aptly-env.sh"
-aptly_wrapper="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/pool/aptly/bin/aptly"
-aptly_bridge="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/pool/aptly/bin/aptly-bridge"
-aptly_containerfile="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/pool/aptly/Containerfile"
-aptly_template="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/pool/aptly/.aptly.conf.template.json"
-aptly_bridge_service="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/etc/systemd/system/aptly-bridge.service"
-aptly_bridge_path="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/etc/systemd/system/aptly-bridge.path"
+aptly_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-aptly.env"
+build_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-build.env"
+task_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-task.env"
+managed_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/gitlab-runner-managed"
+aptly_managed="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/aptly-managed"
+aptly_bridge_processor="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/aptly-bridge-processor"
+aptly_publish_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/libexec/aptly-publish-managed"
+operator_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/glab-helper"
+service_template="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/data/config/runners/templates/gitlab-runner.service.tmpl"
+aptly_tmpfiles="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/etc/tmpfiles.d/80-gitlab-runner-storage.conf.tmpl"
+aptly_prepare="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/aptly/bin/prepare-aptly-env.sh"
+aptly_wrapper="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/aptly/bin/aptly"
+aptly_bridge="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/aptly/bin/aptly-bridge"
+aptly_containerfile="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/aptly/Containerfile"
+aptly_template="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/aptly/.aptly.conf.template.json"
+aptly_bridge_service="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/etc/systemd/system/aptly-bridge.service"
+aptly_bridge_path="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/etc/systemd/system/aptly-bridge.path"
 gitlab_nft_overlay="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/nftables/services/gitlab-runner.yml"
 docs_index="$ROOT_DIR/d-i/debian/hooks/shared/target/data/docs/README.md"
 gitlab_runner_doc="$ROOT_DIR/d-i/debian/hooks/shared/target/data/docs/gitlab-runner.md"
-service_readme="$ROOT_DIR/d-i/debian/hosts/services/gitlab/README.md"
+service_readme="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/README.md"
 
 if grep -q '^Name: gitlab-runner$' "$system_cfg" &&
    grep -q '^Description: GitLab Runner service role$' "$system_cfg" &&
@@ -88,12 +88,12 @@ else
 fi
 
 if grep -q '^DIR_HOSTS_SERVICES="hosts/services"$' "$repo_env" &&
-   grep -q '^DIR_HOOKS_SERVICES_GITLAB="hooks/services/gitlab"$' "$repo_env" &&
+   grep -q '^DIR_HOOKS_SERVICES_GITLAB_RUNNER="hooks/services/gitlab-runner"$' "$repo_env" &&
    grep -q 'DIR_HOSTS_SERVICES) printf' "$common_lib" &&
-   grep -q 'hooks/services/gitlab|DIR_HOOKS_SERVICES_GITLAB|' "$common_lib"; then
-  pass "repo path resolver exposes service env and GitLab service asset roots"
+   grep -q 'hooks/services/gitlab-runner|DIR_HOOKS_SERVICES_GITLAB_RUNNER|' "$common_lib"; then
+  pass "repo path resolver exposes service env and GitLab Runner service asset roots"
 else
-  fail "repo path resolver exposes service env and GitLab service asset roots"
+  fail "repo path resolver exposes service env and GitLab Runner service asset roots"
 fi
 
 if grep -q '^GITLAB_RUNNER_APTLY_USERNAME="glab-aptly"$' "$aptly_env" &&
@@ -134,10 +134,10 @@ else
   fail "shared env centralizes persistent runner, Podman, and cache directory policy"
 fi
 
-if grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-shared.env)"' "$gitlab_late" &&
-   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-aptly.env)"' "$gitlab_late" &&
-   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-build.env)"' "$gitlab_late" &&
-   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-task.env)"' "$gitlab_late" &&
+if grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-shared.env)"' "$gitlab_late" &&
+   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-aptly.env)"' "$gitlab_late" &&
+   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-build.env)"' "$gitlab_late" &&
+   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-task.env)"' "$gitlab_late" &&
    grep -q 'target/usr/local/sbin/aptly-managed' "$gitlab_late" &&
    grep -q 'target/usr/local/sbin/aptly-bridge-processor' "$gitlab_late" &&
    grep -q 'target/usr/local/libexec/aptly-publish-managed' "$gitlab_late" &&
@@ -145,7 +145,7 @@ if grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES git
    grep -q 'target/etc/systemd/system/aptly-bridge.service' "$gitlab_late" &&
    grep -q 'target/etc/systemd/system/aptly-bridge.path' "$gitlab_late" &&
    grep -q 'stage_target_helper_doc gitlab-runner.md gitlab-runner.md' "$gitlab_late" &&
-   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/README.md)" "${GITLAB_RUNNER_ENV_DIR}/README.md" 0644' "$gitlab_late" &&
+   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/README.md)" "${GITLAB_RUNNER_ENV_DIR}/README.md" 0644' "$gitlab_late" &&
    grep -q 'target_asset_assert_no_unresolved_installer_placeholders' "$gitlab_late" &&
    grep -q 'chown root:root "/target${GITLAB_RUNNER_ENV_DIR}/README.md"' "$gitlab_late" &&
    grep -q 'chown "root:${GITLAB_RUNNER_SHARED_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env"' "$gitlab_late" &&
@@ -182,6 +182,12 @@ if ! grep -q '__INSTALLER_DIR_POOL_APTLY__' "$runtime_storage_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/requests 03770 root devops -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/results 03770 root devops -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/processing 0700 root root -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__/tmp 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   ! grep -q '/runtime/run/networks/rootless-netns ' "$aptly_tmpfiles" &&
+   ! grep -q '/gitlab-runner/tmp ' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__/tmp 0700 __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '/pool/aptly:/pool/aptly:rw' "$aptly_env" &&
    grep -Fq 'exec "$bridge_bin" submit "$@"' "$aptly_wrapper" &&
    grep -Fq 'snapshot|repo|switch' "$aptly_bridge" &&
@@ -235,14 +241,16 @@ if grep -q '^Wants=podman.socket$' "$service_template" &&
    grep -q '^ProtectSystem=strict$' "$service_template" &&
    grep -q '^ReadWritePaths=__INSTALLER_GITLAB_RUNNER_READ_WRITE_PATHS__$' "$service_template" &&
    grep -Fq 'system_id_path="${base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME}"' "$gitlab_late" &&
-   grep -Fq 'read_write_paths="${read_write_paths} ${buildah_tmpdir} ${system_id_path}"' "$gitlab_late" &&
+   grep -Fq 'podman_state_root="${GITLAB_RUNNER_PODMAN_STATE_BASE}/${runner_user}"' "$gitlab_late" &&
+   grep -Fq 'podman_tmp_root="${GITLAB_RUNNER_PODMAN_TMP_BASE}/${runner_user}"' "$gitlab_late" &&
+   grep -Fq 'tmp_root="/run/user/${runner_uid}/gitlab-runner"' "$gitlab_late" &&
+   grep -Fq 'read_write_paths="${read_write_paths} ${podman_state_root} ${podman_tmp_root} ${tmp_root} ${buildah_tmpdir} ${system_id_path}"' "$gitlab_late" &&
    grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"' "$gitlab_late" &&
-   ! grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME} ${GITLAB_RUNNER_PODMAN_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"' "$gitlab_late" &&
    grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"' "$gitlab_late" &&
-   ! grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME} ${GITLAB_RUNNER_PODMAN_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"' "$gitlab_late"; then
-  pass "user service template keeps Podman control-plane access while leaving the Buildah tmpdir and runner system-id file writable inside ExecStartPre"
+   grep -Fq 'podman_state_root="${GITLAB_RUNNER_PODMAN_STATE_BASE}/${runner_user}"' "$gitlab_late"; then
+  pass "user service template keeps Podman control-plane access while leaving the managed Podman state roots, Buildah tmpdir, and runner system-id file writable inside ExecStartPre"
 else
-  fail "user service template keeps Podman control-plane access while leaving the Buildah tmpdir and runner system-id file writable inside ExecStartPre"
+  fail "user service template keeps Podman control-plane access while leaving the managed Podman state roots, Buildah tmpdir, and runner system-id file writable inside ExecStartPre"
 fi
 
 if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
@@ -251,8 +259,11 @@ if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
    grep -Fq 'context_runner_ids+=(TASK)' "$managed_helper" &&
    grep -q 'context_docker_host="unix:///run/user/${context_uid}/podman/podman.sock"' "$managed_helper" &&
    grep -q 'context_system_id_file="${context_base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME:-.runner_system_id}"' "$managed_helper" &&
+   grep -q 'context_podman_tmp_root="${GITLAB_RUNNER_PODMAN_TMP_BASE}/${context_user}"' "$managed_helper" &&
+   grep -q 'context_runtime_root="/run/user/${context_uid}/gitlab-runner"' "$managed_helper" &&
+   grep -q 'context_podman_runtime_root="/run/user/${context_uid}"' "$managed_helper" &&
    grep -q 'context_podman_tmpdir="${context_podman_runtime_libpod_dir}/tmp"' "$managed_helper" &&
-   grep -q 'context_podman_runroot="/run/user/${context_uid}/run"' "$managed_helper" &&
+   grep -q 'context_podman_runroot="${context_podman_runtime_root}/run"' "$managed_helper" &&
    grep -q 'context_podman_rootless_netns_dir="${context_podman_runroot_networks_dir}/rootless-netns"' "$managed_helper" &&
    grep -q '^preflight_executor() {$' "$managed_helper" &&
    grep -Fq "run_podman_as_context_user info --format '{{.Host.Security.Rootless}}|{{.Host.NetworkBackend}}'" "$managed_helper" &&
@@ -265,9 +276,9 @@ if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
    ! grep -Fq 'docker_socket = docker_host.removeprefix("unix://")' "$managed_helper" &&
    ! grep -Fq 'f"{tmp_dir}:{tmp_dir}:rw"' "$managed_helper" &&
    ! grep -Fq 'docker.sock' "$managed_helper"; then
-  pass "managed helper renders one aptly runner and shared build/task runners over Podman while checking the rootless runtime paths under /run/user"
+  pass "managed helper renders one aptly runner and shared build/task runners over Podman while checking rootless runtime paths under /run/user and storage/image temp under /pool"
 else
-  fail "managed helper renders one aptly runner and shared build/task runners over Podman while checking the rootless runtime paths under /run/user"
+  fail "managed helper renders one aptly runner and shared build/task runners over Podman while checking rootless runtime paths under /run/user and storage/image temp under /pool"
 fi
 
 if grep -q 'GITLAB_RUNNER_CACHE_DIR_NAMES' "$managed_helper" &&
@@ -313,19 +324,25 @@ else
 fi
 
 if grep -q '^reconcile_runner_service() {$' "$managed_helper" &&
+   grep -q '^reconcile_podman_service() {$' "$managed_helper" &&
+   grep -Fq 'systemctl --user reset-failed podman.service' "$managed_helper" &&
+   grep -Fq 'systemctl --user reset-failed podman.socket' "$managed_helper" &&
+   grep -Fq 'systemctl --user restart podman.socket' "$managed_helper" &&
    grep -Fq 'systemctl --user enable gitlab-runner.service' "$managed_helper" &&
+   grep -Fq 'systemctl --user reset-failed gitlab-runner.service' "$managed_helper" &&
+   grep -Fq 'systemctl --user restart gitlab-runner.service' "$managed_helper" &&
    grep -Fq 'systemctl --user start gitlab-runner.service' "$managed_helper" &&
-   grep -Fq 'systemctl --user kill --signal=HUP --kill-whom=main gitlab-runner.service' "$managed_helper" &&
-   grep -Fq 'requested config reload for gitlab-runner.service as ${context_user}' "$managed_helper" &&
+   grep -Fq 'restarted podman.socket for ${context_user}' "$managed_helper" &&
+   grep -Fq 'restarted gitlab-runner.service for ${context_user}' "$managed_helper" &&
    ! grep -Fq 'podman_install_symlink_with_backup "/target${GITLAB_RUNNER_HOME_WANTS_FILE}"' "$gitlab_late" &&
    grep -Fq 'GitLab runner unit must not be enabled before first successful once' "$gitlab_late" &&
    grep -q 'does not enable it until `gitlab-runner-managed once` has rendered a valid' "$service_readme" &&
    grep -q 'does not enable it until `once` succeeds' "$gitlab_runner_doc" &&
    grep -q 'unit only restarts on failure and systemd stops retrying after the bounded' "$service_readme" &&
    grep -q 'unit restarts only on failure and uses bounded systemd start limits' "$gitlab_runner_doc"; then
-  pass "managed helper enables services on first successful once and the unit no longer retries forever after enablement"
+  pass "managed helper refreshes the Podman and runner user services on successful once and the unit no longer retries forever after enablement"
 else
-  fail "managed helper enables services on first successful once and the unit no longer retries forever after enablement"
+  fail "managed helper refreshes the Podman and runner user services on successful once and the unit no longer retries forever after enablement"
 fi
 
 if grep -q 'secret file path does not exist' "$managed_helper" &&

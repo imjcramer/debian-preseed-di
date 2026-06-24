@@ -3,7 +3,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-BRIDGE="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/pool/aptly/bin/aptly-bridge"
+BRIDGE="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/aptly/bin/aptly-bridge"
 
 TEST_COUNT=3
 TEST_INDEX=0

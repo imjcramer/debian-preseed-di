@@ -52,10 +52,10 @@ gitlab_runner_load_envs() {
   GITLAB_RUNNER_BUILD_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-build.env"
   GITLAB_RUNNER_TASK_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-task.env"
 
-  gitlab_runner_fetch_env gitlab/gitlab-runner-shared.env "$GITLAB_RUNNER_SHARED_SOURCE_ENV"
-  gitlab_runner_fetch_env gitlab/gitlab-runner-aptly.env "$GITLAB_RUNNER_APTLY_SOURCE_ENV"
-  gitlab_runner_fetch_env gitlab/gitlab-runner-build.env "$GITLAB_RUNNER_BUILD_SOURCE_ENV"
-  gitlab_runner_fetch_env gitlab/gitlab-runner-task.env "$GITLAB_RUNNER_TASK_SOURCE_ENV"
+  gitlab_runner_fetch_env gitlab-runner/gitlab-runner-shared.env "$GITLAB_RUNNER_SHARED_SOURCE_ENV"
+  gitlab_runner_fetch_env gitlab-runner/gitlab-runner-aptly.env "$GITLAB_RUNNER_APTLY_SOURCE_ENV"
+  gitlab_runner_fetch_env gitlab-runner/gitlab-runner-build.env "$GITLAB_RUNNER_BUILD_SOURCE_ENV"
+  gitlab_runner_fetch_env gitlab-runner/gitlab-runner-task.env "$GITLAB_RUNNER_TASK_SOURCE_ENV"
 
   # shellcheck disable=SC1090,SC1091
   . "$GITLAB_RUNNER_SHARED_SOURCE_ENV"
@@ -185,11 +185,11 @@ fi
 gitlab_runner_stage_target_envs() {
   install -d -m 0755 "/target${GITLAB_RUNNER_ENV_DIR}"
 
-  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/README.md)" "${GITLAB_RUNNER_ENV_DIR}/README.md" 0644
-  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-shared.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env" 0644
-  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-aptly.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env" 0640
-  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-build.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" 0640
-  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab/gitlab-runner-task.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env" 0640
+  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/README.md)" "${GITLAB_RUNNER_ENV_DIR}/README.md" 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-shared.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env" 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-aptly.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env" 0640
+  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-build.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" 0640
+  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-task.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env" 0640
 
   chown root:root "/target${GITLAB_RUNNER_ENV_DIR}/README.md"
   chown root:root "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env"
@@ -273,26 +273,26 @@ gitlab_runner_stage_service_assets() {
   install -d -m 0755 "/target${GITLAB_RUNNER_STATE_BASE}" "/target${GITLAB_RUNNER_STATE_BASE}/templates"
   chown root:root "/target${GITLAB_RUNNER_STATE_BASE}" "/target${GITLAB_RUNNER_STATE_BASE}/templates"
 
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/sbin/aptly-managed)" /usr/local/sbin/aptly-managed 0750
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/sbin/aptly-bridge-processor)" /usr/local/sbin/aptly-bridge-processor 0750
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/libexec/aptly-publish-managed)" /usr/local/libexec/aptly-publish-managed 0755
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/sbin/glab-helper)" /usr/local/sbin/glab-helper 0755
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/usr/local/sbin/gitlab-runner-managed)" /usr/local/sbin/gitlab-runner-managed 0755
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/data/config/runners/templates/gitlab-runner.service.tmpl)" "${GITLAB_RUNNER_STATE_BASE}/templates/gitlab-runner.service.tmpl" 0644
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/etc/systemd/system/aptly-bridge.service)" /etc/systemd/system/aptly-bridge.service 0644
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/etc/systemd/system/aptly-bridge.path)" /etc/systemd/system/aptly-bridge.path 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/usr/local/sbin/aptly-managed)" /usr/local/sbin/aptly-managed 0750
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/usr/local/sbin/aptly-bridge-processor)" /usr/local/sbin/aptly-bridge-processor 0750
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/usr/local/libexec/aptly-publish-managed)" /usr/local/libexec/aptly-publish-managed 0755
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/usr/local/sbin/glab-helper)" /usr/local/sbin/glab-helper 0755
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/usr/local/sbin/gitlab-runner-managed)" /usr/local/sbin/gitlab-runner-managed 0755
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/data/config/runners/templates/gitlab-runner.service.tmpl)" "${GITLAB_RUNNER_STATE_BASE}/templates/gitlab-runner.service.tmpl" 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/etc/systemd/system/aptly-bridge.service)" /etc/systemd/system/aptly-bridge.service 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/etc/systemd/system/aptly-bridge.path)" /etc/systemd/system/aptly-bridge.path 0644
 
-  render_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/etc/tmpfiles.d/80-gitlab-runner-storage.conf.tmpl)" "/etc/tmpfiles.d/80-gitlab-runner-storage.conf" 0644
+  render_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/etc/tmpfiles.d/80-gitlab-runner-storage.conf.tmpl)" "/etc/tmpfiles.d/80-gitlab-runner-storage.conf" 0644
   target_asset_assert_no_unresolved_installer_placeholders \
     /target/etc/tmpfiles.d/80-gitlab-runner-storage.conf \
     "GitLab runner aptly storage tmpfiles policy"
   normalize_target_tmpfiles_directory_policy "/etc/tmpfiles.d/80-gitlab-runner-storage.conf" "GitLab runner aptly storage"
 
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/pool/aptly/Containerfile)" /pool/aptly/Containerfile 0644
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/pool/aptly/.aptly.conf.template.json)" /pool/aptly/.aptly.conf.template.json 0644
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/pool/aptly/bin/prepare-aptly-env.sh)" /pool/aptly/bin/prepare-aptly-env.sh 0755
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/pool/aptly/bin/aptly)" /pool/aptly/bin/aptly 0755
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB target/pool/aptly/bin/aptly-bridge)" /pool/aptly/bin/aptly-bridge 0755
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/pool/aptly/Containerfile)" /pool/aptly/Containerfile 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/pool/aptly/.aptly.conf.template.json)" /pool/aptly/.aptly.conf.template.json 0644
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/pool/aptly/bin/prepare-aptly-env.sh)" /pool/aptly/bin/prepare-aptly-env.sh 0755
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/pool/aptly/bin/aptly)" /pool/aptly/bin/aptly 0755
+  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SERVICES_GITLAB_RUNNER target/pool/aptly/bin/aptly-bridge)" /pool/aptly/bin/aptly-bridge 0755
 
   install -d -m 0755 /target/etc/systemd/system/multi-user.target.wants
   ln -sfn /etc/systemd/system/aptly-bridge.path /target/etc/systemd/system/multi-user.target.wants/aptly-bridge.path
@@ -539,7 +539,10 @@ gitlab_runner_render_unit() {
   work_dir="${base_dir}/work"
   config_path="${base_dir}/${GITLAB_RUNNER_CONFIG_BASENAME}"
   system_id_path="${base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME}"
-  tmp_dir="/run/user/${runner_uid}/gitlab-runner/tmp"
+  podman_state_root="${GITLAB_RUNNER_PODMAN_STATE_BASE}/${runner_user}"
+  podman_tmp_root="${GITLAB_RUNNER_PODMAN_TMP_BASE}/${runner_user}"
+  tmp_root="/run/user/${runner_uid}/gitlab-runner"
+  tmp_dir="${tmp_root}/tmp"
   buildah_tmpdir="${GITLAB_RUNNER_PODMAN_TMP_BASE}/${runner_user}/tmp"
   template_src="/target${GITLAB_RUNNER_STATE_BASE}/templates/gitlab-runner.service.tmpl"
   rendered_tmp="${TMP_ENV_DIR}/gitlab-runner.${runner_user}.service"
@@ -548,7 +551,7 @@ gitlab_runner_render_unit() {
   # ExecStartPre preflight and ensure-images create and verify BUILDAH_TMPDIR
   # inside the unit sandbox, so it must stay writable even though the broader
   # Podman service configuration remains external to this unit.
-  read_write_paths="${read_write_paths} ${buildah_tmpdir} ${system_id_path}"
+  read_write_paths="${read_write_paths} ${podman_state_root} ${podman_tmp_root} ${tmp_root} ${buildah_tmpdir} ${system_id_path}"
   installer_apply_scalar_placeholders "$template_src" "$rendered_tmp" \
     GITLAB_RUNNER_DESCRIPTION "$description" \
     GITLAB_RUNNER_USER "$runner_user" \
@@ -655,7 +658,7 @@ configure_target_gitlab_runner_if_selected() {
     "$GITLAB_RUNNER_APTLY_GID" \
     "$GITLAB_RUNNER_APTLY_HOME" \
     "GitLab Runner aptly docker executor" \
-    "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}/home ${GITLAB_RUNNER_APTLY_HOME} ${GITLAB_RUNNER_APTLY_BUILDS_DIR} ${GITLAB_RUNNER_APTLY_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_APTLY_CACHE_ROOT} /run/user/${GITLAB_RUNNER_APTLY_UID}/gitlab-runner %t" \
+    "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}/home ${GITLAB_RUNNER_APTLY_HOME} ${GITLAB_RUNNER_APTLY_BUILDS_DIR} ${GITLAB_RUNNER_APTLY_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_APTLY_CACHE_ROOT} ${GITLAB_RUNNER_PODMAN_TMP_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}/gitlab-runner %t" \
     "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"
 
   gitlab_runner_render_unit \
@@ -664,7 +667,7 @@ configure_target_gitlab_runner_if_selected() {
     "$GITLAB_RUNNER_SHARED_GID" \
     "$GITLAB_RUNNER_SHARED_HOME" \
     "GitLab Runner build and task docker executor" \
-    "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/home ${GITLAB_RUNNER_SHARED_HOME} ${GITLAB_RUNNER_BUILD_BUILDS_DIR} ${GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_BUILD_CACHE_ROOT} ${GITLAB_RUNNER_TASK_BUILDS_DIR} ${GITLAB_RUNNER_TASK_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_TASK_CACHE_ROOT} /run/user/${GITLAB_RUNNER_SHARED_UID}/gitlab-runner %t" \
+    "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/home ${GITLAB_RUNNER_SHARED_HOME} ${GITLAB_RUNNER_BUILD_BUILDS_DIR} ${GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_BUILD_CACHE_ROOT} ${GITLAB_RUNNER_TASK_BUILDS_DIR} ${GITLAB_RUNNER_TASK_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_TASK_CACHE_ROOT} ${GITLAB_RUNNER_PODMAN_TMP_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/gitlab-runner %t" \
     "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"
 
   gitlab_runner_verify_target_staging "$GITLAB_RUNNER_APTLY_USERNAME"

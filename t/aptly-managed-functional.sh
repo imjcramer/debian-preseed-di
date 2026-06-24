@@ -3,9 +3,9 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/sbin/aptly-managed"
-PUBLISH_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/usr/local/libexec/aptly-publish-managed"
-APTLY_WRAPPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab/target/pool/aptly/bin/aptly"
+MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/aptly-managed"
+PUBLISH_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/libexec/aptly-publish-managed"
+APTLY_WRAPPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/aptly/bin/aptly"
 
 TEST_COUNT=2
 TEST_INDEX=0

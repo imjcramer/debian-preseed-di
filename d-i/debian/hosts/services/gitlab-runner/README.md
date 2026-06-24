@@ -7,7 +7,7 @@ optional `service/gitlab-runner` class.
 
 The installer copies these files into the target host:
 
-- host policy override source: `hosts/services/gitlab/server.env`
+- host policy override source: `hosts/services/gitlab-runner/server.env`
 - `/etc/default/gitlab-runner/gitlab-runner-shared.env`
 - `/etc/default/gitlab-runner/gitlab-runner-aptly.env`
 - `/etc/default/gitlab-runner/gitlab-runner-build.env`
@@ -36,9 +36,11 @@ Runtime split:
 - `/pool/podman` remains a traversal-only parent instead of a shared devops
   work tree so rootless OCI helpers can still open user-owned graphroots even
   if a helper process does not retain supplemental groups during startup
-- `/run/user/<uid>/run` plus `/run/user/<uid>/libpod/tmp` keep the rootless
-  Podman runtime state and tmp files so `pasta` and other runtime helpers do
-  not try to persist PID files under `/pool`
+- `/pool/podman/<user>/tmp` keeps rootless image-copy and Buildah temp on
+  `/pool`
+- `/run/user/<uid>/run`, `/run/user/<uid>/libpod/tmp`, and
+  `/run/user/<uid>/gitlab-runner/tmp` keep runtime PID/lock/temp state on the
+  designated user runtime filesystem
 
 ## Managed users
 
@@ -150,10 +152,10 @@ Behavior:
   file, and confirms the backend is still rootless over `netavark`
 - `once`: runs `refresh --require-active` and then builds any missing runner
   image after a successful preflight; if the user service is inactive it starts
-  it, and if the service is already active it signals GitLab Runner to reload
-  the updated config without a reboot. A successful `once` now means the user
-  service both reached `active` and stayed active through the configured
-  verification window instead of only blipping active once
+  it, and if the service is already active it restarts it so updated unit
+  sandboxing and managed config take effect immediately. A successful `once`
+  now means the user service both reached `active` and stayed active through
+  the configured verification window instead of only blipping active once
 - `ensure-images`: builds any missing runner image without rewriting config
 
 `refresh --require-active` fails closed when the selected runner has no token.
