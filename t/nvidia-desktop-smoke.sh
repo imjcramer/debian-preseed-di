@@ -100,10 +100,10 @@ else
 fi
 
 waybar_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/waybar/config.tmpl"
-waybar_style="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/waybar/style.css"
+waybar_style_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/waybar/style.css.tmpl"
 if grep -q '"custom/dgpu"' "$waybar_template" &&
-   grep -q '#custom-dgpu' "$waybar_style" &&
-   grep -q 'background-image: url("icons/nvidia.svg");' "$waybar_style"; then
+   grep -q '#custom-dgpu' "$waybar_style_template" &&
+   grep -q 'background-image: url("icons/nvidia.svg");' "$waybar_style_template"; then
   pass "Waybar carries the conditional dGPU module hook and NVIDIA icon styling"
 else
   fail "Waybar carries the conditional dGPU module hook and NVIDIA icon styling"

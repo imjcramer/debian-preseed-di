@@ -5,7 +5,7 @@ ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/desktop-verify-smoke.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 
-TEST_COUNT=47
+TEST_COUNT=48
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -295,7 +295,7 @@ else
 fi
 
 wofi_wrapper="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/usr/local/bin/labwc-wofi"
-wofi_config="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/wofi/config"
+wofi_config_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/wofi/config.tmpl"
 power_menu="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/usr/local/bin/labwc-power-menu"
 power_settings="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/usr/local/bin/labwc-power-settings"
 brightness_menu="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/usr/local/bin/labwc-brightness-control"
@@ -313,8 +313,8 @@ if grep -q '^LABWC_LAUNCHER_COMMAND="labwc-wofi --show drun"$' "$ROOT_DIR/d-i/de
    grep -q 'CPU power profile' "$power_settings" &&
    grep -q 'exec powerprofilesctl set' "$power_settings" &&
    grep -q 'labwc-wofi --dmenu --prompt "Brightness' "$brightness_menu" &&
-   grep -q 'allow_images=true' "$wofi_config" &&
-   grep -q '^image_size=20$' "$wofi_config" &&
+   grep -q 'allow_images=true' "$wofi_config_template" &&
+   grep -q '^image_size=__INSTALLER_LABWC_WOFI_IMAGE_SIZE__$' "$wofi_config_template" &&
    grep -q 'exec wofi "\$@"' "$wofi_wrapper" &&
    grep -q '^systemctl_cmd=$(command -v systemctl)$' "$admin_wrapper" &&
    grep -q 'if "$@"; then' "$admin_wrapper" &&
@@ -546,9 +546,9 @@ if grep -q '"format-ethernet": "🖧 LAN"' "$waybar_template" &&
    grep -q '"icon-size": __INSTALLER_LABWC_WAYBAR_TASKBAR_ICON_SIZE__' "$waybar_template" &&
    grep -q '"icon-size": __INSTALLER_LABWC_WAYBAR_TRAY_ICON_SIZE__' "$waybar_template" &&
    grep -q '"spacing": 4' "$waybar_template" &&
-   grep -q 'LABWC_WAYBAR_HEIGHT 44' "$waybar_generator" &&
-   grep -q 'LABWC_WAYBAR_TASKBAR_ICON_SIZE 18' "$waybar_generator" &&
-   grep -q 'LABWC_WAYBAR_TRAY_ICON_SIZE 16' "$waybar_generator" &&
+   grep -q 'LABWC_WAYBAR_HEIGHT "${LABWC_WAYBAR_HEIGHT:-46}"' "$waybar_generator" &&
+   grep -q 'LABWC_WAYBAR_TASKBAR_ICON_SIZE "${LABWC_WAYBAR_TASKBAR_ICON_SIZE:-20}"' "$waybar_generator" &&
+   grep -q 'LABWC_WAYBAR_TRAY_ICON_SIZE "${LABWC_WAYBAR_TRAY_ICON_SIZE:-18}"' "$waybar_generator" &&
    grep -q '"on-click": "labwc-terminal -e btop"' "$waybar_template" &&
    grep -q '"on-click": "labwc-terminal -e ncdu /"' "$waybar_template" &&
    grep -q '"on-click": "labwc-terminal -e nmtui"' "$waybar_template" &&
@@ -560,18 +560,21 @@ else
   fail "Waybar template wires the requested click actions and the larger panel sizing"
 fi
 
-waybar_style="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/waybar/style.css"
-if grep -q '#custom-keyboard' "$waybar_style" &&
-   grep -q '#custom-dgpu' "$waybar_style" &&
-   grep -q 'background-image: url("icons/nvidia.svg");' "$waybar_style" &&
-   grep -q 'background-size: 9px 9px;' "$waybar_style" &&
-   grep -q 'min-width: 56px;' "$waybar_style" &&
-   grep -q 'margin-left: 1px;' "$waybar_style" &&
-   grep -q 'background: rgba(248, 113, 113, 0.16);' "$waybar_style" &&
-   grep -q '#custom-power:hover' "$waybar_style"; then
-  pass "Waybar right modules use compact fixed sizing and red power styling"
+waybar_style_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/waybar/style.css.tmpl"
+if grep -q '#custom-keyboard' "$waybar_style_template" &&
+   grep -q '#custom-dgpu' "$waybar_style_template" &&
+   grep -q 'font-size: __INSTALLER_LABWC_WAYBAR_FONT_SIZE__px;' "$waybar_style_template" &&
+   grep -q 'background-image: url("icons/nvidia.svg");' "$waybar_style_template" &&
+   grep -q 'background-size: 9px 9px;' "$waybar_style_template" &&
+   grep -q 'min-width: 56px;' "$waybar_style_template" &&
+   grep -q 'margin-left: 1px;' "$waybar_style_template" &&
+   grep -q 'background: rgba(248, 113, 113, 0.16);' "$waybar_style_template" &&
+   grep -q '#custom-power:hover' "$waybar_style_template" &&
+   grep -q '^LABWC_WAYBAR_FONT_SIZE="15"$' "$ROOT_DIR/d-i/debian/hosts/shared/desktop.env" &&
+   grep -q 'waybar/style.css.tmpl' "$waybar_generator"; then
+  pass "Waybar styling stays compact and policy-driven through the managed template"
 else
-  fail "Waybar right modules use compact fixed sizing and red power styling"
+  fail "Waybar styling stays compact and policy-driven through the managed template"
 fi
 
 if grep -q 'monitor.bluez-midi = disabled' "$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/wireplumber/wireplumber.conf.d/10-disable-bluez-midi.conf" &&
@@ -590,7 +593,6 @@ fi
 
 dgpu_launcher="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/usr/local/bin/labwc-dgpu-launcher"
 chromium_flags="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/chromium.d/90-preseed-performance-flags.tmpl"
-wofi_config="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/wofi/config"
 if grep -q 'launch_argv = \["switcherooctl", "launch", "--"\]' "$dgpu_launcher" &&
    grep -q 'drun-print_desktop_file=true' "$dgpu_launcher" &&
    grep -q 'resolve_selection' "$dgpu_launcher" &&
@@ -601,13 +603,39 @@ if grep -q 'launch_argv = \["switcherooctl", "launch", "--"\]' "$dgpu_launcher" 
    grep -q '^CHROMIUM_FLAGS=.*--ozone-platform-hint=auto' "$chromium_flags" &&
    grep -q 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL' "$chromium_flags" &&
    ! grep -q '^CHROMIUM_FLAGS=.*VaapiOnNvidiaGPUs' "$chromium_flags" &&
-   grep -q '^width=680$' "$wofi_config" &&
-   grep -q '^height=540$' "$wofi_config" &&
-   grep -q '^lines=12$' "$wofi_config" &&
-   grep -q '^image_size=20$' "$wofi_config"; then
-  pass "dGPU launcher, Chromium flags, and compact Wofi defaults are staged coherently"
+   grep -q '^width=__INSTALLER_LABWC_WOFI_WIDTH__$' "$wofi_config_template" &&
+   grep -q '^height=__INSTALLER_LABWC_WOFI_HEIGHT__$' "$wofi_config_template" &&
+   grep -q '^lines=12$' "$wofi_config_template" &&
+   grep -q '^image_size=__INSTALLER_LABWC_WOFI_IMAGE_SIZE__$' "$wofi_config_template" &&
+   grep -q 'etc/skel/.config/wofi/config.tmpl' "$desktop_components" &&
+   grep -q 'etc/skel/.config/wofi/style.css.tmpl' "$desktop_components" &&
+   grep -q '^LABWC_WOFI_WIDTH="720"$' "$ROOT_DIR/d-i/debian/hosts/shared/desktop.env" &&
+   grep -q '^LABWC_WOFI_HEIGHT="580"$' "$ROOT_DIR/d-i/debian/hosts/shared/desktop.env" &&
+   grep -q '^LABWC_WOFI_IMAGE_SIZE="22"$' "$ROOT_DIR/d-i/debian/hosts/shared/desktop.env"; then
+  pass "dGPU launcher, Chromium flags, and policy-driven Wofi defaults are staged coherently"
 else
-  fail "dGPU launcher, Chromium flags, and compact Wofi defaults are staged coherently"
+  fail "dGPU launcher, Chromium flags, and policy-driven Wofi defaults are staged coherently"
+fi
+
+gtk3_settings_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/gtk-3.0/settings.ini.tmpl"
+gtk4_settings_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/gtk-4.0/settings.ini.tmpl"
+wlr_labwc_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/labwc/rc.xml.tmpl"
+wofi_style_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/wofi/style.css.tmpl"
+shared_desktop_env="$ROOT_DIR/d-i/debian/hosts/shared/desktop.env"
+if grep -q '^gtk-font-name=Noto Sans __INSTALLER_LABWC_GTK_FONT_SIZE__$' "$gtk3_settings_template" &&
+   grep -q '^gtk-font-name=Noto Sans __INSTALLER_LABWC_GTK_FONT_SIZE__$' "$gtk4_settings_template" &&
+   grep -q '__INSTALLER_LABWC_FONT_WINDOW_SIZE__' "$wlr_labwc_template" &&
+   grep -q '__INSTALLER_LABWC_FONT_MENU_SIZE__' "$wlr_labwc_template" &&
+   grep -q '__INSTALLER_LABWC_FONT_OSD_SIZE__' "$wlr_labwc_template" &&
+   grep -q '^LABWC_FONT_WINDOW_SIZE="12"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_FONT_MENU_SIZE="13"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_FONT_OSD_SIZE="13"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_GTK_FONT_SIZE="12"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_WOFI_FONT_SIZE="15"$' "$shared_desktop_env" &&
+   grep -q '^  font-size: __INSTALLER_LABWC_WOFI_FONT_SIZE__px;$' "$wofi_style_template"; then
+  pass "GTK, Labwc, and Wofi text defaults are policy-driven without scaling"
+else
+  fail "GTK, Labwc, and Wofi text defaults are policy-driven without scaling"
 fi
 
 profile_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.profile"

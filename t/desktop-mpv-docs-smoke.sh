@@ -24,7 +24,8 @@ desktop_packages="$ROOT_DIR/d-i/debian/classes/class-select/role/desktop.cfg"
 desktop_components="$ROOT_DIR/d-i/debian/scripts/desktop/components.sh"
 firstboot_validation="$ROOT_DIR/d-i/debian/scripts/firstboot/04-validation.sh"
 gtkgreet_css="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/greetd/gtkgreet.css"
-crystal_dock_appearance="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/crystal-dock/labwc/appearance.conf"
+crystal_dock_appearance_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/crystal-dock/labwc/appearance.conf.tmpl"
+shared_desktop_env="$ROOT_DIR/d-i/debian/hosts/shared/desktop.env"
 mpv_conf="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/mpv/mpv.conf"
 mpv_input="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/mpv/input.conf"
 target_assets="$ROOT_DIR/d-i/debian/scripts/late/target-assets.sh"
@@ -101,17 +102,24 @@ else
   fail "staged podbin docs cover lifecycle, service bridge, and troubleshooting"
 fi
 
-if grep -q '^minimumIconSize=42$' "$crystal_dock_appearance" &&
-   grep -q '^maximumIconSize=68$' "$crystal_dock_appearance" &&
-   grep -q '^spacingFactor=0.56$' "$crystal_dock_appearance" &&
-   grep -q '^tooltipFontSize=12$' "$crystal_dock_appearance" &&
-   grep -q '^floatingMargin=5$' "$crystal_dock_appearance" &&
-   grep -q '^iconSize=34$' "$crystal_dock_appearance" &&
-   grep -q '^fontSize=14$' "$crystal_dock_appearance" &&
-   grep -q '^fontScaleFactor=0.92$' "$crystal_dock_appearance"; then
-  pass "crystal dock defaults use a larger icon and label scale"
+if grep -q '^minimumIconSize=__INSTALLER_LABWC_CRYSTAL_DOCK_MINIMUM_ICON_SIZE__$' "$crystal_dock_appearance_template" &&
+   grep -q '^maximumIconSize=__INSTALLER_LABWC_CRYSTAL_DOCK_MAXIMUM_ICON_SIZE__$' "$crystal_dock_appearance_template" &&
+   grep -q '^spacingFactor=0.56$' "$crystal_dock_appearance_template" &&
+   grep -q '^tooltipFontSize=__INSTALLER_LABWC_CRYSTAL_DOCK_TOOLTIP_FONT_SIZE__$' "$crystal_dock_appearance_template" &&
+   grep -q '^floatingMargin=5$' "$crystal_dock_appearance_template" &&
+   grep -q '^iconSize=__INSTALLER_LABWC_CRYSTAL_DOCK_APP_MENU_ICON_SIZE__$' "$crystal_dock_appearance_template" &&
+   grep -q '^fontSize=__INSTALLER_LABWC_CRYSTAL_DOCK_APP_MENU_FONT_SIZE__$' "$crystal_dock_appearance_template" &&
+   grep -q '^fontScaleFactor=__INSTALLER_LABWC_CRYSTAL_DOCK_CLOCK_FONT_SCALE_FACTOR__$' "$crystal_dock_appearance_template" &&
+   grep -q '^LABWC_CRYSTAL_DOCK_MINIMUM_ICON_SIZE="50"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_CRYSTAL_DOCK_MAXIMUM_ICON_SIZE="80"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_CRYSTAL_DOCK_TOOLTIP_FONT_SIZE="13"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_CRYSTAL_DOCK_APP_MENU_ICON_SIZE="40"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_CRYSTAL_DOCK_APP_MENU_FONT_SIZE="15"$' "$shared_desktop_env" &&
+   grep -q '^LABWC_CRYSTAL_DOCK_CLOCK_FONT_SCALE_FACTOR="1.0"$' "$shared_desktop_env" &&
+   grep -q 'appearance.conf.tmpl' "$desktop_components"; then
+  pass "crystal dock sizing is policy-driven through the managed appearance template"
 else
-  fail "crystal dock defaults use a larger icon and label scale"
+  fail "crystal dock sizing is policy-driven through the managed appearance template"
 fi
 
 if grep -q '^sudo podbin --create-user alice$' "$podbin_doc" &&

@@ -656,9 +656,9 @@ desktop_render_labwc_rc_xml() {
     LABWC_ICON_THEME "$(desktop_xml_attribute_escape "${LABWC_ICON_THEME:-Papirus-Dark}")" \
     LABWC_FILE_MANAGER_COMMAND "$(desktop_xml_attribute_escape "${LABWC_FILE_MANAGER_COMMAND:-thunar}")" \
     LABWC_AUDIO_CONTROL_COMMAND "$(desktop_xml_attribute_escape "${LABWC_AUDIO_CONTROL_COMMAND:-pavucontrol}")" \
-    LABWC_FONT_WINDOW_SIZE 11 \
-    LABWC_FONT_MENU_SIZE 12 \
-    LABWC_FONT_OSD_SIZE 12
+    LABWC_FONT_WINDOW_SIZE "${LABWC_FONT_WINDOW_SIZE:-12}" \
+    LABWC_FONT_MENU_SIZE "${LABWC_FONT_MENU_SIZE:-13}" \
+    LABWC_FONT_OSD_SIZE "${LABWC_FONT_OSD_SIZE:-13}"
   desktop_replace_block_placeholder_in_target \
     "$rc_path" \
     "__INSTALLER_LABWC_WORKSPACE_NAME_LINES__" \
@@ -685,15 +685,82 @@ desktop_render_waybar_config() {
     "$waybar_path" \
     0644 \
     LABWC_WAYBAR_NAME main \
-    LABWC_WAYBAR_HEIGHT 44 \
-    LABWC_WAYBAR_TASKBAR_ICON_SIZE 18 \
-    LABWC_WAYBAR_TRAY_ICON_SIZE 16 \
+    LABWC_WAYBAR_HEIGHT "${LABWC_WAYBAR_HEIGHT:-46}" \
+    LABWC_WAYBAR_TASKBAR_ICON_SIZE "${LABWC_WAYBAR_TASKBAR_ICON_SIZE:-20}" \
+    LABWC_WAYBAR_TRAY_ICON_SIZE "${LABWC_WAYBAR_TRAY_ICON_SIZE:-18}" \
     LABWC_FILE_MANAGER_COMMAND "$(desktop_double_quote_escape "${LABWC_FILE_MANAGER_COMMAND:-thunar}")" \
     LABWC_CALENDAR_COMMAND "$(desktop_double_quote_escape "${LABWC_CALENDAR_COMMAND:-labwc-calendar}")" \
     LABWC_AUDIO_CONTROL_COMMAND "$(desktop_double_quote_escape "${LABWC_AUDIO_CONTROL_COMMAND:-pavucontrol}")" \
     LABWC_BRIGHTNESS_CONTROL_COMMAND "$(desktop_double_quote_escape "${LABWC_BRIGHTNESS_CONTROL_COMMAND:-labwc-brightness-control}")" \
     LABWC_POWER_SETTINGS_COMMAND "$(desktop_double_quote_escape "${LABWC_POWER_SETTINGS_COMMAND:-labwc-power-settings}")"
   desktop_log "rendered_waybar_config native_workspaces=true"
+}
+
+desktop_render_waybar_style() {
+  desktop_render_role_target_template \
+    "etc/skel/.config/waybar/style.css.tmpl" \
+    "/etc/skel/.config/waybar/style.css" \
+    0644 \
+    LABWC_WAYBAR_FONT_SIZE "${LABWC_WAYBAR_FONT_SIZE:-15}"
+  desktop_log "rendered_waybar_style font_size=${LABWC_WAYBAR_FONT_SIZE:-15}"
+}
+
+desktop_render_gtk_settings() {
+  gtk_font_size=${LABWC_GTK_FONT_SIZE:-12}
+
+  for gtk_variant in 3 4; do
+    template_path="etc/skel/.config/gtk-${gtk_variant}.0/settings.ini.tmpl"
+    desktop_render_role_target_template \
+      "$template_path" \
+      "/etc/skel/.config/gtk-${gtk_variant}.0/settings.ini" \
+      0644 \
+      LABWC_GTK_FONT_SIZE "$gtk_font_size"
+    desktop_render_role_target_template \
+      "$template_path" \
+      "/etc/xdg/gtk-${gtk_variant}.0/settings.ini" \
+      0644 \
+      LABWC_GTK_FONT_SIZE "$gtk_font_size"
+  done
+  desktop_log "rendered_gtk_settings font_size=${gtk_font_size}"
+}
+
+desktop_render_wofi_config() {
+  desktop_render_role_target_template \
+    "etc/skel/.config/wofi/config.tmpl" \
+    "/etc/skel/.config/wofi/config" \
+    0644 \
+    LABWC_WOFI_WIDTH "${LABWC_WOFI_WIDTH:-720}" \
+    LABWC_WOFI_HEIGHT "${LABWC_WOFI_HEIGHT:-580}" \
+    LABWC_WOFI_IMAGE_SIZE "${LABWC_WOFI_IMAGE_SIZE:-22}"
+  desktop_log "rendered_wofi_config width=${LABWC_WOFI_WIDTH:-720} height=${LABWC_WOFI_HEIGHT:-580}"
+}
+
+desktop_render_wofi_style() {
+  desktop_render_role_target_template \
+    "etc/skel/.config/wofi/style.css.tmpl" \
+    "/etc/skel/.config/wofi/style.css" \
+    0644 \
+    LABWC_WOFI_FONT_SIZE "${LABWC_WOFI_FONT_SIZE:-15}"
+  desktop_log "rendered_wofi_style font_size=${LABWC_WOFI_FONT_SIZE:-15}"
+}
+
+desktop_render_crystal_dock_appearance() {
+  for target_path in \
+    /etc/skel/.config/crystal-dock/labwc/appearance.conf \
+    /etc/xdg/crystal-dock/labwc/appearance.conf
+  do
+    desktop_render_role_target_template \
+      "etc/skel/.config/crystal-dock/labwc/appearance.conf.tmpl" \
+      "$target_path" \
+      0644 \
+      LABWC_CRYSTAL_DOCK_MINIMUM_ICON_SIZE "${LABWC_CRYSTAL_DOCK_MINIMUM_ICON_SIZE:-50}" \
+      LABWC_CRYSTAL_DOCK_MAXIMUM_ICON_SIZE "${LABWC_CRYSTAL_DOCK_MAXIMUM_ICON_SIZE:-80}" \
+      LABWC_CRYSTAL_DOCK_TOOLTIP_FONT_SIZE "${LABWC_CRYSTAL_DOCK_TOOLTIP_FONT_SIZE:-13}" \
+      LABWC_CRYSTAL_DOCK_APP_MENU_ICON_SIZE "${LABWC_CRYSTAL_DOCK_APP_MENU_ICON_SIZE:-40}" \
+      LABWC_CRYSTAL_DOCK_APP_MENU_FONT_SIZE "${LABWC_CRYSTAL_DOCK_APP_MENU_FONT_SIZE:-15}" \
+      LABWC_CRYSTAL_DOCK_CLOCK_FONT_SCALE_FACTOR "${LABWC_CRYSTAL_DOCK_CLOCK_FONT_SCALE_FACTOR:-1.0}"
+  done
+  desktop_log "rendered_crystal_dock_appearance min_icon=${LABWC_CRYSTAL_DOCK_MINIMUM_ICON_SIZE:-50} max_icon=${LABWC_CRYSTAL_DOCK_MAXIMUM_ICON_SIZE:-80}"
 }
 
 desktop_render_chromium_flags() {
@@ -832,7 +899,7 @@ desktop_stage_target_assets() {
   desktop_render_labwc_rc_xml
   desktop_stage_role_asset etc/skel/.config/labwc/menu.xml /etc/skel/.config/labwc/menu.xml 0644
   desktop_render_waybar_config
-  desktop_stage_role_asset etc/skel/.config/waybar/style.css /etc/skel/.config/waybar/style.css 0644
+  desktop_render_waybar_style
   desktop_stage_role_asset etc/skel/.config/waybar/icons/nvidia.svg /etc/skel/.config/waybar/icons/nvidia.svg 0644
   desktop_stage_role_asset etc/skel/.config/kanshi/config /etc/skel/.config/kanshi/config 0644
   desktop_stage_role_asset etc/skel/.config/foot/foot.ini /etc/skel/.config/foot/foot.ini 0644
@@ -850,21 +917,17 @@ desktop_stage_target_assets() {
   desktop_stage_role_asset etc/skel/.config/starship.toml /etc/skel/.config/starship.toml 0644
   desktop_stage_role_asset etc/skel/btop/btop.conf /etc/skel/.config/btop/btop.conf 0644
   desktop_stage_role_asset etc/skel/fzf/default-opts /etc/skel/.config/fzf/default-opts 0644
-  desktop_stage_role_asset etc/skel/.config/wofi/config /etc/skel/.config/wofi/config 0644
-  desktop_stage_role_asset etc/skel/.config/wofi/style.css /etc/skel/.config/wofi/style.css 0644
+  desktop_render_wofi_config
+  desktop_render_wofi_style
   desktop_stage_role_asset etc/skel/.config/wofi/colors /etc/skel/.config/wofi/colors 0644
   desktop_stage_role_asset etc/skel/.config/Thunar/uca.xml /etc/skel/.config/Thunar/uca.xml 0644
-  desktop_stage_role_asset etc/skel/.config/crystal-dock/labwc/appearance.conf /etc/skel/.config/crystal-dock/labwc/appearance.conf 0644
+  desktop_render_crystal_dock_appearance
   desktop_stage_role_asset etc/skel/.config/crystal-dock/labwc/panel_1.conf /etc/skel/.config/crystal-dock/labwc/panel_1.conf 0644
-  desktop_stage_role_asset etc/skel/.config/crystal-dock/labwc/appearance.conf /etc/xdg/crystal-dock/labwc/appearance.conf 0644
   desktop_stage_role_asset etc/skel/.config/crystal-dock/labwc/panel_1.conf /etc/xdg/crystal-dock/labwc/panel_1.conf 0644
   desktop_stage_role_asset etc/skel/.config/mako/config /etc/skel/.config/mako/config 0644
   desktop_stage_role_asset etc/skel/.config/swaylock/config /etc/skel/.config/swaylock/config 0644
   desktop_stage_role_asset etc/skel/.config/wireplumber/wireplumber.conf.d/10-disable-bluez-midi.conf /etc/skel/.config/wireplumber/wireplumber.conf.d/10-disable-bluez-midi.conf 0644
-  desktop_stage_role_asset etc/skel/.config/gtk-3.0/settings.ini /etc/skel/.config/gtk-3.0/settings.ini 0644
-  desktop_stage_role_asset etc/skel/.config/gtk-4.0/settings.ini /etc/skel/.config/gtk-4.0/settings.ini 0644
-  desktop_stage_role_asset etc/skel/.config/gtk-3.0/settings.ini /etc/xdg/gtk-3.0/settings.ini 0644
-  desktop_stage_role_asset etc/skel/.config/gtk-4.0/settings.ini /etc/xdg/gtk-4.0/settings.ini 0644
+  desktop_render_gtk_settings
   desktop_stage_role_asset etc/skel/.config/qt6ct/qt6ct.conf /etc/skel/.config/qt6ct/qt6ct.conf 0644
   desktop_stage_role_asset etc/skel/.config/kwalletrc /etc/skel/.config/kwalletrc 0644
   desktop_stage_role_asset etc/skel/.config/xdg-desktop-portal/portals.conf /etc/skel/.config/xdg-desktop-portal/portals.conf 0644
