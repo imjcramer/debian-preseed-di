@@ -50,12 +50,10 @@ gitlab_runner_load_envs() {
   GITLAB_RUNNER_SHARED_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-shared.env"
   GITLAB_RUNNER_APTLY_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-aptly.env"
   GITLAB_RUNNER_BUILD_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-build.env"
-  GITLAB_RUNNER_TASK_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-task.env"
 
   gitlab_runner_fetch_env gitlab-runner/gitlab-runner-shared.env "$GITLAB_RUNNER_SHARED_SOURCE_ENV"
   gitlab_runner_fetch_env gitlab-runner/gitlab-runner-aptly.env "$GITLAB_RUNNER_APTLY_SOURCE_ENV"
   gitlab_runner_fetch_env gitlab-runner/gitlab-runner-build.env "$GITLAB_RUNNER_BUILD_SOURCE_ENV"
-  gitlab_runner_fetch_env gitlab-runner/gitlab-runner-task.env "$GITLAB_RUNNER_TASK_SOURCE_ENV"
 
   # shellcheck disable=SC1090,SC1091
   . "$GITLAB_RUNNER_SHARED_SOURCE_ENV"
@@ -63,8 +61,6 @@ gitlab_runner_load_envs() {
   . "$GITLAB_RUNNER_APTLY_SOURCE_ENV"
   # shellcheck disable=SC1090,SC1091
   . "$GITLAB_RUNNER_BUILD_SOURCE_ENV"
-  # shellcheck disable=SC1090,SC1091
-  . "$GITLAB_RUNNER_TASK_SOURCE_ENV"
 
   gitlab_runner_require_abs_path GITLAB_RUNNER_ENV_DIR "${GITLAB_RUNNER_ENV_DIR:-}"
   gitlab_runner_require_abs_path GITLAB_RUNNER_STATE_BASE "${GITLAB_RUNNER_STATE_BASE:-}"
@@ -75,9 +71,7 @@ gitlab_runner_load_envs() {
   [ -n "${GITLAB_RUNNER_CACHE_DIR_NAMES:-}" ] || installer_fatal "GITLAB_RUNNER_CACHE_DIR_NAMES must not be empty"
   podman_require_positive_uint GITLAB_RUNNER_START_TIMEOUT_SECONDS "${GITLAB_RUNNER_START_TIMEOUT_SECONDS:-1200}"
   gitlab_runner_validate_username GITLAB_RUNNER_APTLY_USERNAME "${GITLAB_RUNNER_APTLY_USERNAME:-}"
-  gitlab_runner_validate_username GITLAB_RUNNER_APTLY_OWNER_USERNAME "${GITLAB_RUNNER_APTLY_OWNER_USERNAME:-}"
   gitlab_runner_validate_username GITLAB_RUNNER_BUILD_USERNAME "${GITLAB_RUNNER_BUILD_USERNAME:-}"
-  gitlab_runner_validate_username GITLAB_RUNNER_TASK_USERNAME "${GITLAB_RUNNER_TASK_USERNAME:-}"
   [ -n "${GITLAB_RUNNER_CONFIG_GROUP:-}" ] || installer_fatal "GITLAB_RUNNER_CONFIG_GROUP must not be empty"
   case "${GITLAB_RUNNER_CONTROL_DIR_MODE:-0750}" in
     [0-7][0-7][0-7][0-7]|[0-7][0-7][0-7]) ;;
@@ -87,74 +81,7 @@ gitlab_runner_load_envs() {
     [0-7][0-7][0-7][0-7]|[0-7][0-7][0-7]) ;;
     *) installer_fatal "GITLAB_RUNNER_CONTROL_FILE_MODE must be an octal mode" ;;
   esac
-  [ "${GITLAB_RUNNER_BUILD_USERNAME}" = "${GITLAB_RUNNER_TASK_USERNAME}" ] ||
-    installer_fatal "gitlab build and task runners must share the same managed user"
   GITLAB_RUNNER_ENVS_LOADED=1
-}
-
-gitlab_runner_ensure_locked_service_account() {
-  service_user=$1
-  service_home=$2
-  service_shell=$3
-  service_comment=$4
-
-  gitlab_runner_validate_username service_user "$service_user"
-  gitlab_runner_require_abs_path service_home "$service_home"
-
-  run_in_target "ensure managed service account ${service_user}" /bin/sh -eu -c '
-set -eu
-service_user=$1
-service_home=$2
-service_shell=$3
-service_comment=$4
-
-uid_min=$(awk '"'"'$1 == "UID_MIN" && $2 ~ /^[0-9]+$/ { print $2; exit }'"'"' /etc/login.defs 2>/dev/null || true)
-[ -n "$uid_min" ] || uid_min=1000
-
-if getent passwd "$service_user" >/dev/null 2>&1; then
-  passwd_entry=$(getent passwd "$service_user")
-  current_uid=$(printf "%s\n" "$passwd_entry" | cut -d: -f3)
-  current_gid=$(printf "%s\n" "$passwd_entry" | cut -d: -f4)
-  current_home=$(printf "%s\n" "$passwd_entry" | cut -d: -f6)
-  current_shell=$(printf "%s\n" "$passwd_entry" | cut -d: -f7)
-  current_group=$(getent group "$current_gid" | cut -d: -f1)
-  [ "$current_uid" -lt "$uid_min" ] || {
-    printf "fatal: refusing to reuse login-class account for managed service user: %s\n" "$service_user" >&2
-    exit 1
-  }
-  [ "$current_group" = "$service_user" ] || {
-    printf "fatal: managed service user primary group must be %s, found %s\n" "$service_user" "$current_group" >&2
-    exit 1
-  }
-  [ "$current_home" = "$service_home" ] || usermod -d "$service_home" -- "$service_user"
-  [ "$current_shell" = "$service_shell" ] || usermod -s "$service_shell" -- "$service_user"
-  gecos=$(printf "%s\n" "$passwd_entry" | cut -d: -f5)
-  [ "$gecos" = "$service_comment" ] || usermod -c "$service_comment" -- "$service_user"
-else
-  groupadd --force --system -- "$service_user"
-  useradd --system -g "$service_user" -M -d "$service_home" -s "$service_shell" -c "$service_comment" -- "$service_user"
-fi
-
-install -d -m 0700 -o "$service_user" -g "$service_user" "$service_home"
-
-shadow_hash=$(awk -F: -v wanted_user="$service_user" '"'"'$1 == wanted_user { print $2; found=1; exit } END { if (!found) exit 1 }'"'"' /etc/shadow 2>/dev/null || true)
-[ -n "$shadow_hash" ] || {
-  printf "fatal: managed service user shadow entry is missing: %s\n" "$service_user" >&2
-  exit 1
-}
-
-case "$shadow_hash" in
-  '!'*|'*')
-    ;;
-  *)
-    usermod -p "!" -- "$service_user"
-    ;;
-esac
-' sh \
-    "$service_user" \
-    "$service_home" \
-    "$service_shell" \
-    "$service_comment"
 }
 
 gitlab_runner_mask_target_system_service() {
@@ -189,12 +116,12 @@ gitlab_runner_stage_target_envs() {
   stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-shared.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env" 0644
   stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-aptly.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env" 0640
   stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-build.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" 0640
-  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-task.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env" 0640
+  rm -f -- "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env"
 
   chown root:root "/target${GITLAB_RUNNER_ENV_DIR}/README.md"
   chown root:root "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env"
   chown "root:${GITLAB_RUNNER_APTLY_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env"
-  chown "root:${GITLAB_RUNNER_SHARED_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env"
+  chown "root:${GITLAB_RUNNER_SHARED_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env"
 }
 
 gitlab_runner_verify_target_env_path() {
@@ -266,7 +193,8 @@ env_dir_mode=$3
   gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env" 0 644
   gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env" "$GITLAB_RUNNER_APTLY_GID" 640
   gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" "$GITLAB_RUNNER_SHARED_GID" 640
-  gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env" "$GITLAB_RUNNER_SHARED_GID" 640
+  [ ! -e "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env" ] ||
+    installer_fatal "legacy gitlab-runner-task.env must not remain staged"
 }
 
 gitlab_runner_stage_service_assets() {
@@ -488,10 +416,9 @@ for runner_user in "$@"; do
   seen="${seen}${runner_user} "
   usermod -a -G "$group_name" -- "$runner_user"
 done
-' sh devops \
+  ' sh devops \
     "$GITLAB_RUNNER_APTLY_USERNAME" \
-    "$GITLAB_RUNNER_BUILD_USERNAME" \
-    "$GITLAB_RUNNER_TASK_USERNAME"
+    "$GITLAB_RUNNER_BUILD_USERNAME"
 }
 
 gitlab_runner_prepare_cache_root() {
@@ -612,7 +539,6 @@ configure_target_gitlab_runner_if_selected() {
   gitlab_runner_configure_podman_user "$GITLAB_RUNNER_APTLY_USERNAME"
   gitlab_runner_configure_podman_user "$GITLAB_RUNNER_BUILD_USERNAME"
   gitlab_runner_add_managed_users_to_devops_group
-  gitlab_runner_ensure_locked_service_account "$GITLAB_RUNNER_APTLY_OWNER_USERNAME" "${GITLAB_RUNNER_USER_HOME_BASE}/${GITLAB_RUNNER_APTLY_OWNER_USERNAME}" /usr/sbin/nologin "Managed Aptly publisher account"
 
   GITLAB_RUNNER_CONTROL_GID=$(gitlab_runner_target_group_gid "$GITLAB_RUNNER_CONFIG_GROUP")
   [ -n "$GITLAB_RUNNER_CONTROL_GID" ] || installer_fatal "target GitLab runner control group is missing: ${GITLAB_RUNNER_CONFIG_GROUP}"
@@ -623,13 +549,6 @@ configure_target_gitlab_runner_if_selected() {
   aptly_record_rest=${aptly_record#*:}
   GITLAB_RUNNER_APTLY_GID=${aptly_record_rest%%:*}
   GITLAB_RUNNER_APTLY_HOME=${aptly_record_rest#*:}
-
-  aptly_owner_record=$(gitlab_runner_target_passwd_record "$GITLAB_RUNNER_APTLY_OWNER_USERNAME")
-  [ -n "$aptly_owner_record" ] || installer_fatal "target Aptly owner user is missing: ${GITLAB_RUNNER_APTLY_OWNER_USERNAME}"
-  GITLAB_RUNNER_APTLY_OWNER_UID=${aptly_owner_record%%:*}
-  aptly_owner_record_rest=${aptly_owner_record#*:}
-  GITLAB_RUNNER_APTLY_OWNER_GID=${aptly_owner_record_rest%%:*}
-  GITLAB_RUNNER_APTLY_OWNER_HOME=${aptly_owner_record_rest#*:}
 
   shared_record=$(gitlab_runner_target_passwd_record "$GITLAB_RUNNER_BUILD_USERNAME")
   [ -n "$shared_record" ] || installer_fatal "target shared GitLab runner user is missing: ${GITLAB_RUNNER_BUILD_USERNAME}"
@@ -644,8 +563,6 @@ configure_target_gitlab_runner_if_selected() {
     "$GITLAB_RUNNER_APTLY_BUILDS_DIR" "$GITLAB_RUNNER_APTLY_GITLAB_CACHE_DIR" "$GITLAB_RUNNER_APTLY_CACHE_ROOT"
   gitlab_runner_prepare_runner_paths "$GITLAB_RUNNER_BUILD_USERNAME" "$GITLAB_RUNNER_SHARED_UID" "$GITLAB_RUNNER_SHARED_GID" \
     "$GITLAB_RUNNER_BUILD_BUILDS_DIR" "$GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR" "$GITLAB_RUNNER_BUILD_CACHE_ROOT"
-  gitlab_runner_prepare_runner_paths "$GITLAB_RUNNER_TASK_USERNAME" "$GITLAB_RUNNER_SHARED_UID" "$GITLAB_RUNNER_SHARED_GID" \
-    "$GITLAB_RUNNER_TASK_BUILDS_DIR" "$GITLAB_RUNNER_TASK_GITLAB_CACHE_DIR" "$GITLAB_RUNNER_TASK_CACHE_ROOT"
 
   gitlab_runner_stage_service_assets
   gitlab_runner_stage_target_envs
@@ -666,8 +583,8 @@ configure_target_gitlab_runner_if_selected() {
     "$GITLAB_RUNNER_SHARED_UID" \
     "$GITLAB_RUNNER_SHARED_GID" \
     "$GITLAB_RUNNER_SHARED_HOME" \
-    "GitLab Runner build and task docker executor" \
-    "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/home ${GITLAB_RUNNER_SHARED_HOME} ${GITLAB_RUNNER_BUILD_BUILDS_DIR} ${GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_BUILD_CACHE_ROOT} ${GITLAB_RUNNER_TASK_BUILDS_DIR} ${GITLAB_RUNNER_TASK_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_TASK_CACHE_ROOT} ${GITLAB_RUNNER_PODMAN_TMP_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/gitlab-runner %t" \
+    "GitLab Runner build docker executor" \
+    "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/home ${GITLAB_RUNNER_SHARED_HOME} ${GITLAB_RUNNER_BUILD_BUILDS_DIR} ${GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_BUILD_CACHE_ROOT} ${GITLAB_RUNNER_PODMAN_TMP_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/gitlab-runner %t" \
     "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"
 
   gitlab_runner_verify_target_staging "$GITLAB_RUNNER_APTLY_USERNAME"

@@ -69,19 +69,18 @@ load_envs() {
 
   validate_absolute_path GITLAB_RUNNER_USER_HOME_BASE "${GITLAB_RUNNER_USER_HOME_BASE:-}"
   validate_username GITLAB_RUNNER_APTLY_USERNAME "${GITLAB_RUNNER_APTLY_USERNAME:-}"
-  validate_username GITLAB_RUNNER_APTLY_OWNER_USERNAME "${GITLAB_RUNNER_APTLY_OWNER_USERNAME:-}"
 
   requested_runner_user="${requested_runner_user:-${GITLAB_RUNNER_APTLY_USERNAME}}"
   [[ "$requested_runner_user" == "$GITLAB_RUNNER_APTLY_USERNAME" ]] ||
     die "unsupported runner user for Aptly control path: ${requested_runner_user}"
 
-  publish_user="${GITLAB_RUNNER_APTLY_OWNER_USERNAME}"
+  publish_user="${GITLAB_RUNNER_APTLY_USERNAME}"
   publish_home="${GITLAB_RUNNER_USER_HOME_BASE}/${publish_user}"
   validate_absolute_path publish_home "$publish_home"
   publish_passwd="$(getent passwd "$publish_user" || true)"
-  [[ -n "$publish_passwd" ]] || die "managed Aptly owner user is missing from passwd: ${publish_user}"
+  [[ -n "$publish_passwd" ]] || die "managed Aptly runner user is missing from passwd: ${publish_user}"
   IFS=: read -r _pub_name _pub_passwd publish_uid publish_gid _pub_gecos publish_home_actual _pub_shell <<<"$publish_passwd"
-  [[ "$publish_home_actual" == "$publish_home" ]] || die "managed Aptly owner home drifted from ${publish_home}: ${publish_home_actual}"
+  [[ "$publish_home_actual" == "$publish_home" ]] || die "managed Aptly runner home drifted from ${publish_home}: ${publish_home_actual}"
 
   APTLY_STATE_DIR="${APTLY_STATE_DIR:-$APTLY_STATE_DIR_DEFAULT}"
   APTLY_ROOT_DIR="${APTLY_ROOT_DIR:-$APTLY_ROOT_DIR_DEFAULT}"
@@ -223,7 +222,7 @@ write_publish_env_file() {
   append_shell_export "$env_file" GPG_SIGNING_KEY "${GPG_SIGNING_KEY}"
   append_shell_export "$env_file" GPG_SIGNING_PASSPHRASE "${GPG_SIGNING_PASSPHRASE}"
   append_shell_export "$env_file" APTLY_ALLOW_PUBLISH "true"
-  append_shell_export "$env_file" APTLY_JOB_TMP_BASE "/tmp/aptly-managed"
+  append_shell_export "$env_file" APTLY_JOB_TMP_BASE "${TMPDIR:-/tmp}/aptly-managed"
   if [[ -n "${APTLY_REAL_BIN:-}" ]]; then
     append_shell_export "$env_file" APTLY_REAL_BIN "${APTLY_REAL_BIN}"
   fi

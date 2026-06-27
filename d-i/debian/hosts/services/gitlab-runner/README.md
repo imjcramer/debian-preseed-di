@@ -11,7 +11,6 @@ The installer copies these files into the target host:
 - `/etc/default/gitlab-runner/gitlab-runner-shared.env`
 - `/etc/default/gitlab-runner/gitlab-runner-aptly.env`
 - `/etc/default/gitlab-runner/gitlab-runner-build.env`
-- `/etc/default/gitlab-runner/gitlab-runner-task.env`
 - `/etc/default/gitlab-runner/README.md`
 
 The shared env file sets the managed state roots:
@@ -45,13 +44,11 @@ Runtime split:
 ## Managed users
 
 - `glab-aptly`: dedicated Aptly publishing runner
-- `glab-user`: shared build and task runner user
-- `aptly`: dedicated Aptly state and signing owner
+- `glab-user`: shared build runner user
 
-The Aptly runner and the shared runner use separate user services. The build
-and task stanzas share the same `glab-user` account and one `gitlab-runner`
-user service. Persistent Aptly state and signing material are now owned by the
-separate `aptly` account instead of `glab-aptly`.
+The Aptly runner and the shared build runner use separate user services.
+Persistent Aptly state, signing material, and the in-container Aptly/sbuild
+workflows now stay on the dedicated `glab-aptly` account end to end.
 
 These managed users are intentionally provisioned with `/usr/sbin/nologin`.
 That means `sudo -iu glab-user` is expected to fail and is not the supported
@@ -80,15 +77,12 @@ paths that contain the secret payload:
 - `GITLAB_RUNNER_APTLY_GPG_SIGNING_KEY`
 - `GITLAB_RUNNER_APTLY_GPG_SIGNING_PASSPHRASE`
 
-The build and task tokens may also be provided as literal values or absolute
-file paths:
+The build token may also be provided as a literal value or absolute file path:
 
 - `GITLAB_RUNNER_BUILD_TOKEN`
-- `GITLAB_RUNNER_TASK_TOKEN`
 
-For the shared `glab-user` service, the build and task env files are evaluated
-independently. A blank token disables only that runner stanza; the helper keeps
-any sibling stanza whose token is populated.
+For the shared `glab-user` service, a blank build token disables the rendered
+runner stanza and `refresh --require-active` fails closed.
 
 ## Helper commands
 
@@ -156,7 +150,9 @@ Behavior:
   sandboxing and managed config take effect immediately. A successful `once`
   now means the user service both reached `active` and stayed active through
   the configured verification window instead of only blipping active once
-- `ensure-images`: builds any missing runner image without rewriting config
+- `ensure-images`: builds any missing runner image and ensures the Aptly runner
+  has local `stable` and `unstable` unshare tarballs plus a managed
+  `~/.config/sbuild/config.pl`
 
 `refresh --require-active` fails closed when the selected runner has no token.
 That is intentional and prevents starting an empty service definition.
@@ -170,7 +166,9 @@ instead of `sudo -iu <user>` for diagnostics and lifecycle operations.
 ## Aptly notes
 
 The Aptly runner stages its container build context under `/pool/aptly` and
-bind-mounts that path into the job container. CI jobs can still run
+bind-mounts that path into the job container. Its rendered Docker-executor
+config uses Podman `keep-id`, so Aptly jobs run as `glab-aptly` inside the
+container instead of root. CI jobs can still run
 `aptly publish ...`, but the mounted wrapper now submits that request into a
 host-side queue that is processed by `aptly-bridge.path` and
 `aptly-bridge.service` through the controlled host helper. The generated Aptly
@@ -178,7 +176,7 @@ config is written to:
 
 - `/pool/aptly/.aptly.conf`
 
-with ownership `aptly:aptly` and mode `0600`.
+with ownership `glab-aptly:glab-aptly` and mode `0600`.
 
 Use the controlled helper for Aptly publication and signing:
 
@@ -223,6 +221,9 @@ Expected config paths:
 
 - `/data/config/runners/glab-aptly/config.toml`
 - `/data/config/runners/glab-aptly/.runner_system_id`
+- `/data/config/runners/glab-aptly/home/.config/sbuild/config.pl`
+- `/pool/cache/aptly/tools/sbuild/stable-amd64-sbuild.tar.gz`
+- `/pool/cache/aptly/tools/sbuild/unstable-amd64-sbuild.tar.gz`
 - `/data/config/runners/glab-user/config.toml`
 - `/data/config/runners/glab-user/.runner_system_id`
 

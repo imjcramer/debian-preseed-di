@@ -5,8 +5,7 @@ This guide is staged only when the `service/gitlab-runner` class is selected.
 ## Managed users
 
 - `glab-aptly`: dedicated Aptly publishing runner
-- `glab-user`: shared build and task runner user
-- `aptly`: dedicated Aptly state and signing owner
+- `glab-user`: shared build runner user
 
 These managed users intentionally use `/usr/sbin/nologin`. `sudo -iu glab-user`
 or `sudo -iu glab-aptly` is expected to fail and is not the supported
@@ -25,9 +24,11 @@ state stays under `/run/user/<uid>/run`, `/run/user/<uid>/libpod/tmp`, and
 - `/etc/default/gitlab-runner/gitlab-runner-shared.env`
 - `/etc/default/gitlab-runner/gitlab-runner-aptly.env`
 - `/etc/default/gitlab-runner/gitlab-runner-build.env`
-- `/etc/default/gitlab-runner/gitlab-runner-task.env`
 - `/data/config/runners/glab-aptly/config.toml`
 - `/data/config/runners/glab-aptly/.runner_system_id`
+- `/data/config/runners/glab-aptly/home/.config/sbuild/config.pl`
+- `/pool/cache/aptly/tools/sbuild/stable-amd64-sbuild.tar.gz`
+- `/pool/cache/aptly/tools/sbuild/unstable-amd64-sbuild.tar.gz`
 - `/data/config/runners/glab-user/config.toml`
 - `/data/config/runners/glab-user/.runner_system_id`
 - `/pool/aptly/.aptly.conf`
@@ -72,6 +73,7 @@ sudo glab-helper --user glab-user gitlab-runner-managed ensure-images
   are owned and writable by the service user, and confirms the Podman backend
   is reachable and still rootless over `netavark`
 - `ensure-images`: builds only the managed local runner images that are missing
+  and prepares the Aptly runner's local `stable`/`unstable` unshare tarballs
 - `once`: runs `refresh --require-active`, then `preflight`, then
   `ensure-images`, and finally starts or restarts the user service so updated
   unit settings and rendered config take effect immediately
@@ -86,8 +88,8 @@ sudo glab-helper --user glab-aptly aptly-managed --channel testing publish switc
 
 Direct `aptly publish ...` inside the runner container is now bridged into a
 host-side queue instead of signing in-container. The `.aptly.conf` file is
-owned by `aptly:aptly` with mode `0600`, and the state under
-`/pool/aptly/.aptly` is reserved for that account.
+owned by `glab-aptly:glab-aptly` with mode `0600`, and the state under
+`/pool/aptly/.aptly` stays on that same managed runner account.
 
 Set `APTLY_CHANNEL=stable` or `APTLY_CHANNEL=testing` inside CI before calling
 `aptly publish ...`. The bridge now accepts `publish repo`, `publish snapshot`,

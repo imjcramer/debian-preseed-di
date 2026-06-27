@@ -42,6 +42,8 @@ printf '1..%s\n' "$TEST_COUNT"
 
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/aptly-managed-functional.XXXXXX")
 trap 'rm -rf -- "$TMP_ROOT"' EXIT
+export TMPDIR="$TMP_ROOT/tmp"
+mkdir -p "$TMPDIR"
 
 ENV_DIR="$TMP_ROOT/etc/default/gitlab-runner"
 STATE_ROOT="$TMP_ROOT/pool/aptly"
@@ -69,7 +71,6 @@ EOF
 
 cat >"$ENV_DIR/gitlab-runner-aptly.env" <<EOF
 GITLAB_RUNNER_APTLY_USERNAME="glab-aptly"
-GITLAB_RUNNER_APTLY_OWNER_USERNAME="aptly"
 GITLAB_RUNNER_APTLY_R2_BUCKET_NAME="cf-aptly-r2-prod"
 GITLAB_RUNNER_APTLY_R2_ENDPOINT_URL="https://example.invalid"
 GITLAB_RUNNER_APTLY_R2_ACCESS_KEY_ID="access-key"
@@ -145,10 +146,6 @@ cat >"$MOCK_BIN/getent" <<EOF
 set -Eeuo pipefail
 if [[ "\${1:-}" == "passwd" && "\${2:-}" == "glab-aptly" ]]; then
   printf 'glab-aptly:x:%s:%s::%s/glab-aptly:/usr/sbin/nologin\n' "$CURRENT_UID" "$CURRENT_GID" "$HOME_BASE"
-  exit 0
-fi
-if [[ "\${1:-}" == "passwd" && "\${2:-}" == "aptly" ]]; then
-  printf 'aptly:x:%s:%s::%s/aptly:/usr/sbin/nologin\n' "$CURRENT_UID" "$CURRENT_GID" "$HOME_BASE"
   exit 0
 fi
 exit 2

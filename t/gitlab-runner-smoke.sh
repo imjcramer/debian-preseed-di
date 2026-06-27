@@ -36,7 +36,6 @@ shared_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-shar
 runtime_storage_tmpfiles="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/tmpfiles.d/10-runtime-storage-roots.conf"
 aptly_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-aptly.env"
 build_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-build.env"
-task_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-task.env"
 managed_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/gitlab-runner-managed"
 aptly_managed="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/aptly-managed"
 aptly_bridge_processor="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/aptly-bridge-processor"
@@ -97,19 +96,22 @@ else
 fi
 
 if grep -q '^GITLAB_RUNNER_APTLY_USERNAME="glab-aptly"$' "$aptly_env" &&
-   grep -q '^GITLAB_RUNNER_APTLY_OWNER_USERNAME="aptly"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_DOCKER_USERNS_MODE="keep-id"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_CHANNELS="stable testing"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_STABLE_KEEP_SNAPSHOTS="2"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_TESTING_KEEP_SNAPSHOTS="3"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_TESTING_MAX_AGE_DAYS="14"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_SBUILD_ARCH="amd64"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_SBUILD_SUITES="stable testing unstable"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_SBUILD_MIRROR="https://deb.debian.org/debian"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_SBUILD_TARBALL_DIR="/pool/cache/aptly/tools/sbuild"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_BUILD_USERNAME="glab-user"$' "$build_env" &&
-   grep -q '^GITLAB_RUNNER_TASK_USERNAME="glab-user"$' "$task_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_NAME="aptly"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_BUILD_NAME="build"$' "$build_env" &&
-   grep -q '^GITLAB_RUNNER_TASK_NAME="task"$' "$task_env"; then
-  pass "runner env files define aptly, build, and task runners with expected users"
+   [ ! -e "$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-task.env" ]; then
+  pass "runner env files define only the aptly and build runners and pin the managed sbuild settings"
 else
-  fail "runner env files define aptly, build, and task runners with expected users"
+  fail "runner env files define only the aptly and build runners and pin the managed sbuild settings"
 fi
 
 if grep -q '^GITLAB_RUNNER_STATE_BASE="/data/config/runners"$' "$shared_env" &&
@@ -137,7 +139,7 @@ fi
 if grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-shared.env)"' "$gitlab_late" &&
    grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-aptly.env)"' "$gitlab_late" &&
    grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-build.env)"' "$gitlab_late" &&
-   grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-task.env)"' "$gitlab_late" &&
+   ! grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-task.env)"' "$gitlab_late" &&
    grep -q 'target/usr/local/sbin/aptly-managed' "$gitlab_late" &&
    grep -q 'target/usr/local/sbin/aptly-bridge-processor' "$gitlab_late" &&
    grep -q 'target/usr/local/libexec/aptly-publish-managed' "$gitlab_late" &&
@@ -148,9 +150,10 @@ if grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES git
    grep -q 'stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/README.md)" "${GITLAB_RUNNER_ENV_DIR}/README.md" 0644' "$gitlab_late" &&
    grep -q 'target_asset_assert_no_unresolved_installer_placeholders' "$gitlab_late" &&
    grep -q 'chown root:root "/target${GITLAB_RUNNER_ENV_DIR}/README.md"' "$gitlab_late" &&
-   grep -q 'chown "root:${GITLAB_RUNNER_SHARED_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env"' "$gitlab_late" &&
+   grep -q 'chown "root:${GITLAB_RUNNER_SHARED_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env"' "$gitlab_late" &&
    grep -q 'gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env" "$GITLAB_RUNNER_APTLY_GID" 640' "$gitlab_late" &&
    grep -q 'gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" "$GITLAB_RUNNER_SHARED_GID" 640' "$gitlab_late" &&
+   grep -q 'legacy gitlab-runner-task.env must not remain staged' "$gitlab_late" &&
    grep -q 'gitlab_runner_verify_target_envs' "$gitlab_late" &&
    grep -q 'target/usr/local/sbin/gitlab-runner-managed' "$gitlab_late" &&
    grep -q '^- `/etc/default/gitlab-runner/README.md`$' "$service_readme" &&
@@ -175,12 +178,12 @@ fi
 
 if ! grep -q '__INSTALLER_DIR_POOL_APTLY__' "$runtime_storage_tmpfiles" &&
    grep -q '^d /pool/aptly 0755 root root -$' "$aptly_tmpfiles" &&
-   grep -q '^d /pool/aptly/.aptly 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
-   grep -q '^d /pool/aptly/.managed 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
-   grep -q '^d /pool/aptly/.managed/channels 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
-   grep -q '^d /pool/aptly/secrets 0700 __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_OWNER_USERNAME__ -$' "$aptly_tmpfiles" &&
-   grep -q '^d /pool/aptly/queue/requests 03770 root devops -$' "$aptly_tmpfiles" &&
-   grep -q '^d /pool/aptly/queue/results 03770 root devops -$' "$aptly_tmpfiles" &&
+   grep -q '^d /pool/aptly/.aptly 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d /pool/aptly/.managed 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d /pool/aptly/.managed/channels 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d /pool/aptly/secrets 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d /pool/aptly/queue/requests 03770 root __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d /pool/aptly/queue/results 03770 root __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/processing 0700 root root -$' "$aptly_tmpfiles" &&
    grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__/tmp 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
@@ -199,12 +202,12 @@ if ! grep -q '__INSTALLER_DIR_POOL_APTLY__' "$runtime_storage_tmpfiles" &&
    grep -Fq 'source /pool/aptly/bin/prepare-aptly-env.sh' "$aptly_managed" &&
    grep -Fq 'prepare_aptly_env' "$aptly_managed" &&
    grep -Fq 'APTLY_JOB_DIR' "$aptly_publish_helper" &&
-   grep -Fq 'chown "${context_aptly_owner_user}:${context_aptly_owner_user}" "$config_path"' "$managed_helper" &&
+   grep -Fq 'chown "${context_user}:${context_user}" "$config_path"' "$managed_helper" &&
    ! grep -q 'APTLY_CONFIG=/pool/aptly/.aptly.conf' "$managed_helper" &&
    ! grep -q 'R2_ACCESS_KEY_ID=$(runner_var' "$managed_helper"; then
-  pass "aptly state is owned by the dedicated aptly account, its tmpfiles root no longer duplicates the shared roots file, and publish/signing is forced through the controlled host helper"
+  pass "aptly state stays on the glab-aptly account, its tmpfiles root no longer duplicates the shared roots file, and publish/signing is forced through the controlled host helper"
 else
-  fail "aptly state is owned by the dedicated aptly account, its tmpfiles root no longer duplicates the shared roots file, and publish/signing is forced through the controlled host helper"
+  fail "aptly state stays on the glab-aptly account, its tmpfiles root no longer duplicates the shared roots file, and publish/signing is forced through the controlled host helper"
 fi
 
 if grep -Fq 'configure_target_rootless_podman_without_podbin' "$gitlab_late" &&
@@ -255,8 +258,8 @@ fi
 
 if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
    grep -q '^load_runner_env_if_present() {$' "$managed_helper" &&
-   grep -Fq 'context_runner_ids+=(BUILD)' "$managed_helper" &&
-   grep -Fq 'context_runner_ids+=(TASK)' "$managed_helper" &&
+   grep -Fq 'context_runner_ids=(BUILD)' "$managed_helper" &&
+   ! grep -Fq 'context_runner_ids+=(TASK)' "$managed_helper" &&
    grep -q 'context_docker_host="unix:///run/user/${context_uid}/podman/podman.sock"' "$managed_helper" &&
    grep -q 'context_system_id_file="${context_base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME:-.runner_system_id}"' "$managed_helper" &&
    grep -q 'context_podman_tmp_root="${GITLAB_RUNNER_PODMAN_TMP_BASE}/${context_user}"' "$managed_helper" &&
@@ -270,15 +273,17 @@ if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
    grep -q 'FF_NETWORK_PER_BUILD = true' "$managed_helper" &&
    grep -Fq 'f"TMPDIR={container_tmp_dir}"' "$managed_helper" &&
    grep -Fq '"/tmp",' "$managed_helper" &&
+   grep -Fq 'userns_mode = {toml_string(runner[' "$managed_helper" &&
+   grep -Fq 'DEBIAN_SBUILD_TARBALL_DIR=/cache/sbuild' "$managed_helper" &&
    grep -q 'host = {toml_string(globals_cfg' "$managed_helper" &&
    ! grep -Fq 'DOCKER_HOST={docker_host}' "$managed_helper" &&
    ! grep -Fq 'CONTAINER_HOST={container_host}' "$managed_helper" &&
    ! grep -Fq 'docker_socket = docker_host.removeprefix("unix://")' "$managed_helper" &&
    ! grep -Fq 'f"{tmp_dir}:{tmp_dir}:rw"' "$managed_helper" &&
    ! grep -Fq 'docker.sock' "$managed_helper"; then
-  pass "managed helper renders one aptly runner and shared build/task runners over Podman while checking rootless runtime paths under /run/user and storage/image temp under /pool"
+  pass "managed helper renders one aptly runner and one shared build runner over Podman while checking rootless runtime paths under /run/user and storage/image temp under /pool"
 else
-  fail "managed helper renders one aptly runner and shared build/task runners over Podman while checking rootless runtime paths under /run/user and storage/image temp under /pool"
+  fail "managed helper renders one aptly runner and one shared build runner over Podman while checking rootless runtime paths under /run/user and storage/image temp under /pool"
 fi
 
 if grep -q 'GITLAB_RUNNER_CACHE_DIR_NAMES' "$managed_helper" &&
@@ -306,6 +311,8 @@ if grep -q '^set_return_file_cleanup() {$' "$managed_helper" &&
    grep -q '^  ensure_images$' "$managed_helper" &&
    grep -q '^build_runner_image_from_containerfile() {$' "$managed_helper" &&
    grep -q '^prepare_containerfile_build_context() {$' "$managed_helper" &&
+   grep -q '^ensure_aptly_sbuild_assets() {$' "$managed_helper" &&
+   grep -q 'sbuild-createchroot' "$managed_helper" &&
    grep -q 'containerfile-context\.' "$managed_helper" &&
    grep -q 'run_podman_as_context_user build --pull=missing --tag "\$image_ref" -f "\$build_containerfile" "\$build_context"' "$managed_helper" &&
    grep -q 'no active runner tokens found for ${context_user}' "$managed_helper" &&

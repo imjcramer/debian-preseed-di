@@ -8,7 +8,6 @@ ENV_DIR="/etc/default/gitlab-runner"
 SHARED_ENV="${ENV_DIR}/gitlab-runner-shared.env"
 APTLY_ENV="${ENV_DIR}/gitlab-runner-aptly.env"
 BUILD_ENV="${ENV_DIR}/gitlab-runner-build.env"
-TASK_ENV="${ENV_DIR}/gitlab-runner-task.env"
 
 info() {
   printf '%s: %s\n' "$PROG" "$*" >&2
@@ -168,8 +167,10 @@ runner_var() {
 runner_extra_env_items() {
   local id_upper="$1"
   local kind="$2"
-  case "$kind" in
-    aptly)
+  case "${kind}:${id_upper}" in
+    aptly:APTLY)
+      printf '%s\n' "SBUILD_CONFIG=${context_job_home}/.config/sbuild/config.pl"
+      printf '%s\n' "DEBIAN_SBUILD_TARBALL_DIR=/cache/sbuild"
       ;;
   esac
 }
@@ -200,8 +201,8 @@ load_runner_env_if_present() {
 load_user_context() {
   local requested_user="$1"
   local passwd_entry _passwd_name _passwd_passwd _passwd_gecos _passwd_shell
-  local build_loaded=false task_loaded=false
-  local build_username= task_username=
+  local build_loaded=false
+  local build_username=
 
   load_shared_env
   context_kind=
@@ -224,27 +225,12 @@ load_user_context() {
       build_username="${GITLAB_RUNNER_BUILD_USERNAME}"
     fi
 
-    if load_runner_env_if_present "$TASK_ENV"; then
-      validate_username GITLAB_RUNNER_TASK_USERNAME "${GITLAB_RUNNER_TASK_USERNAME:-}"
-      task_loaded=true
-      task_username="${GITLAB_RUNNER_TASK_USERNAME}"
-    fi
-
-    [[ "$build_loaded" == "true" || "$task_loaded" == "true" ]] ||
+    [[ "$build_loaded" == "true" ]] ||
       die "unsupported managed user: ${requested_user}"
 
-    if [[ "$build_loaded" == "true" && "$task_loaded" == "true" ]]; then
-      [[ "$build_username" == "$task_username" ]] || die "build and task runner users must match"
-    fi
-
     if [[ "$build_loaded" == "true" && "$requested_user" == "$build_username" ]]; then
-      context_runner_ids+=(BUILD)
+      context_runner_ids=(BUILD)
       context_user="$build_username"
-    fi
-
-    if [[ "$task_loaded" == "true" && "$requested_user" == "$task_username" ]]; then
-      context_runner_ids+=(TASK)
-      context_user="$task_username"
     fi
 
     [[ -n "$context_user" ]] || die "unsupported managed user: ${requested_user}"
@@ -312,15 +298,6 @@ load_user_context() {
   validate_absolute_path context_xdg_cache_home "$context_xdg_cache_home"
   validate_absolute_path context_xdg_state_home "$context_xdg_state_home"
 
-  if [[ "$context_kind" == "aptly" ]]; then
-    validate_username GITLAB_RUNNER_APTLY_OWNER_USERNAME "${GITLAB_RUNNER_APTLY_OWNER_USERNAME:-}"
-    context_aptly_owner_user="${GITLAB_RUNNER_APTLY_OWNER_USERNAME}"
-    context_aptly_owner_home="${GITLAB_RUNNER_USER_HOME_BASE}/${context_aptly_owner_user}"
-    validate_absolute_path context_aptly_owner_home "$context_aptly_owner_home"
-  else
-    context_aptly_owner_user=
-    context_aptly_owner_home=
-  fi
 }
 
 ensure_common_runtime_dirs() {
@@ -529,7 +506,6 @@ render_aptly_disk_config() {
   local template_path config_path bucket endpoint_host prefix storage_class debug architectures_csv download_concurrency
   template_path="/pool/aptly/.aptly.conf.template.json"
   config_path="/pool/aptly/.aptly.conf"
-  [[ -n "${context_aptly_owner_user:-}" ]] || die "aptly owner user is unset"
   [[ -r "$template_path" && ! -L "$template_path" ]] || die "aptly config template is missing: ${template_path}"
   [[ -d "/pool/aptly" && ! -L "/pool/aptly" ]] || die "aptly state dir is missing: /pool/aptly"
   [[ -d "/pool/aptly/.aptly" && ! -L "/pool/aptly/.aptly" ]] || die "aptly root dir is missing: /pool/aptly/.aptly"
@@ -570,8 +546,111 @@ render_aptly_disk_config() {
     "$prefix" \
     "$storage_class" \
     "$debug"
-  chown "${context_aptly_owner_user}:${context_aptly_owner_user}" "$config_path"
+  chown "${context_user}:${context_user}" "$config_path"
   chmod 0600 "$config_path"
+}
+
+validate_sbuild_arch() {
+  local value="$1"
+  [[ "$value" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "invalid sbuild architecture: ${value:-unset}"
+}
+
+validate_sbuild_suite() {
+  local value="$1"
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || die "invalid sbuild suite: ${value:-unset}"
+}
+
+resolve_aptly_sbuild_tarball_dir() {
+  local path="${GITLAB_RUNNER_APTLY_SBUILD_TARBALL_DIR:-$(runner_var APTLY CACHE_ROOT)/sbuild}"
+  validate_absolute_path GITLAB_RUNNER_APTLY_SBUILD_TARBALL_DIR "$path"
+  printf '%s' "$path"
+}
+
+render_aptly_sbuild_config() {
+  local config_dir="$1"
+  local config_path="$2"
+
+  install -d -m 0700 -- "$config_dir"
+  cat >"$config_path" <<'EOF'
+$chroot_mode = "unshare";
+1;
+EOF
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "${context_uid}:${context_gid}" "$config_dir" "$config_path"
+  fi
+  chmod 0700 "$config_dir"
+  chmod 0600 "$config_path"
+}
+
+ensure_aptly_sbuild_tarball() {
+  local suite="$1"
+  local arch="$2"
+  local mirror="$3"
+  local tarball_dir="$4"
+  local sbuild_config_path="$5"
+  local tarball_name tarball_path workspace_dir
+
+  validate_sbuild_suite "$suite"
+  validate_sbuild_arch "$arch"
+  validate_http_url GITLAB_RUNNER_APTLY_SBUILD_MIRROR "$mirror"
+  tarball_name="${suite}-${arch}-sbuild"
+  tarball_path="${tarball_dir}/${tarball_name}.tar.gz"
+  if [[ -r "$tarball_path" && ! -L "$tarball_path" ]]; then
+    return 0
+  fi
+
+  install -d -m 0700 -- "$tarball_dir"
+  workspace_dir="$(mktemp -d "${context_tmp_dir%/}/sbuild-createchroot.${tarball_name}.XXXXXXXXXX")"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown -R "${context_uid}:${context_gid}" "$tarball_dir" "$workspace_dir"
+  fi
+  if ! run_as_context_user env \
+    HOME="$context_job_home" \
+    XDG_CONFIG_HOME="${context_job_home}/.config" \
+    XDG_DATA_HOME="${context_job_home}/.local/share" \
+    XDG_CACHE_HOME="${context_job_home}/.cache" \
+    XDG_STATE_HOME="${context_job_home}/.local/state" \
+    SBUILD_CONFIG="$sbuild_config_path" \
+    mmdebstrap \
+    --architectures="$arch" \
+    --variant=buildd \
+    --include=ca-certificates \
+    --skip=output/dev \
+    "$suite" \
+    "$tarball_path" \
+    "$mirror"; then
+    rm -rf -- "$workspace_dir"
+    die "failed to create sbuild unshare tarball for ${suite}/${arch}"
+  fi
+  rm -rf -- "$workspace_dir"
+}
+
+ensure_aptly_sbuild_assets() {
+  local suites_raw arch mirror tarball_dir sbuild_config_dir sbuild_config_path suite
+  local -a suites=()
+
+  [[ "$context_kind" == "aptly" ]] || return 0
+  require_cmd mmdebstrap
+  require_cmd mktemp
+  arch="${GITLAB_RUNNER_APTLY_SBUILD_ARCH:-amd64}"
+  mirror="${GITLAB_RUNNER_APTLY_SBUILD_MIRROR:-https://deb.debian.org/debian}"
+  suites_raw="${GITLAB_RUNNER_APTLY_SBUILD_SUITES:-stable testing unstable}"
+  validate_sbuild_arch "$arch"
+  validate_http_url GITLAB_RUNNER_APTLY_SBUILD_MIRROR "$mirror"
+  [[ -n "$suites_raw" ]] || die "GITLAB_RUNNER_APTLY_SBUILD_SUITES must not be empty"
+  tarball_dir="$(resolve_aptly_sbuild_tarball_dir)"
+  sbuild_config_dir="${context_job_home}/.config/sbuild"
+  sbuild_config_path="${sbuild_config_dir}/config.pl"
+  render_aptly_sbuild_config "$sbuild_config_dir" "$sbuild_config_path"
+
+  local IFS=' '
+  read -r -a suites <<<"$suites_raw"
+  [[ "${#suites[@]}" -gt 0 ]] || die "GITLAB_RUNNER_APTLY_SBUILD_SUITES must list at least one suite"
+  for suite in "${suites[@]}"; do
+    [[ -n "$suite" ]] || continue
+    ensure_aptly_sbuild_tarball "$suite" "$arch" "$mirror" "$tarball_dir" "$sbuild_config_path"
+  done
+  info "ensured sbuild unshare config and tarballs for ${context_user}"
 }
 
 emit_spec_line() {
@@ -585,6 +664,7 @@ emit_spec_line() {
 collect_active_runners() {
   local spec_path="$1"
   local id_upper id_lower token_raw token_value metrics_value image_mode user_value url_value
+  local docker_user docker_userns_mode
   active_runner_count=0
   active_runner_ids=()
   active_metrics_values=()
@@ -625,6 +705,17 @@ collect_active_runners() {
     emit_spec_line "$spec_path" "runner.${id_lower}.allowed_services" "$(runner_var "$id_upper" ALLOWED_SERVICES)"
     emit_spec_line "$spec_path" "runner.${id_lower}.extra_volumes" "$(runner_var "$id_upper" EXTRA_VOLUMES)"
     emit_spec_line "$spec_path" "runner.${id_lower}.image_build_mode" "$image_mode"
+    docker_userns_mode="$(runner_var "$id_upper" DOCKER_USERNS_MODE)"
+    docker_user="$(runner_var "$id_upper" DOCKER_USER)"
+    if [[ "$id_upper" == "APTLY" && -n "$docker_userns_mode" && -z "$docker_user" ]]; then
+      docker_user="${context_uid}:${context_gid}"
+    fi
+    if [[ -n "$docker_user" ]]; then
+      emit_spec_line "$spec_path" "runner.${id_lower}.docker_user" "$docker_user"
+    fi
+    if [[ -n "$docker_userns_mode" ]]; then
+      emit_spec_line "$spec_path" "runner.${id_lower}.docker_userns_mode" "$docker_userns_mode"
+    fi
 
     while IFS= read -r extra_env_line || [[ -n "$extra_env_line" ]]; do
       [[ -n "$extra_env_line" ]] || continue
@@ -911,6 +1002,8 @@ def emit_runner_stanza(lines, runner):
             f"    host = {toml_string(globals_cfg['docker_host'])}",
             f"    tls_verify = {toml_bool(globals_cfg['docker_tls_verify'])}",
             f"    image = {toml_string(runner['image'][0])}",
+            *([f"    user = {toml_string(runner['docker_user'][0])}"] if runner.get("docker_user") else []),
+            *([f"    userns_mode = {toml_string(runner['docker_userns_mode'][0])}"] if runner.get("docker_userns_mode") else []),
             f"    privileged = {toml_bool(globals_cfg['docker_privileged'])}",
             f"    services_limit = {globals_cfg['services_limit']}",
             f"    pull_policy = {toml_string(globals_cfg['docker_pull_policy'])}",
@@ -1183,6 +1276,7 @@ ensure_images() {
   set_return_file_cleanup "$spec_probe"
   collect_active_runners "$spec_probe"
   ensure_images_loaded_context
+  ensure_aptly_sbuild_assets
 }
 
 reconcile_podman_service() {
@@ -1198,6 +1292,25 @@ reconcile_podman_service() {
   fi
   run_as_context_user systemctl --user restart podman.socket >/dev/null
   info "restarted podman.socket for ${context_user}"
+  wait_for_podman_executor_ready
+}
+
+wait_for_podman_executor_ready() {
+  local tries="${GITLAB_RUNNER_PODMAN_READY_WAIT_SECONDS:-15}"
+  [[ "$tries" =~ ^[0-9]+$ ]] || die "GITLAB_RUNNER_PODMAN_READY_WAIT_SECONDS must be numeric, got: ${tries:-unset}"
+  (( 10#$tries >= 1 )) || die "GITLAB_RUNNER_PODMAN_READY_WAIT_SECONDS must be greater than zero"
+
+  while (( tries > 0 )); do
+    if run_as_context_user systemctl --user is-active --quiet podman.socket &&
+       run_podman_as_context_user ps --all --format '{{.ID}}' >/dev/null 2>&1; then
+      info "validated podman executor readiness for ${context_user}"
+      return 0
+    fi
+    sleep 1
+    tries=$((tries - 1))
+  done
+
+  die "podman executor did not become ready for ${context_user} within ${GITLAB_RUNNER_PODMAN_READY_WAIT_SECONDS:-15}s; inspect systemctl --user status podman.socket and journalctl --user -xeu podman.socket"
 }
 
 reconcile_runner_service() {

@@ -86,7 +86,6 @@ EOF
 }
 
 write_runner_envs() {
-  local task_token="$1"
   cat >"$ENV_DIR/gitlab-runner-build.env" <<EOF
 GITLAB_RUNNER_BUILD_USERNAME="glab-user"
 GITLAB_RUNNER_BUILD_GITLAB_URL="https://gitlab.com"
@@ -103,30 +102,14 @@ GITLAB_RUNNER_BUILD_ALLOWED_IMAGES="debian:*"
 GITLAB_RUNNER_BUILD_ALLOWED_SERVICES="postgres:*"
 GITLAB_RUNNER_BUILD_EXTRA_VOLUMES=""
 EOF
-  cat >"$ENV_DIR/gitlab-runner-task.env" <<EOF
-GITLAB_RUNNER_TASK_USERNAME="glab-user"
-GITLAB_RUNNER_TASK_GITLAB_URL="https://gitlab.com"
-GITLAB_RUNNER_TASK_TOKEN="$task_token"
-GITLAB_RUNNER_TASK_NAME="task"
-GITLAB_RUNNER_TASK_TAGS="task"
-GITLAB_RUNNER_TASK_METRICS_ADDRESS="127.0.0.1:9272"
-GITLAB_RUNNER_TASK_IMAGE="docker.io/library/debian:trixie-slim"
-GITLAB_RUNNER_TASK_IMAGE_BUILD_MODE="none"
-GITLAB_RUNNER_TASK_BUILDS_DIR="$TMP_ROOT/pool/build/runners/task"
-GITLAB_RUNNER_TASK_GITLAB_CACHE_DIR="$TMP_ROOT/pool/cache/runners/task/gitlab"
-GITLAB_RUNNER_TASK_CACHE_ROOT="$TMP_ROOT/pool/cache/runners/task/tools"
-GITLAB_RUNNER_TASK_ALLOWED_IMAGES="debian:*"
-GITLAB_RUNNER_TASK_ALLOWED_SERVICES="postgres:*"
-GITLAB_RUNNER_TASK_EXTRA_VOLUMES=""
-EOF
   cat >"$ENV_DIR/gitlab-runner-aptly.env" <<EOF
 GITLAB_RUNNER_APTLY_USERNAME="glab-aptly"
-GITLAB_RUNNER_APTLY_OWNER_USERNAME="aptly"
 GITLAB_RUNNER_APTLY_GITLAB_URL="https://gitlab.com"
 GITLAB_RUNNER_APTLY_TOKEN=""
 GITLAB_RUNNER_APTLY_NAME="aptly"
 GITLAB_RUNNER_APTLY_TAGS="aptly"
 GITLAB_RUNNER_APTLY_METRICS_ADDRESS="127.0.0.1:9271"
+GITLAB_RUNNER_APTLY_DOCKER_USERNS_MODE="keep-id"
 GITLAB_RUNNER_APTLY_IMAGE="localhost/gitlab-runner-aptly:trixie"
 GITLAB_RUNNER_APTLY_IMAGE_BUILD_MODE="containerfile"
 GITLAB_RUNNER_APTLY_IMAGE_CONTEXT="$TMP_ROOT/pool/aptly"
@@ -137,6 +120,10 @@ GITLAB_RUNNER_APTLY_CACHE_ROOT="$TMP_ROOT/pool/cache/aptly/tools"
 GITLAB_RUNNER_APTLY_ALLOWED_IMAGES="debian:*"
 GITLAB_RUNNER_APTLY_ALLOWED_SERVICES="postgres:*"
 GITLAB_RUNNER_APTLY_EXTRA_VOLUMES=""
+GITLAB_RUNNER_APTLY_SBUILD_ARCH="amd64"
+GITLAB_RUNNER_APTLY_SBUILD_SUITES="stable testing unstable"
+GITLAB_RUNNER_APTLY_SBUILD_MIRROR="https://deb.debian.org/debian"
+GITLAB_RUNNER_APTLY_SBUILD_TARBALL_DIR="$TMP_ROOT/pool/cache/aptly/tools/sbuild"
 EOF
 }
 
@@ -161,10 +148,10 @@ MOCK_BIN="$TMP_ROOT/bin"
 CURRENT_UID=$(id -u)
 CURRENT_GID=$(id -g)
 
-mkdir -p "$ENV_DIR" "$MOCK_BIN" "$RUNTIME_BASE/$CURRENT_UID" "$STATE_BASE/glab-user" "$TMP_ROOT/pool/aptly"
+mkdir -p "$ENV_DIR" "$MOCK_BIN" "$RUNTIME_BASE/$CURRENT_UID" "$STATE_BASE/glab-user" "$TMP_ROOT/pool/aptly/bin"
 : >"$STATE_BASE/glab-user/.runner_system_id"
 write_shared_env
-write_runner_envs ""
+write_runner_envs
 cat >"$TMP_ROOT/pool/aptly/Containerfile" <<'EOF'
 FROM docker.io/library/debian:trixie-slim
 
@@ -173,7 +160,39 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 EOF
 mkdir -p "$TMP_ROOT/pool/aptly/.aptly"
-chmod 000 "$TMP_ROOT/pool/aptly/.aptly"
+chmod 0700 "$TMP_ROOT/pool/aptly/.aptly"
+printf '{}\n' >"$TMP_ROOT/pool/aptly/.aptly.conf.template.json"
+cat >"$TMP_ROOT/pool/aptly/bin/prepare-aptly-env.sh" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+aptly_bool_value() {
+  case "${1,,}" in
+    1|true|yes|y|on) printf 'true' ;;
+    0|false|no|n|off|"") printf 'false' ;;
+    *) return 1 ;;
+  esac
+}
+
+aptly_normalize_endpoint_host() {
+  printf 'example.invalid'
+}
+
+aptly_normalize_prefix() {
+  local value="${1:-}"
+  value="${value#/}"
+  value="${value%/}"
+  printf '%s' "${value:-debian}"
+}
+
+aptly_render_config_file() {
+  local _template_path="$1"
+  local config_path="$2"
+  printf '{"rootDir":"%s"}\n' "$3" >"$config_path"
+}
+EOF
+chmod +x "$TMP_ROOT/pool/aptly/bin/prepare-aptly-env.sh"
 
 cat >"$MOCK_BIN/getent" <<EOF
 #!/usr/bin/env bash
@@ -189,6 +208,38 @@ fi
 exit 2
 EOF
 chmod +x "$MOCK_BIN/getent"
+
+cat >"$MOCK_BIN/sbuild-createchroot" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+tarball_path=
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --make-sbuild-tarball)
+      tarball_path="$2"
+      shift 2
+      ;;
+    --arch=*|--chroot-mode=*)
+      shift
+      ;;
+    --arch|--chroot-mode)
+      shift 2
+      ;;
+    --no-deb-src)
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+: "${tarball_path:?missing tarball path}"
+mkdir -p "$(dirname "$tarball_path")"
+printf 'mock tarball\n' >"$tarball_path"
+EOF
+chmod +x "$MOCK_BIN/sbuild-createchroot"
 
 cat >"$MOCK_BIN/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -372,6 +423,7 @@ chmod +x "$MOCK_BIN/podman"
 
 sed \
   -e "s|^ENV_DIR=.*|ENV_DIR=\"$ENV_DIR\"|" \
+  -e "s|/pool/aptly|$TMP_ROOT/pool/aptly|g" \
   -e "s|context_runtime_root=\"/run/user/\${context_uid}/gitlab-runner\"|context_runtime_root=\"$RUNTIME_BASE/\${context_uid}/gitlab-runner\"|" \
   -e "s|context_podman_runtime_root=\"/run/user/\${context_uid}\"|context_podman_runtime_root=\"$RUNTIME_BASE/\${context_uid}\"|" \
   -e "s|context_podman_runtime_libpod_dir=\"/run/user/\${context_uid}/libpod\"|context_podman_runtime_libpod_dir=\"$RUNTIME_BASE/\${context_uid}/libpod\"|" \
@@ -436,37 +488,10 @@ else
   fail "rendered config keeps Podman as the executor backend without injecting the socket into job containers"
 fi
 
-write_runner_envs "task-token"
-
-if bash "$PATCHED_HELPER" --user glab-user refresh --require-active >"$TMP_ROOT/second.stdout" 2>"$TMP_ROOT/second.stderr"; then
-  pass "rerunning refresh succeeds after the task token is added"
+if [ ! -e "$ENV_DIR/gitlab-runner-task.env" ]; then
+  pass "legacy task runner env is absent from the managed fixture"
 else
-  fail "rerunning refresh succeeds after the task token is added"
-fi
-
-if bash "$PATCHED_HELPER" --user glab-user preflight >"$TMP_ROOT/preflight-second.stdout" 2>"$TMP_ROOT/preflight-second.stderr"; then
-  pass "preflight succeeds after the task token is added"
-else
-  fail "preflight succeeds after the task token is added"
-fi
-
-if assert_contains "$CONFIG_PATH" 'name = "build"' &&
-   assert_contains "$CONFIG_PATH" 'name = "task"'; then
-  pass "rerendering adds the task runner stanza when both tokens are present"
-else
-  fail "rerendering adds the task runner stanza when both tokens are present"
-fi
-
-if assert_not_contains "$CONFIG_PATH" 'DOCKER_HOST=' &&
-   assert_not_contains "$CONFIG_PATH" 'CONTAINER_HOST=' &&
-   assert_not_contains "$CONFIG_PATH" '/podman/podman.sock:' &&
-   assert_contains "$CONFIG_PATH" 'TMPDIR=/tmp' &&
-   assert_contains "$CONFIG_PATH" 'TEMP=/tmp' &&
-   assert_contains "$CONFIG_PATH" '"/tmp"' &&
-   assert_not_contains "$CONFIG_PATH" "$RUNTIME_BASE/$CURRENT_UID/gitlab-runner/tmp:"; then
-  pass "rerendered shared config still avoids recursive socket injection after task enablement"
-else
-  fail "rerendered shared config still avoids recursive socket injection after task enablement"
+  fail "legacy task runner env is absent from the managed fixture"
 fi
 
 mkdir -p "$STATE_BASE/glab-aptly"
@@ -474,13 +499,36 @@ mkdir -p "$STATE_BASE/glab-aptly"
 sed -i 's/^GITLAB_RUNNER_APTLY_TOKEN=""/GITLAB_RUNNER_APTLY_TOKEN="aptly-token"/' "$ENV_DIR/gitlab-runner-aptly.env"
 export TEST_EXPECTED_PODMAN_HOME="$HOME_BASE/glab-aptly"
 export TEST_PODMAN_IMAGE_EXISTS="false"
+APTLY_JOB_HOME="$STATE_BASE/glab-aptly/home"
+APTLY_SBUILD_CONFIG="$APTLY_JOB_HOME/.config/sbuild/config.pl"
+APTLY_SBUILD_STABLE="$TMP_ROOT/pool/cache/aptly/tools/sbuild/stable-amd64-sbuild.tar.gz"
+APTLY_SBUILD_UNSTABLE="$TMP_ROOT/pool/cache/aptly/tools/sbuild/unstable-amd64-sbuild.tar.gz"
 
-if bash "$PATCHED_HELPER" --user glab-aptly ensure-images >"$TMP_ROOT/aptly-images.stdout" 2>"$TMP_ROOT/aptly-images.stderr" &&
-   assert_contains "$PODMAN_LOG" "build --pull=missing --tag localhost/gitlab-runner-aptly:trixie" &&
-   assert_not_contains "$PODMAN_LOG" " $TMP_ROOT/pool/aptly"; then
-  pass "aptly runner builds from a synthetic readable context instead of traversing protected aptly state"
+if bash "$PATCHED_HELPER" --user glab-aptly ensure-images >"$TMP_ROOT/aptly-images.stdout" 2>"$TMP_ROOT/aptly-images.stderr"; then
+  pass "aptly ensure-images succeeds after the token is populated"
 else
-  fail "aptly runner builds from a synthetic readable context instead of traversing protected aptly state"
+  fail "aptly ensure-images succeeds after the token is populated"
+fi
+
+if assert_contains "$PODMAN_LOG" "build --pull=missing --tag localhost/gitlab-runner-aptly:trixie" &&
+   assert_not_contains "$PODMAN_LOG" " $TMP_ROOT/pool/aptly"; then
+  pass "aptly ensure-images builds from a synthetic readable context instead of traversing the protected aptly state"
+else
+  fail "aptly ensure-images builds from a synthetic readable context instead of traversing the protected aptly state"
+fi
+
+if [ -f "$APTLY_SBUILD_STABLE" ] &&
+   [ -f "$APTLY_SBUILD_UNSTABLE" ]; then
+  pass "aptly ensure-images seeds the stable and unstable sbuild tarballs"
+else
+  fail "aptly ensure-images seeds the stable and unstable sbuild tarballs"
+fi
+
+if [ -f "$APTLY_SBUILD_CONFIG" ] &&
+   assert_contains "$APTLY_SBUILD_CONFIG" '$chroot_mode = "unshare";'; then
+  pass "aptly ensure-images renders the managed sbuild config file"
+else
+  fail "aptly ensure-images renders the managed sbuild config file"
 fi
 
 [ "$FAIL_COUNT" -eq 0 ]
