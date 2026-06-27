@@ -312,7 +312,7 @@ if grep -q '^set_return_file_cleanup() {$' "$managed_helper" &&
    grep -q '^build_runner_image_from_containerfile() {$' "$managed_helper" &&
    grep -q '^prepare_containerfile_build_context() {$' "$managed_helper" &&
    grep -q '^ensure_aptly_sbuild_assets() {$' "$managed_helper" &&
-   grep -q 'sbuild-createchroot' "$managed_helper" &&
+   grep -q 'mmdebstrap' "$managed_helper" &&
    grep -q 'containerfile-context\.' "$managed_helper" &&
    grep -q 'run_podman_as_context_user build --pull=missing --tag "\$image_ref" -f "\$build_containerfile" "\$build_context"' "$managed_helper" &&
    grep -q 'no active runner tokens found for ${context_user}' "$managed_helper" &&

@@ -3,7 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
-TEST_COUNT=16
+TEST_COUNT=18
 TEST_INDEX=0
 
 pass() {
@@ -80,6 +80,7 @@ fi
 if grep -q '^GRUB_REMOVABLE_BOOT_EFI_PATH=$INSTALLER_GRUB_REMOVABLE_BOOT_EFI_PATH$' "$ROOT_DIR/d-i/debian/scripts/late/templates.sh" &&
    grep -q '^rescue_usb_efi_path=__INSTALLER_GRUB_REMOVABLE_BOOT_EFI_PATH__$' "$ROOT_DIR/d-i/debian/hooks/shared/target/etc/default/grub-profiles.tmpl" &&
    grep -q 'rescue_usb_uuid=${23}' "$ROOT_DIR/d-i/debian/hooks/shared/target/etc/default/grub-profiles.tmpl" &&
+   grep -q 'Rescue USB not plugged in' "$ROOT_DIR/d-i/debian/hooks/shared/target/etc/default/grub-profiles.tmpl" &&
    ! grep -q 'ESPBOOT' "$ROOT_DIR/d-i/debian/hooks/shared/target/etc/default/grub-profiles.tmpl"; then
   pass "rescue USB GRUB entry uses the architecture-specific removable EFI path and installer-derived UUID search"
 else
@@ -144,13 +145,15 @@ fi
 secure_boot_tool="$ROOT_DIR/d-i/debian/hooks/shared/target/usr/libexec/install-tools/secure-boot-tool.tmpl"
 if grep -q '^queue_enrolled_mok_deletions() {$' "$secure_boot_tool" &&
    grep -q 'queueing deletion of .* enrolled MOK certificate(s) before managed import' "$secure_boot_tool" &&
-   grep -q 'failed to revoke stale pending MOK delete request; continuing with managed import' "$secure_boot_tool" &&
-   grep -q 'matching managed MOK certificate is already enrolled and no delete request was queued; import is already satisfied' "$secure_boot_tool" &&
+   grep -q 'failed to revoke stale pending MOK delete request; checking whether the existing delete queue still covers managed cleanup' "$secure_boot_tool" &&
+   grep -q 'existing pending MOK delete request already covers all enrolled MOK certificate fingerprints' "$secure_boot_tool" &&
+   grep -q 'failed to queue managed MOK deletions for all enrolled certificates before import' "$secure_boot_tool" &&
+   ! grep -q 'import is already satisfied' "$secure_boot_tool" &&
    ! grep -q '^queue_duplicate_mok_deletions() {$' "$secure_boot_tool" &&
    ! grep -q 'deferring stale duplicate cleanup until after managed MOK enrollment' "$secure_boot_tool"; then
-  pass "secure boot helper queues MOK deletions before import and no longer defers duplicate cleanup"
+  pass "secure boot helper guarantees delete coverage before the managed certificate import"
 else
-  fail "secure boot helper queues MOK deletions before import and no longer defers duplicate cleanup"
+  fail "secure boot helper guarantees delete coverage before the managed certificate import"
 fi
 
 if grep -q '^validate_secure_boot_certificate_settings() {$' "$secure_boot_tool" &&
@@ -167,12 +170,22 @@ fi
 boot_env="$ROOT_DIR/d-i/debian/hosts/shared/boot.env"
 display_template="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/default/grub.d/07-display.cfg.tmpl"
 if grep -q '^GRUB_DISPLAY_GFXMODE="1024x768,auto"$' "$boot_env" &&
+   grep -q '^GRUB_DISPLAY_PRELOAD_MODULES="efi_gop gfxterm"$' "$boot_env" &&
    ! grep -q '^GRUB_DISPLAY_COLOR_' "$boot_env" &&
    ! grep -q '^GRUB_COLOR_NORMAL=' "$display_template" &&
    ! grep -q '^GRUB_COLOR_HIGHLIGHT=' "$display_template"; then
-  pass "managed GRUB display policy keeps VGA 766 equivalent gfxmode without color settings"
+  pass "managed GRUB display policy keeps GOP gfxterm at VGA 766 equivalent gfxmode without color settings"
 else
-  fail "managed GRUB display policy keeps VGA 766 equivalent gfxmode without color settings"
+  fail "managed GRUB display policy keeps GOP gfxterm at VGA 766 equivalent gfxmode without color settings"
+fi
+
+if grep -F -q 'menuentry "Last Boot (\$active_profile_label) [\$active_kernel_ver]"' "$ROOT_DIR/d-i/debian/hooks/shared/target/etc/default/grub-profiles.tmpl" &&
+   grep -q '^installer_usb_first_partition() {$' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
+   grep -q '^managed_grub_display_preload_modules() {$' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh" &&
+   grep -q '^normalize_target_grub_video_stack() {$' "$ROOT_DIR/d-i/debian/scripts/late/grub.sh"; then
+  pass "managed GRUB labels last-boot entries clearly and hardens EFI video loading"
+else
+  fail "managed GRUB labels last-boot entries clearly and hardens EFI video loading"
 fi
 
 snapshot_menu_line=$(grep -n "submenu 'BTRFS Snapshots'" "$ROOT_DIR/d-i/debian/hooks/shared/target/etc/default/grub-profiles.tmpl" | head -n 1 | cut -d: -f1)

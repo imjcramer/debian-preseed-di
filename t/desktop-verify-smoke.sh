@@ -624,6 +624,7 @@ wofi_style_template="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.co
 shared_desktop_env="$ROOT_DIR/d-i/debian/hosts/shared/desktop.env"
 if grep -q '^gtk-font-name=Noto Sans __INSTALLER_LABWC_GTK_FONT_SIZE__$' "$gtk3_settings_template" &&
    grep -q '^gtk-font-name=Noto Sans __INSTALLER_LABWC_GTK_FONT_SIZE__$' "$gtk4_settings_template" &&
+   grep -q '<policy>center</policy>' "$wlr_labwc_template" &&
    grep -q '__INSTALLER_LABWC_FONT_WINDOW_SIZE__' "$wlr_labwc_template" &&
    grep -q '__INSTALLER_LABWC_FONT_MENU_SIZE__' "$wlr_labwc_template" &&
    grep -q '__INSTALLER_LABWC_FONT_OSD_SIZE__' "$wlr_labwc_template" &&
@@ -633,9 +634,9 @@ if grep -q '^gtk-font-name=Noto Sans __INSTALLER_LABWC_GTK_FONT_SIZE__$' "$gtk3_
    grep -q '^LABWC_GTK_FONT_SIZE="12"$' "$shared_desktop_env" &&
    grep -q '^LABWC_WOFI_FONT_SIZE="15"$' "$shared_desktop_env" &&
    grep -q '^  font-size: __INSTALLER_LABWC_WOFI_FONT_SIZE__px;$' "$wofi_style_template"; then
-  pass "GTK, Labwc, and Wofi text defaults are policy-driven without scaling"
+  pass "GTK, Labwc, placement, and Wofi defaults are policy-driven without scaling"
 else
-  fail "GTK, Labwc, and Wofi text defaults are policy-driven without scaling"
+  fail "GTK, Labwc, placement, and Wofi defaults are policy-driven without scaling"
 fi
 
 profile_file="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.profile"

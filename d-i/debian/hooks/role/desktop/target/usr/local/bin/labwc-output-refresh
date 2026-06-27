@@ -53,6 +53,7 @@ sub refresh_outputs {
 
     my $state_before = capture_command($wlr_randr);
     return 0 if $state_before eq q{};
+    my $previous_topology = load_saved_topology();
 
     my @lines = split /\n/, $state_before;
     my @outputs = connected_outputs(@lines);
@@ -69,7 +70,12 @@ sub refresh_outputs {
 
     usleep(250_000);
     my $state_after = capture_command($wlr_randr);
-    return topology_changed($state_before, $state_after) ? $restart_delay_us : 0;
+    save_topology($state_after);
+
+    return topology_changed($state_before, $state_after)
+      || topology_changed($previous_topology, $state_after)
+      ? $restart_delay_us
+      : 0;
 }
 
 sub selection_plan {
@@ -157,6 +163,50 @@ sub session_state_dir {
         1;
     } or return undef;
     return $dir;
+}
+
+sub topology_state_dir {
+    my $base = $ENV{XDG_RUNTIME_DIR} // q{};
+    if ($base eq q{}) {
+        return session_state_dir();
+    }
+
+    my $dir = "${base}/labwc";
+    eval {
+        make_path($dir, { mode => 0700 }) if !-d $dir;
+        1;
+    } or return undef;
+    return $dir;
+}
+
+sub topology_state_path {
+    my $dir = topology_state_dir();
+    return undef if !defined $dir;
+    return "${dir}/output-topology.state";
+}
+
+sub load_saved_topology {
+    my $path = topology_state_path();
+    return q{} if !defined $path || !-r $path;
+
+    open my $fh, '<', $path or return q{};
+    local $/ = undef;
+    my $state = <$fh> // q{};
+    close $fh;
+    return $state;
+}
+
+sub save_topology {
+    my ($state) = @_;
+    return if !defined $state || $state eq q{};
+
+    my $path = topology_state_path();
+    return if !defined $path;
+
+    open my $fh, '>', $path or return;
+    print {$fh} $state;
+    close $fh;
+    return;
 }
 
 sub find_command {

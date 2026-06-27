@@ -73,7 +73,7 @@ sudo glab-helper --user glab-user gitlab-runner-managed ensure-images
   are owned and writable by the service user, and confirms the Podman backend
   is reachable and still rootless over `netavark`
 - `ensure-images`: builds only the managed local runner images that are missing
-  and prepares the Aptly runner's local `stable`/`unstable` unshare tarballs
+  and prepares the Aptly runner's local `stable`/`testing`/`unstable` unshare tarballs
 - `once`: runs `refresh --require-active`, then `preflight`, then
   `ensure-images`, and finally starts or restarts the user service so updated
   unit settings and rendered config take effect immediately

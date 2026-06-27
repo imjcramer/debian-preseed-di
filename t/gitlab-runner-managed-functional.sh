@@ -209,25 +209,18 @@ exit 2
 EOF
 chmod +x "$MOCK_BIN/getent"
 
-cat >"$MOCK_BIN/sbuild-createchroot" <<'EOF'
+cat >"$MOCK_BIN/mmdebstrap" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
 tarball_path=
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    --make-sbuild-tarball)
-      tarball_path="$2"
-      shift 2
-      ;;
-    --arch=*|--chroot-mode=*)
+    --architectures=*|--variant=*|--include=*|--skip=*)
       shift
       ;;
-    --arch|--chroot-mode)
+    --architectures|--variant|--include|--skip)
       shift 2
-      ;;
-    --no-deb-src)
-      shift
       ;;
     *)
       break
@@ -235,11 +228,12 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-: "${tarball_path:?missing tarball path}"
+: "${2:?missing tarball path}"
+tarball_path="$2"
 mkdir -p "$(dirname "$tarball_path")"
 printf 'mock tarball\n' >"$tarball_path"
 EOF
-chmod +x "$MOCK_BIN/sbuild-createchroot"
+chmod +x "$MOCK_BIN/mmdebstrap"
 
 cat >"$MOCK_BIN/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -502,6 +496,7 @@ export TEST_PODMAN_IMAGE_EXISTS="false"
 APTLY_JOB_HOME="$STATE_BASE/glab-aptly/home"
 APTLY_SBUILD_CONFIG="$APTLY_JOB_HOME/.config/sbuild/config.pl"
 APTLY_SBUILD_STABLE="$TMP_ROOT/pool/cache/aptly/tools/sbuild/stable-amd64-sbuild.tar.gz"
+APTLY_SBUILD_TESTING="$TMP_ROOT/pool/cache/aptly/tools/sbuild/testing-amd64-sbuild.tar.gz"
 APTLY_SBUILD_UNSTABLE="$TMP_ROOT/pool/cache/aptly/tools/sbuild/unstable-amd64-sbuild.tar.gz"
 
 if bash "$PATCHED_HELPER" --user glab-aptly ensure-images >"$TMP_ROOT/aptly-images.stdout" 2>"$TMP_ROOT/aptly-images.stderr"; then
@@ -518,10 +513,11 @@ else
 fi
 
 if [ -f "$APTLY_SBUILD_STABLE" ] &&
+   [ -f "$APTLY_SBUILD_TESTING" ] &&
    [ -f "$APTLY_SBUILD_UNSTABLE" ]; then
-  pass "aptly ensure-images seeds the stable and unstable sbuild tarballs"
+  pass "aptly ensure-images seeds the stable, testing, and unstable sbuild tarballs"
 else
-  fail "aptly ensure-images seeds the stable and unstable sbuild tarballs"
+  fail "aptly ensure-images seeds the stable, testing, and unstable sbuild tarballs"
 fi
 
 if [ -f "$APTLY_SBUILD_CONFIG" ] &&

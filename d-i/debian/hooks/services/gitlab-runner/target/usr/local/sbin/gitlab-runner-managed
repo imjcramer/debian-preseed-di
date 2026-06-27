@@ -600,7 +600,7 @@ ensure_aptly_sbuild_tarball() {
   fi
 
   install -d -m 0700 -- "$tarball_dir"
-  workspace_dir="$(mktemp -d "${context_tmp_dir%/}/sbuild-createchroot.${tarball_name}.XXXXXXXXXX")"
+  workspace_dir="$(mktemp -d "${context_tmp_dir%/}/mmdebstrap.${tarball_name}.XXXXXXXXXX")"
   if [[ "$(id -u)" -eq 0 ]]; then
     chown -R "${context_uid}:${context_gid}" "$tarball_dir" "$workspace_dir"
   fi
@@ -707,9 +707,6 @@ collect_active_runners() {
     emit_spec_line "$spec_path" "runner.${id_lower}.image_build_mode" "$image_mode"
     docker_userns_mode="$(runner_var "$id_upper" DOCKER_USERNS_MODE)"
     docker_user="$(runner_var "$id_upper" DOCKER_USER)"
-    if [[ "$id_upper" == "APTLY" && -n "$docker_userns_mode" && -z "$docker_user" ]]; then
-      docker_user="${context_uid}:${context_gid}"
-    fi
     if [[ -n "$docker_user" ]]; then
       emit_spec_line "$spec_path" "runner.${id_lower}.docker_user" "$docker_user"
     fi

@@ -454,7 +454,7 @@ if [ -n "\$${last_kernel_var}" ]; then
         fi
     fi
 fi
-menuentry "${distro_title_raw} (\$active_profile_label) [\$active_kernel_ver]" --id '${grub_default_entry}' --class debian --class gnu-linux --class gnu --class os {
+menuentry "Last Boot (\$active_profile_label) [\$active_kernel_ver]" --id '${grub_default_entry}' --class debian --class gnu-linux --class gnu --class os {
     set ${last_profile_var}="\$active_profile"
     set ${last_kernel_var}="\$active_kernel_ver"
     if [ -s \$prefix/grubenv ]; then
@@ -492,7 +492,7 @@ menuentry 'Boot from Rescue USB' --id 'installer-rescue-usb' --class efi --class
                 false
             fi
         else
-            echo 'The installer rescue USB was not found.'
+            echo 'Rescue USB not plugged in'
             false
         fi
     else

@@ -537,6 +537,20 @@ first_missing_fingerprint() {
   return 1
 }
 
+fingerprint_manifest_is_covered() {
+  local manifest listed_fps fp
+
+  manifest=$1
+  listed_fps=$2
+
+  while IFS= read -r fp || [ -n "$fp" ]; do
+    [ -n "$fp" ] || continue
+    fingerprint_present "$fp" "$listed_fps" || return 1
+  done < "$manifest"
+
+  return 0
+}
+
 wait_for_mok_delete_fingerprints() {
   local manifest attempts attempt listed_delete_fps missing_fp
 
@@ -597,7 +611,7 @@ ensure_mok_import() {
   [ -n "$expected_fp" ] || fatal "could not calculate managed MOK certificate fingerprint"
   pending_fps=$(mokutil --list-new 2>/dev/null | fingerprints_from_mokutil || true)
   pending_delete_fps=$(mokutil --list-delete 2>/dev/null | fingerprints_from_mokutil || true)
-  skip_delete_queue=false
+  existing_pending_delete_fps=$pending_delete_fps
 
   if [ -n "$pending_fps" ]; then
     log "info: revoking existing pending MOK import before queueing $SECURE_BOOT_MOK_CERT_DER"
@@ -606,8 +620,9 @@ ensure_mok_import() {
   if [ -n "$pending_delete_fps" ]; then
     log "info: revoking existing pending MOK delete request before queueing managed cleanup"
     if ! mokutil --revoke-delete >/dev/null 2>&1; then
-      log "warn: failed to revoke stale pending MOK delete request; continuing with managed import"
-      skip_delete_queue=true
+      log "warn: failed to revoke stale pending MOK delete request; checking whether the existing delete queue still covers managed cleanup"
+    else
+      existing_pending_delete_fps=
     fi
   fi
 
@@ -637,8 +652,6 @@ ensure_mok_import() {
     fatal "failed to export enrolled MOK certificates"
   fi
 
-  exact_enrolled=false
-  delete_queued=false
   for enrolled_cert in "$export_dir"/*.der; do
     [ -e "$enrolled_cert" ] || continue
     enrolled_fp=$(cert_sha1_fingerprint "$enrolled_cert" DER || true)
@@ -646,25 +659,21 @@ ensure_mok_import() {
       log "warn: skipping enrolled MOK certificate with unreadable fingerprint: ${enrolled_cert}"
       continue
     fi
-    if [ "$enrolled_fp" = "$expected_fp" ]; then
-      exact_enrolled=true
-    fi
     printf '%s\n' "$enrolled_cert" >>"$delete_manifest"
     printf '%s\n' "$enrolled_fp" >>"$delete_fp_manifest"
   done
 
-  if [ -s "$delete_manifest" ] && [ "$skip_delete_queue" != true ]; then
+  if [ -s "$delete_manifest" ]; then
     if queue_enrolled_mok_deletions "$hash_file" "$delete_manifest" "$delete_fp_manifest"; then
-      delete_queued=true
+      :
+    elif [ -n "$existing_pending_delete_fps" ] &&
+         fingerprint_manifest_is_covered "$delete_fp_manifest" "$existing_pending_delete_fps"; then
+      log "info: existing pending MOK delete request already covers all enrolled MOK certificate fingerprints"
+    else
+      rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"
+      rm -rf "$export_dir"
+      fatal "failed to queue managed MOK deletions for all enrolled certificates before import"
     fi
-  fi
-
-  if [ "$exact_enrolled" = true ] && [ "$delete_queued" != true ]; then
-    log "info: matching managed MOK certificate is already enrolled and no delete request was queued; import is already satisfied"
-    rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"
-    rm -rf "$export_dir"
-    trap - RETURN
-    return 0
   fi
 
   log "info: queueing MOK import for $SECURE_BOOT_MOK_CERT_DER"

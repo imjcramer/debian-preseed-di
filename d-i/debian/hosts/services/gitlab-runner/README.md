@@ -151,7 +151,7 @@ Behavior:
   now means the user service both reached `active` and stayed active through
   the configured verification window instead of only blipping active once
 - `ensure-images`: builds any missing runner image and ensures the Aptly runner
-  has local `stable` and `unstable` unshare tarballs plus a managed
+  has local `stable`, `testing`, and `unstable` unshare tarballs plus a managed
   `~/.config/sbuild/config.pl`
 
 `refresh --require-active` fails closed when the selected runner has no token.

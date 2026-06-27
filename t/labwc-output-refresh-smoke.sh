@@ -12,7 +12,7 @@ TRANSITION_MARKER="${TMP_DIR}/wlr-randr.transitioned"
 LOG_FILE="${TMP_DIR}/wlr-randr.log"
 ACTION_LOG="${TMP_DIR}/actions.log"
 
-TEST_COUNT=6
+TEST_COUNT=7
 TEST_INDEX=0
 
 cleanup() {
@@ -206,6 +206,22 @@ else
 fi
 
 write_state <<'EOF'
+eDP-1 "Internal"
+  Enabled: yes
+  Modes:
+    1920x1200 px, 60.000000 Hz (preferred)
+EOF
+PGREP_WAYBAR=true \
+PGREP_DOCK=true \
+run_refresh
+if grep -Eq 'pkill .*-x waybar$' "$ACTION_LOG" &&
+   grep -F -q -- 'labwc-dock --restart' "$ACTION_LOG"; then
+  pass "stored topology changes still restart session chrome after unplug auto-reconfiguration"
+else
+  fail "stored topology changes still restart session chrome after unplug auto-reconfiguration"
+fi
+
+write_state <<'EOF'
 HDMI-A-1 "External"
   Enabled: yes
   Modes:
@@ -260,10 +276,10 @@ else
 fi
 
 write_state <<'EOF'
-HDMI-A-1 "External"
+eDP-1 "Internal"
   Enabled: yes
   Modes:
-    1920x1080 px, 60.000000 Hz (preferred)
+    1920x1200 px, 60.000000 Hz (preferred)
 EOF
 PGREP_WAYBAR=true \
 PGREP_DOCK=true \

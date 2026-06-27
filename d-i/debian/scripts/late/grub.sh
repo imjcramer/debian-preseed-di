@@ -61,7 +61,7 @@ grub_display_placeholder_map() {
   write_shell_config_var GRUB_TERMINAL_OUTPUT "${GRUB_DISPLAY_TERMINAL_OUTPUT}"
   write_shell_config_var GRUB_GFXMODE "${GRUB_DISPLAY_GFXMODE}"
   write_shell_config_var GRUB_GFXPAYLOAD_LINUX "${GRUB_DISPLAY_GFXPAYLOAD_LINUX}"
-  write_shell_config_var GRUB_PRELOAD_MODULES "${GRUB_DISPLAY_PRELOAD_MODULES}"
+  write_shell_config_var GRUB_PRELOAD_MODULES "$(managed_grub_display_preload_modules)"
 }
 
 grub_shared_target_path() {
@@ -126,7 +126,118 @@ path_mounted_fat_device_uuid() {
     vfat|fat|fat12|fat16|fat32) ;;
     *) return 1 ;;
   esac
+
+  first_partition_source=$(installer_usb_first_partition "$best_source" 2>/dev/null || true)
+  case "$first_partition_source" in
+    /dev/*)
+      case "$(blkid -s TYPE -o value "$first_partition_source" 2>/dev/null || true)" in
+        vfat|fat|fat12|fat16|fat32)
+          best_source=$first_partition_source
+          ;;
+      esac
+      ;;
+  esac
+
   blkid -s UUID -o value "$best_source" 2>/dev/null
+}
+
+installer_usb_first_partition() {
+  device_path=$1
+  parent_disk=$(lsblk -nrpo PKNAME -- "$device_path" 2>/dev/null | sed -n '/./{p;q;}')
+  case "$parent_disk" in
+    '') return 1 ;;
+    /dev/*) ;;
+    *) parent_disk="/dev/$parent_disk" ;;
+  esac
+  [ -b "$parent_disk" ] || return 1
+
+  first_partition=$(
+    lsblk -nrpo PATH,TYPE,PARTN -- "$parent_disk" 2>/dev/null |
+      awk '$2 == "part" && $3 == "1" { print $1; exit }'
+  )
+  case "$first_partition" in
+    /dev/*)
+      printf '%s\n' "$first_partition"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+managed_grub_display_preload_modules() {
+  seen_modules=
+  normalized_modules=
+
+  add_module() {
+    module_name=$1
+    [ -n "$module_name" ] || return 0
+    case "$module_name" in
+      *[!A-Za-z0-9_+-]*)
+        installer_fatal "unsupported GRUB preload module name: ${module_name}"
+        ;;
+    esac
+    case " $seen_modules " in
+      *" $module_name "*) return 0 ;;
+    esac
+    seen_modules="${seen_modules}${seen_modules:+ }${module_name}"
+    normalized_modules="${normalized_modules}${normalized_modules:+ }${module_name}"
+  }
+
+  case "${INSTALLER_GRUB_EFI_TARGET:-}" in
+    *efi)
+      for module_name in ${GRUB_DISPLAY_PRELOAD_MODULES:-}; do
+        case "$module_name" in
+          all_video|efi_uga|video_bochs|video_cirrus)
+            continue
+            ;;
+        esac
+        add_module "$module_name"
+      done
+      add_module efi_gop
+      if [ "${GRUB_DISPLAY_TERMINAL_OUTPUT:-}" = gfxterm ]; then
+        add_module gfxterm
+      fi
+      ;;
+    *)
+      for module_name in ${GRUB_DISPLAY_PRELOAD_MODULES:-}; do
+        add_module "$module_name"
+      done
+      ;;
+  esac
+
+  printf '%s\n' "$normalized_modules"
+}
+
+normalize_target_grub_video_stack() {
+  case "${INSTALLER_GRUB_EFI_TARGET:-}" in
+    x86_64-efi|arm64-efi) ;;
+    *) return 0 ;;
+  esac
+
+  # shellcheck disable=SC2016
+  run_in_target "normalize GRUB EFI video module loading for signed boot" /bin/sh -c '
+set -eu
+header=/etc/grub.d/00_header
+[ -r "$header" ] || exit 0
+[ -w "$header" ] || exit 0
+
+tmp=$(mktemp)
+trap "rm -f \"$tmp\"" EXIT HUP INT TERM
+
+sed \
+  -e "s/^\([[:space:]]*\)insmod all_video$/\1insmod efi_gop/" \
+  -e "s/^\([[:space:]]*\)insmod efi_uga$/\1: # managed: skip legacy EFI UGA video module/" \
+  -e "s/^\([[:space:]]*\)insmod video_bochs$/\1: # managed: skip legacy bochs video module/" \
+  -e "s/^\([[:space:]]*\)insmod video_cirrus$/\1: # managed: skip legacy cirrus video module/" \
+  "$header" >"$tmp"
+
+if ! cmp -s "$header" "$tmp"; then
+  install -m 0755 "$tmp" "$header"
+fi
+
+grep -F -q "insmod efi_gop" "$header"
+! grep -F -q "insmod all_video" "$header"
+' sh
 }
 
 installer_rescue_usb_search_uuid() {
@@ -1078,6 +1189,7 @@ ensure_target_secure_boot_packages() {
     fi
   fi
   repair_target_secure_boot_removable_loader
+  normalize_target_grub_video_stack
 }
 
 queue_target_secure_boot_mok_import() {
@@ -1245,6 +1357,7 @@ verify_grub_profile_entries() {
   grub_dropin="/target${DIR_GRUB_DEFAULT}/05-bootprofiles.cfg"
   grub_os_prober_cfg="/target${DIR_GRUB_DEFAULT}/50-os-prober.cfg"
   grub_display_cfg="/target${FILE_GRUB_DISPLAY_CFG}"
+  grub_header=/target/etc/grub.d/00_header
 
   [ -r "$grub_cfg" ] || installer_fatal "generated grub.cfg is missing"
   [ -r "$custom_cfg" ] || installer_fatal "managed GRUB custom.cfg is missing"
@@ -1253,6 +1366,13 @@ verify_grub_profile_entries() {
   [ -r "$grub_dropin" ] || installer_fatal "target GRUB bootprofile drop-in is missing"
   [ -r "$grub_os_prober_cfg" ] || installer_fatal "target GRUB os-prober drop-in is missing"
   [ -r "$grub_display_cfg" ] || installer_fatal "target GRUB display drop-in is missing"
+  [ -r "$grub_header" ] || installer_fatal "target GRUB 00_header is missing"
+  case "${INSTALLER_GRUB_EFI_TARGET:-}" in
+    x86_64-efi|arm64-efi)
+      grep -F -q "insmod efi_gop" "$grub_header" || installer_fatal "target GRUB 00_header is missing the managed EFI GOP loader"
+      ! grep -F -q "insmod all_video" "$grub_header" || installer_fatal "target GRUB 00_header still loads all_video under Secure Boot"
+      ;;
+  esac
   if [ -e "/target${DIR_GRUB_SCRIPTS}/05_debian_theme" ] && [ -x "/target${DIR_GRUB_SCRIPTS}/05_debian_theme" ]; then
     installer_fatal "target GRUB 05_debian_theme generator is still executable"
   fi
