@@ -758,8 +758,14 @@ prepare_install_volatile_dirs() {
   ensure_optional_apt_dir_mode() {
     path=$1
     mode=$2
+    apt_uid=
     install -d -m "$mode" "$path"
-    if id -u _apt >/dev/null 2>&1; then
+    if [ -r "$TARGET_ROOT/etc/passwd" ]; then
+      apt_uid=$(awk -F: '$1 == "_apt" { print $3; exit }' "$TARGET_ROOT/etc/passwd")
+    fi
+    if [ -n "$apt_uid" ]; then
+      chown "${apt_uid}:0" "$path"
+    elif id -u _apt >/dev/null 2>&1; then
       chown "_apt:root" "$path"
     fi
     chmod "$mode" "$path"
@@ -1220,8 +1226,14 @@ prepare_volatile_dirs() {
   ensure_optional_apt_dir_mode() {
     path=$1
     mode=$2
+    apt_uid=
     install -d -m "$mode" "$path"
-    if id -u _apt >/dev/null 2>&1; then
+    if [ -r "$TARGET_ROOT/etc/passwd" ]; then
+      apt_uid=$(awk -F: '$1 == "_apt" { print $3; exit }' "$TARGET_ROOT/etc/passwd")
+    fi
+    if [ -n "$apt_uid" ]; then
+      chown "${apt_uid}:0" "$path"
+    elif id -u _apt >/dev/null 2>&1; then
       chown "_apt:root" "$path"
     fi
     chmod "$mode" "$path"

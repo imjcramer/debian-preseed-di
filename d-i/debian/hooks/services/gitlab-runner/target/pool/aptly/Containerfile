@@ -2,7 +2,10 @@ FROM docker.io/library/debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+RUN install -d -m 0755 /var/cache/apt /var/cache/apt/archives /var/lib/apt/lists \
+    && install -d -m 0700 /var/cache/apt/archives/partial /var/lib/apt/lists/partial \
+    && if id -u _apt >/dev/null 2>&1; then chown _apt:root /var/cache/apt/archives/partial /var/lib/apt/lists/partial; fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         aptly \
         bash \

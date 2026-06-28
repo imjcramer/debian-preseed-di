@@ -50,10 +50,12 @@ gitlab_runner_load_envs() {
   GITLAB_RUNNER_SHARED_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-shared.env"
   GITLAB_RUNNER_APTLY_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-aptly.env"
   GITLAB_RUNNER_BUILD_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-build.env"
+  GITLAB_RUNNER_BAZEL_SOURCE_ENV="${TMP_ENV_DIR}/gitlab-runner-bazel.env"
 
   gitlab_runner_fetch_env gitlab-runner/gitlab-runner-shared.env "$GITLAB_RUNNER_SHARED_SOURCE_ENV"
   gitlab_runner_fetch_env gitlab-runner/gitlab-runner-aptly.env "$GITLAB_RUNNER_APTLY_SOURCE_ENV"
   gitlab_runner_fetch_env gitlab-runner/gitlab-runner-build.env "$GITLAB_RUNNER_BUILD_SOURCE_ENV"
+  gitlab_runner_fetch_env gitlab-runner/gitlab-runner-bazel.env "$GITLAB_RUNNER_BAZEL_SOURCE_ENV"
 
   # shellcheck disable=SC1090,SC1091
   . "$GITLAB_RUNNER_SHARED_SOURCE_ENV"
@@ -61,6 +63,8 @@ gitlab_runner_load_envs() {
   . "$GITLAB_RUNNER_APTLY_SOURCE_ENV"
   # shellcheck disable=SC1090,SC1091
   . "$GITLAB_RUNNER_BUILD_SOURCE_ENV"
+  # shellcheck disable=SC1090,SC1091
+  . "$GITLAB_RUNNER_BAZEL_SOURCE_ENV"
 
   gitlab_runner_require_abs_path GITLAB_RUNNER_ENV_DIR "${GITLAB_RUNNER_ENV_DIR:-}"
   gitlab_runner_require_abs_path GITLAB_RUNNER_STATE_BASE "${GITLAB_RUNNER_STATE_BASE:-}"
@@ -72,6 +76,13 @@ gitlab_runner_load_envs() {
   podman_require_positive_uint GITLAB_RUNNER_START_TIMEOUT_SECONDS "${GITLAB_RUNNER_START_TIMEOUT_SECONDS:-1200}"
   gitlab_runner_validate_username GITLAB_RUNNER_APTLY_USERNAME "${GITLAB_RUNNER_APTLY_USERNAME:-}"
   gitlab_runner_validate_username GITLAB_RUNNER_BUILD_USERNAME "${GITLAB_RUNNER_BUILD_USERNAME:-}"
+  gitlab_runner_validate_username GITLAB_RUNNER_BAZEL_USERNAME "${GITLAB_RUNNER_BAZEL_USERNAME:-}"
+  [ "${GITLAB_RUNNER_APTLY_USERNAME}" != "${GITLAB_RUNNER_BUILD_USERNAME}" ] ||
+    installer_fatal "GITLAB_RUNNER_APTLY_USERNAME and GITLAB_RUNNER_BUILD_USERNAME must differ"
+  [ "${GITLAB_RUNNER_APTLY_USERNAME}" != "${GITLAB_RUNNER_BAZEL_USERNAME}" ] ||
+    installer_fatal "GITLAB_RUNNER_APTLY_USERNAME and GITLAB_RUNNER_BAZEL_USERNAME must differ"
+  [ "${GITLAB_RUNNER_BUILD_USERNAME}" != "${GITLAB_RUNNER_BAZEL_USERNAME}" ] ||
+    installer_fatal "GITLAB_RUNNER_BUILD_USERNAME and GITLAB_RUNNER_BAZEL_USERNAME must differ"
   [ -n "${GITLAB_RUNNER_CONFIG_GROUP:-}" ] || installer_fatal "GITLAB_RUNNER_CONFIG_GROUP must not be empty"
   case "${GITLAB_RUNNER_CONTROL_DIR_MODE:-0750}" in
     [0-7][0-7][0-7][0-7]|[0-7][0-7][0-7]) ;;
@@ -116,12 +127,14 @@ gitlab_runner_stage_target_envs() {
   stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-shared.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env" 0644
   stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-aptly.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env" 0640
   stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-build.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" 0640
+  stage_target_asset "$(installer_repo_join_var DIR_HOSTS_SERVICES gitlab-runner/gitlab-runner-bazel.env)" "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-bazel.env" 0640
   rm -f -- "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env"
 
   chown root:root "/target${GITLAB_RUNNER_ENV_DIR}/README.md"
   chown root:root "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env"
   chown "root:${GITLAB_RUNNER_APTLY_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env"
   chown "root:${GITLAB_RUNNER_SHARED_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env"
+  chown "root:${GITLAB_RUNNER_BAZEL_GID}" "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-bazel.env"
 }
 
 gitlab_runner_verify_target_env_path() {
@@ -193,6 +206,7 @@ env_dir_mode=$3
   gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-shared.env" 0 644
   gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-aptly.env" "$GITLAB_RUNNER_APTLY_GID" 640
   gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-build.env" "$GITLAB_RUNNER_SHARED_GID" 640
+  gitlab_runner_verify_target_env_path "${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-bazel.env" "$GITLAB_RUNNER_BAZEL_GID" 640
   [ ! -e "/target${GITLAB_RUNNER_ENV_DIR}/gitlab-runner-task.env" ] ||
     installer_fatal "legacy gitlab-runner-task.env must not remain staged"
 }
@@ -464,7 +478,8 @@ for runner_user in "$@"; do
 done
   ' sh devops \
     "$GITLAB_RUNNER_APTLY_USERNAME" \
-    "$GITLAB_RUNNER_BUILD_USERNAME"
+    "$GITLAB_RUNNER_BUILD_USERNAME" \
+    "$GITLAB_RUNNER_BAZEL_USERNAME"
 }
 
 gitlab_runner_prepare_cache_root() {
@@ -584,6 +599,7 @@ configure_target_gitlab_runner_if_selected() {
   gitlab_runner_remove_target_package_identity
   gitlab_runner_configure_podman_user "$GITLAB_RUNNER_APTLY_USERNAME"
   gitlab_runner_configure_podman_user "$GITLAB_RUNNER_BUILD_USERNAME"
+  gitlab_runner_configure_podman_user "$GITLAB_RUNNER_BAZEL_USERNAME"
   gitlab_runner_add_managed_users_to_devops_group
 
   GITLAB_RUNNER_CONTROL_GID=$(gitlab_runner_target_group_gid "$GITLAB_RUNNER_CONFIG_GROUP")
@@ -603,12 +619,22 @@ configure_target_gitlab_runner_if_selected() {
   GITLAB_RUNNER_SHARED_GID=${shared_record_rest%%:*}
   GITLAB_RUNNER_SHARED_HOME=${shared_record_rest#*:}
 
+  bazel_record=$(gitlab_runner_target_passwd_record "$GITLAB_RUNNER_BAZEL_USERNAME")
+  [ -n "$bazel_record" ] || installer_fatal "target Bazel GitLab runner user is missing: ${GITLAB_RUNNER_BAZEL_USERNAME}"
+  GITLAB_RUNNER_BAZEL_UID=${bazel_record%%:*}
+  bazel_record_rest=${bazel_record#*:}
+  GITLAB_RUNNER_BAZEL_GID=${bazel_record_rest%%:*}
+  GITLAB_RUNNER_BAZEL_HOME=${bazel_record_rest#*:}
+
   gitlab_runner_prepare_runner_root "$GITLAB_RUNNER_APTLY_USERNAME" "$GITLAB_RUNNER_APTLY_UID" "$GITLAB_RUNNER_APTLY_GID"
   gitlab_runner_prepare_runner_root "$GITLAB_RUNNER_BUILD_USERNAME" "$GITLAB_RUNNER_SHARED_UID" "$GITLAB_RUNNER_SHARED_GID"
+  gitlab_runner_prepare_runner_root "$GITLAB_RUNNER_BAZEL_USERNAME" "$GITLAB_RUNNER_BAZEL_UID" "$GITLAB_RUNNER_BAZEL_GID"
   gitlab_runner_prepare_runner_paths "$GITLAB_RUNNER_APTLY_USERNAME" "$GITLAB_RUNNER_APTLY_UID" "$GITLAB_RUNNER_APTLY_GID" \
     "$GITLAB_RUNNER_APTLY_BUILDS_DIR" "$GITLAB_RUNNER_APTLY_GITLAB_CACHE_DIR" "$GITLAB_RUNNER_APTLY_CACHE_ROOT"
   gitlab_runner_prepare_runner_paths "$GITLAB_RUNNER_BUILD_USERNAME" "$GITLAB_RUNNER_SHARED_UID" "$GITLAB_RUNNER_SHARED_GID" \
     "$GITLAB_RUNNER_BUILD_BUILDS_DIR" "$GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR" "$GITLAB_RUNNER_BUILD_CACHE_ROOT"
+  gitlab_runner_prepare_runner_paths "$GITLAB_RUNNER_BAZEL_USERNAME" "$GITLAB_RUNNER_BAZEL_UID" "$GITLAB_RUNNER_BAZEL_GID" \
+    "$GITLAB_RUNNER_BAZEL_BUILDS_DIR" "$GITLAB_RUNNER_BAZEL_GITLAB_CACHE_DIR" "$GITLAB_RUNNER_BAZEL_CACHE_ROOT"
 
   gitlab_runner_install_target_bazelisk
   gitlab_runner_stage_service_assets
@@ -634,6 +660,16 @@ configure_target_gitlab_runner_if_selected() {
     "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/home ${GITLAB_RUNNER_SHARED_HOME} ${GITLAB_RUNNER_BUILD_BUILDS_DIR} ${GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_BUILD_CACHE_ROOT} ${GITLAB_RUNNER_PODMAN_TMP_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}/gitlab-runner %t" \
     "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"
 
+  gitlab_runner_render_unit \
+    "$GITLAB_RUNNER_BAZEL_USERNAME" \
+    "$GITLAB_RUNNER_BAZEL_UID" \
+    "$GITLAB_RUNNER_BAZEL_GID" \
+    "$GITLAB_RUNNER_BAZEL_HOME" \
+    "GitLab Runner bazel docker executor" \
+    "${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BAZEL_USERNAME}/work ${GITLAB_RUNNER_STATE_BASE}/${GITLAB_RUNNER_BAZEL_USERNAME}/home ${GITLAB_RUNNER_BAZEL_HOME} ${GITLAB_RUNNER_BAZEL_BUILDS_DIR} ${GITLAB_RUNNER_BAZEL_GITLAB_CACHE_DIR} ${GITLAB_RUNNER_BAZEL_CACHE_ROOT} ${GITLAB_RUNNER_PODMAN_TMP_BASE}/${GITLAB_RUNNER_BAZEL_USERNAME}/gitlab-runner %t" \
+    "${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BAZEL_USERNAME}"
+
   gitlab_runner_verify_target_staging "$GITLAB_RUNNER_APTLY_USERNAME"
   gitlab_runner_verify_target_staging "$GITLAB_RUNNER_BUILD_USERNAME"
+  gitlab_runner_verify_target_staging "$GITLAB_RUNNER_BAZEL_USERNAME"
 }

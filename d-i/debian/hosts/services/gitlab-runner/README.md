@@ -11,6 +11,7 @@ The installer copies these files into the target host:
 - `/etc/default/gitlab-runner/gitlab-runner-shared.env`
 - `/etc/default/gitlab-runner/gitlab-runner-aptly.env`
 - `/etc/default/gitlab-runner/gitlab-runner-build.env`
+- `/etc/default/gitlab-runner/gitlab-runner-bazel.env`
 - `/etc/default/gitlab-runner/README.md`
 
 The shared env file sets the managed state roots:
@@ -45,22 +46,25 @@ Runtime split:
 
 - `glab-aptly`: dedicated Aptly publishing runner
 - `glab-user`: shared build runner user
+- `glab-bazel`: dedicated Bazel + BuildBuddy runner user
 
-The Aptly runner and the shared build runner use separate user services.
+The Aptly runner, the shared build runner, and the Bazel runner use separate
+user services.
 Persistent Aptly state, signing material, and the in-container Aptly/sbuild
 workflows now stay on the dedicated `glab-aptly` account end to end.
 
 These managed users are intentionally provisioned with `/usr/sbin/nologin`.
-That means `sudo -iu glab-user` is expected to fail and is not the supported
-operator path for this service role.
+That means `sudo -iu glab-user`, `sudo -iu glab-bazel`, and
+`sudo -iu glab-aptly` are expected to fail and are not the supported operator
+path for this service role.
 
 GitLab's shell documentation matters here in one narrow way: the shell-profile
 loading section applies to executors that use `--login` shells, such as
 `shell`, `ssh`, `parallels`, and `virtualbox`. This repo uses the Docker
 executor backed by rootless Podman, and GitLab documents that Docker jobs run
 through plain `/bin/bash` inside the job container rather than a login shell.
-Host-side `.bashrc`, `.profile`, and `.bash_logout` for `glab-user` or
-`glab-aptly` therefore are not part of the Docker job path.
+Host-side `.bashrc`, `.profile`, and `.bash_logout` for `glab-user`,
+`glab-bazel`, or `glab-aptly` therefore are not part of the Docker job path.
 
 ## Token and secret contract
 
@@ -83,6 +87,14 @@ The build token may also be provided as a literal value or absolute file path:
 
 For the shared `glab-user` service, a blank build token disables the rendered
 runner stanza and `refresh --require-active` fails closed.
+
+The Bazel runner adds one more secret-bearing input:
+
+- `GITLAB_RUNNER_BUILDBUDDY_API`
+
+That value may also be a literal string or an absolute file path. Use a
+writable BuildBuddy org API key if GitLab CI should upload new cache artifacts;
+BuildBuddy read-only keys intentionally allow downloads only.
 
 ## Helper commands
 
@@ -109,6 +121,9 @@ sudo glab-helper --user glab-aptly podman ps
 sudo glab-helper --user glab-aptly aptly-managed publish snapshot repo-name s3:r2:
 sudo glab-helper --user glab-user status gitlab-runner.service
 sudo glab-helper --user glab-user journalctl -u gitlab-runner.service -n 200 --no-pager
+sudo glab-helper --user glab-bazel status gitlab-runner.service
+sudo glab-helper --user glab-bazel journalctl -u gitlab-runner.service -n 200 --no-pager
+sudo glab-helper --user glab-bazel gitlab-runner-managed once
 ```
 
 ## gitlab-runner-managed commands
@@ -136,6 +151,10 @@ sudo glab-helper --user glab-aptly gitlab-runner-managed ensure-images
 sudo glab-helper --user glab-user gitlab-runner-managed preflight
 sudo glab-helper --user glab-user gitlab-runner-managed refresh
 sudo glab-helper --user glab-user gitlab-runner-managed once
+
+sudo glab-helper --user glab-bazel gitlab-runner-managed preflight
+sudo glab-helper --user glab-bazel gitlab-runner-managed refresh
+sudo glab-helper --user glab-bazel gitlab-runner-managed once
 ```
 
 Behavior:
@@ -153,6 +172,45 @@ Behavior:
 - `ensure-images`: builds any missing runner image and ensures the Aptly runner
   has local `stable`, `testing`, and `unstable` unshare tarballs plus a managed
   `~/.config/sbuild/config.pl`
+
+The Bazel runner also renders a managed BuildBuddy auth include into the
+runner job home and bind-mounts the host `bazelisk` binary into both
+`/usr/local/bin/bazel` and `/usr/local/bin/bazelisk` inside Bazel CI
+containers. That keeps BuildBuddy auth off the project checkout while still
+making both command names available to generic Debian-based job images.
+
+## GitLab CI targeting
+
+This repository does not ship a checked-in `.gitlab-ci.yml`, so the managed
+runner contract lives here:
+
+- Bazel jobs should target `tags: [bazel, release, internal]`
+- Aptly publication jobs should target `tags: [aptly, publish, internal]`
+- Shared non-Bazel build jobs should target `tags: [build, release, internal]`
+
+Minimal Bazel job example:
+
+```yaml
+bazel-test:
+  tags: [bazel, release, internal]
+  script:
+    - bazel test //...
+```
+
+Minimal Aptly publication example:
+
+```yaml
+aptly-publish-testing:
+  tags: [aptly, publish, internal]
+  variables:
+    APTLY_CHANNEL: testing
+  script:
+    - aptly publish snapshot repo-name
+```
+
+The Bazel runner injects the managed BuildBuddy config through
+`/data/config/runners/glab-bazel/home/.bazelrc`, so CI jobs do not need to
+commit the org API key into the repository.
 
 `refresh --require-active` fails closed when the selected runner has no token.
 That is intentional and prevents starting an empty service definition.
@@ -226,6 +284,10 @@ Expected config paths:
 - `/pool/cache/aptly/tools/sbuild/unstable-amd64-sbuild.tar.gz`
 - `/data/config/runners/glab-user/config.toml`
 - `/data/config/runners/glab-user/.runner_system_id`
+- `/data/config/runners/glab-bazel/config.toml`
+- `/data/config/runners/glab-bazel/.runner_system_id`
+- `/data/config/runners/glab-bazel/home/.bazelrc`
+- `/data/config/runners/glab-bazel/home/.config/buildbuddy/auth.bazelrc`
 
 The rendered Docker-executor config targets the managed rootless Podman socket
 through `[runners.docker].host`. It does not export `DOCKER_HOST` or
@@ -267,15 +329,19 @@ start-limit window instead of looping forever.
 
 1. Populate the token fields in the env files.
 2. Populate Aptly R2 and GPG fields if the Aptly runner will publish.
-3. Run `sudo glab-helper --user glab-aptly aptly-managed render-config`.
-4. Run `sudo glab-helper --user glab-aptly gitlab-runner-managed once`.
-5. Run `sudo glab-helper --user glab-user gitlab-runner-managed once`.
-6. Verify service and logs:
-7. Verify `systemctl status aptly-bridge.path` before using `aptly publish ...` from CI.
+3. Populate `GITLAB_RUNNER_BUILDBUDDY_API` in `gitlab-runner-bazel.env`.
+4. Run `sudo glab-helper --user glab-aptly aptly-managed render-config`.
+5. Run `sudo glab-helper --user glab-aptly gitlab-runner-managed once`.
+6. Run `sudo glab-helper --user glab-user gitlab-runner-managed once`.
+7. Run `sudo glab-helper --user glab-bazel gitlab-runner-managed once`.
+8. Verify service and logs.
+9. Verify `systemctl status aptly-bridge.path` before using `aptly publish ...` from CI.
 
 ```sh
 sudo glab-helper --user glab-aptly status gitlab-runner.service
 sudo glab-helper --user glab-user status gitlab-runner.service
+sudo glab-helper --user glab-bazel status gitlab-runner.service
 sudo glab-helper --user glab-aptly journalctl -u gitlab-runner.service -n 100 --no-pager
 sudo glab-helper --user glab-user journalctl -u gitlab-runner.service -n 100 --no-pager
+sudo glab-helper --user glab-bazel journalctl -u gitlab-runner.service -n 100 --no-pager
 ```

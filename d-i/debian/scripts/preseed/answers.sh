@@ -650,13 +650,12 @@ append_fragment_apt_setup_local_records() {
 
     if preseed_parse_selection_fields "$logical_line"; then
       case "$PRESEED_RECORD_OWNER:$PRESEED_RECORD_QUESTION" in
-        d-i:apt-setup/local[0-9]/*)
+        d-i:apt-setup/local*/*)
           local_field=${PRESEED_RECORD_QUESTION#apt-setup/local}
           local_slot=${local_field%%/*}
           local_name=${local_field#*/}
           case "$local_slot" in
-            [0-9]) ;;
-            *) installer_fatal "unsupported apt-setup/local slot in preseed fragment: ${PRESEED_RECORD_QUESTION}" ;;
+            ''|*[!0-9]*) installer_fatal "unsupported apt-setup/local slot in preseed fragment: ${PRESEED_RECORD_QUESTION}" ;;
           esac
           [ -n "$local_name" ] ||
             installer_fatal "missing apt-setup/local field name in preseed fragment: ${PRESEED_RECORD_QUESTION}"
@@ -678,13 +677,12 @@ append_fragment_apt_setup_local_records() {
   if [ -n "$logical_line" ]; then
     if preseed_parse_selection_fields "$logical_line"; then
       case "$PRESEED_RECORD_OWNER:$PRESEED_RECORD_QUESTION" in
-        d-i:apt-setup/local[0-9]/*)
+        d-i:apt-setup/local*/*)
           local_field=${PRESEED_RECORD_QUESTION#apt-setup/local}
           local_slot=${local_field%%/*}
           local_name=${local_field#*/}
           case "$local_slot" in
-            [0-9]) ;;
-            *) installer_fatal "unsupported trailing apt-setup/local slot in preseed fragment: ${PRESEED_RECORD_QUESTION}" ;;
+            ''|*[!0-9]*) installer_fatal "unsupported trailing apt-setup/local slot in preseed fragment: ${PRESEED_RECORD_QUESTION}" ;;
           esac
           [ -n "$local_name" ] ||
             installer_fatal "missing trailing apt-setup/local field name in preseed fragment: ${PRESEED_RECORD_QUESTION}"
@@ -728,6 +726,9 @@ write_compacted_apt_setup_local_answers() {
   awk -F '\t' '
     {
       slot = $1 + 0
+      if (slot > max_slot) {
+        max_slot = slot
+      }
       field = $2
       type = $3
       value = ""
@@ -748,7 +749,7 @@ write_compacted_apt_setup_local_answers() {
     }
     END {
       next_slot = 0
-      for (slot = 0; slot <= 9; slot++) {
+      for (slot = 0; slot <= max_slot; slot++) {
         if (!(slot in slot_seen)) {
           continue
         }
@@ -830,7 +831,7 @@ collect_selected_fragments() {
     fi
     cached_path=$(ensure_cached_preseed_fragment "$rel_path")
     parse_preseed_fragment "$cached_path"
-    grep -E -v '^d-i[[:space:]]+(anna/choose_modules|pkgsel/include|apt-setup/local[0-9]/)[[:space:]]+' "$cached_path" >>"$merged_file" || true
+    grep -E -v '^d-i[[:space:]]+(anna/choose_modules|pkgsel/include|apt-setup/local[0-9]+/[^[:space:]]+)[[:space:]]+' "$cached_path" >>"$merged_file" || true
     printf '\n' >>"$merged_file"
   done <"$INCLUDE_LIST_FILE"
   chmod 0600 "$merged_file"

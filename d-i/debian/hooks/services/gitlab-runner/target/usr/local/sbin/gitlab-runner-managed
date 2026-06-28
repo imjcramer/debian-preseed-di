@@ -8,6 +8,7 @@ ENV_DIR="/etc/default/gitlab-runner"
 SHARED_ENV="${ENV_DIR}/gitlab-runner-shared.env"
 APTLY_ENV="${ENV_DIR}/gitlab-runner-aptly.env"
 BUILD_ENV="${ENV_DIR}/gitlab-runner-build.env"
+BAZEL_ENV="${ENV_DIR}/gitlab-runner-bazel.env"
 
 info() {
   printf '%s: %s\n' "$PROG" "$*" >&2
@@ -86,6 +87,12 @@ validate_http_url() {
   local label="$1"
   local value="$2"
   [[ "$value" =~ ^https?://[A-Za-z0-9._:-]+(/.*)?$ ]] || die "${label} must be an http or https URL"
+}
+
+validate_buildbuddy_endpoint() {
+  local label="$1"
+  local value="$2"
+  [[ "$value" =~ ^grpcs?://[A-Za-z0-9._:-]+(/.*)?$ ]] || die "${label} must use grpc:// or grpcs://"
 }
 
 validate_metrics_address() {
@@ -176,20 +183,10 @@ runner_extra_env_items() {
 }
 
 required_runner_token_vars() {
-  case "$context_kind" in
-    aptly)
-      printf '%s\n' GITLAB_RUNNER_APTLY_TOKEN
-      ;;
-    shared)
-      local id_upper
-      for id_upper in "${context_runner_ids[@]}"; do
-        printf 'GITLAB_RUNNER_%s_TOKEN\n' "$id_upper"
-      done
-      ;;
-    *)
-      return 0
-      ;;
-  esac
+  local id_upper
+  for id_upper in "${context_runner_ids[@]}"; do
+    printf 'GITLAB_RUNNER_%s_TOKEN\n' "$id_upper"
+  done
 }
 
 load_runner_env_if_present() {
@@ -198,11 +195,34 @@ load_runner_env_if_present() {
   load_env_file "$path"
 }
 
+load_buildbuddy_auth() {
+  local api_raw api_value endpoint_value results_url_value
+  [[ "${BUILDBUDDY_AUTH_LOADED:-false}" == "true" ]] && return 0
+
+  api_raw="${GITLAB_RUNNER_BUILDBUDDY_API:-}"
+  api_value="$(trim "$(read_secret_value "$api_raw")")"
+  [[ -n "$api_value" ]] || die "GITLAB_RUNNER_BUILDBUDDY_API must not be empty for ${context_user}"
+  validate_no_control_chars GITLAB_RUNNER_BUILDBUDDY_API "$api_value"
+
+  endpoint_value="$(trim "${GITLAB_RUNNER_BUILDBUDDY_ENDPOINT:-grpcs://remote.buildbuddy.io}")"
+  validate_buildbuddy_endpoint GITLAB_RUNNER_BUILDBUDDY_ENDPOINT "$endpoint_value"
+
+  results_url_value="$(trim "${GITLAB_RUNNER_BUILDBUDDY_RESULTS_URL:-https://app.buildbuddy.io/invocation/}")"
+  validate_http_url GITLAB_RUNNER_BUILDBUDDY_RESULTS_URL "$results_url_value"
+
+  buildbuddy_api_key="$api_value"
+  buildbuddy_endpoint="$endpoint_value"
+  buildbuddy_results_url="$results_url_value"
+  BUILDBUDDY_AUTH_LOADED=true
+}
+
 load_user_context() {
   local requested_user="$1"
   local passwd_entry _passwd_name _passwd_passwd _passwd_gecos _passwd_shell
   local build_loaded=false
   local build_username=
+  local bazel_loaded=false
+  local bazel_username=
 
   load_shared_env
   context_kind=
@@ -225,12 +245,36 @@ load_user_context() {
       build_username="${GITLAB_RUNNER_BUILD_USERNAME}"
     fi
 
-    [[ "$build_loaded" == "true" ]] ||
+    if load_runner_env_if_present "$BAZEL_ENV"; then
+      validate_username GITLAB_RUNNER_BAZEL_USERNAME "${GITLAB_RUNNER_BAZEL_USERNAME:-}"
+      bazel_loaded=true
+      bazel_username="${GITLAB_RUNNER_BAZEL_USERNAME}"
+    fi
+
+    if [[ -n "${GITLAB_RUNNER_APTLY_USERNAME:-}" && -n "$build_username" ]]; then
+      [[ "${GITLAB_RUNNER_APTLY_USERNAME}" != "$build_username" ]] ||
+        die "GITLAB_RUNNER_APTLY_USERNAME and GITLAB_RUNNER_BUILD_USERNAME must differ"
+    fi
+    if [[ -n "${GITLAB_RUNNER_APTLY_USERNAME:-}" && -n "$bazel_username" ]]; then
+      [[ "${GITLAB_RUNNER_APTLY_USERNAME}" != "$bazel_username" ]] ||
+        die "GITLAB_RUNNER_APTLY_USERNAME and GITLAB_RUNNER_BAZEL_USERNAME must differ"
+    fi
+    if [[ -n "$build_username" && -n "$bazel_username" ]]; then
+      [[ "$build_username" != "$bazel_username" ]] ||
+        die "GITLAB_RUNNER_BUILD_USERNAME and GITLAB_RUNNER_BAZEL_USERNAME must differ"
+    fi
+
+    [[ "$build_loaded" == "true" || "$bazel_loaded" == "true" ]] ||
       die "unsupported managed user: ${requested_user}"
 
     if [[ "$build_loaded" == "true" && "$requested_user" == "$build_username" ]]; then
       context_runner_ids=(BUILD)
       context_user="$build_username"
+    fi
+
+    if [[ "$bazel_loaded" == "true" && "$requested_user" == "$bazel_username" ]]; then
+      context_runner_ids=(BAZEL)
+      context_user="$bazel_username"
     fi
 
     [[ -n "$context_user" ]] || die "unsupported managed user: ${requested_user}"
@@ -582,6 +626,38 @@ EOF
   chmod 0600 "$config_path"
 }
 
+render_bazel_buildbuddy_config() {
+  local auth_dir auth_file bazelrc_file
+
+  [[ "$context_kind" == "shared" ]] || return 0
+  [[ " ${context_runner_ids[*]} " == *" BAZEL "* ]] || return 0
+  (( active_runner_count > 0 )) || return 0
+
+  load_buildbuddy_auth
+  auth_dir="${context_job_home}/.config/buildbuddy"
+  auth_file="${auth_dir}/auth.bazelrc"
+  bazelrc_file="${context_job_home}/.bazelrc"
+
+  install -d -m 0700 -- "$auth_dir"
+  cat >"$auth_file" <<EOF
+# Managed by gitlab-runner-managed for ${context_user}.
+build --bes_backend=${buildbuddy_endpoint}
+build --bes_results_url=${buildbuddy_results_url}
+build --remote_cache=${buildbuddy_endpoint}
+build --remote_header=x-buildbuddy-api-key=${buildbuddy_api_key}
+EOF
+  cat >"$bazelrc_file" <<EOF
+# Managed by gitlab-runner-managed for ${context_user}.
+try-import ${auth_file}
+EOF
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "${context_uid}:${context_gid}" "$auth_dir" "$auth_file" "$bazelrc_file"
+  fi
+  chmod 0700 "$auth_dir"
+  chmod 0600 "$auth_file" "$bazelrc_file"
+  info "rendered managed BuildBuddy Bazel auth for ${context_user}"
+}
+
 ensure_aptly_sbuild_tarball() {
   local suite="$1"
   local arch="$2"
@@ -733,8 +809,22 @@ EOF
     context_metrics_address="${active_metrics_values[0]}"
   else
     case "$context_kind" in
-      aptly) context_metrics_address="$(runner_var APTLY METRICS_ADDRESS)" ;;
-      shared) context_metrics_address="$(runner_var BUILD METRICS_ADDRESS)" ;;
+      aptly)
+        context_metrics_address="$(runner_var APTLY METRICS_ADDRESS)"
+        validate_metrics_address APTLY_METRICS_ADDRESS "$context_metrics_address"
+        ;;
+      shared)
+        case "${context_runner_ids[0]:-}" in
+          BAZEL)
+            context_metrics_address="$(runner_var BAZEL METRICS_ADDRESS)"
+            validate_metrics_address BAZEL_METRICS_ADDRESS "$context_metrics_address"
+            ;;
+          *)
+            context_metrics_address="$(runner_var BUILD METRICS_ADDRESS)"
+            validate_metrics_address BUILD_METRICS_ADDRESS "$context_metrics_address"
+            ;;
+        esac
+        ;;
     esac
   fi
 }
@@ -1109,6 +1199,7 @@ refresh_config() {
   if [[ "$require_active" == "true" && "$active_runner_count" -eq 0 ]]; then
     die "no active runner tokens found for ${context_user}; populate at least one of: $(required_runner_token_vars | paste -sd ' ' -) in ${ENV_DIR}"
   fi
+  render_bazel_buildbuddy_config
   if [[ "$context_kind" == "aptly" && "$active_runner_count" -gt 0 ]]; then
     render_aptly_disk_config
   fi
@@ -1253,6 +1344,7 @@ preflight_executor() {
     die "no active runner tokens found for ${context_user}; populate at least one of: $(required_runner_token_vars | paste -sd ' ' -) in ${ENV_DIR}"
   }
   verify_runner_storage_context
+  wait_for_podman_executor_ready
   backend_info="$(run_podman_as_context_user info --format '{{.Host.Security.Rootless}}|{{.Host.NetworkBackend}}')" ||
     die "failed to query the managed Podman executor backend for ${context_user}"
   [[ "$backend_info" == *"|"* ]] || die "unexpected Podman backend response for ${context_user}: ${backend_info}"
@@ -1294,11 +1386,22 @@ reconcile_podman_service() {
 
 wait_for_podman_executor_ready() {
   local tries="${GITLAB_RUNNER_PODMAN_READY_WAIT_SECONDS:-15}"
+  local socket_path
   [[ "$tries" =~ ^[0-9]+$ ]] || die "GITLAB_RUNNER_PODMAN_READY_WAIT_SECONDS must be numeric, got: ${tries:-unset}"
   (( 10#$tries >= 1 )) || die "GITLAB_RUNNER_PODMAN_READY_WAIT_SECONDS must be greater than zero"
+  socket_path="${context_docker_host#unix://}"
+
+  require_cmd systemctl
+  run_as_context_user systemctl --user show-environment >/dev/null 2>&1 ||
+    die "user manager is not reachable for ${context_user}; rerun through glab-helper or from an active login session"
 
   while (( tries > 0 )); do
-    if run_as_context_user systemctl --user is-active --quiet podman.socket &&
+    run_as_context_user systemctl --user reset-failed podman.service >/dev/null 2>&1 || true
+    run_as_context_user systemctl --user reset-failed podman.socket >/dev/null 2>&1 || true
+    if ! run_as_context_user systemctl --user is-active --quiet podman.socket; then
+      run_as_context_user systemctl --user start podman.socket >/dev/null 2>&1 || true
+    fi
+    if [[ -S "$socket_path" ]] &&
        run_podman_as_context_user ps --all --format '{{.ID}}' >/dev/null 2>&1; then
       info "validated podman executor readiness for ${context_user}"
       return 0
@@ -1390,10 +1493,10 @@ run_once() {
 
 usage() {
   cat <<EOF
-usage: ${PROG} --user <glab-aptly|glab-user> refresh [--require-active]
-       ${PROG} --user <glab-aptly|glab-user> preflight
-       ${PROG} --user <glab-aptly|glab-user> once
-       ${PROG} --user <glab-aptly|glab-user> ensure-images
+usage: ${PROG} --user <glab-aptly|glab-user|glab-bazel> refresh [--require-active]
+       ${PROG} --user <glab-aptly|glab-user|glab-bazel> preflight
+       ${PROG} --user <glab-aptly|glab-user|glab-bazel> once
+       ${PROG} --user <glab-aptly|glab-user|glab-bazel> ensure-images
 EOF
 }
 

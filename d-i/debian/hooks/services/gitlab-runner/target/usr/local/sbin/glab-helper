@@ -308,6 +308,7 @@ usage: ${PROG} --user <managed-runner-user> COMMAND [ARGS...]
 examples:
   ${PROG} --user glab-user status gitlab-runner.service
   ${PROG} --user glab-user podman ps
+  ${PROG} --user glab-bazel /usr/local/sbin/gitlab-runner-managed once
   ${PROG} --user glab-aptly /usr/local/sbin/gitlab-runner-managed once
   ${PROG} --user glab-aptly /usr/local/sbin/aptly-managed publish snapshot foo
 EOF

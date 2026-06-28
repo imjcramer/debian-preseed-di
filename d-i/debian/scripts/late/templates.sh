@@ -24,6 +24,7 @@ render_target_template_placeholder_map() {
   usbmedia_gid=${USBMEDIA_GID:-}
   gitlab_runner_aptly_username=${GITLAB_RUNNER_APTLY_USERNAME:-}
   gitlab_runner_build_username=${GITLAB_RUNNER_BUILD_USERNAME:-}
+  gitlab_runner_bazel_username=${GITLAB_RUNNER_BAZEL_USERNAME:-}
 
   cat <<EOF
 DIR_RUN_SYSCTL=$DIR_RUN_SYSCTL
@@ -65,6 +66,7 @@ ACCOUNT_USERNAME=$account_username
 USBMEDIA_GID=$usbmedia_gid
 GITLAB_RUNNER_APTLY_USERNAME=$gitlab_runner_aptly_username
 GITLAB_RUNNER_BUILD_USERNAME=$gitlab_runner_build_username
+GITLAB_RUNNER_BAZEL_USERNAME=$gitlab_runner_bazel_username
 SYSTEM_HOSTNAME=${SYSTEM_HOSTNAME:-}
 SYSTEM_DOMAIN=${SYSTEM_DOMAIN:-}
 INSTALLER_DEBUG_LOGS=${INSTALLER_DEBUG_LOGS:-0}
