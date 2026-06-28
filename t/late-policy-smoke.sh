@@ -340,12 +340,14 @@ else
 fi
 
 apt_auto="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/apt/apt.conf.d/20auto-upgrades"
+apt_no_pdiffs="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/apt/apt.conf.d/25no-pdiffs"
 apt_unattended="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/apt/apt.conf.d/52unattended-upgrades"
 apt_no_recommends="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/apt/apt.conf.d/99noinstall-recommends"
 login_defs="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/login.defs"
 unattended_dropin="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/systemd/system/unattended-upgrades.service.d/10-preseed-warning-policy.conf"
 if grep -q '^APT::Periodic::Update-Package-Lists "1";$' "$apt_auto" &&
    grep -q '^APT::Periodic::Unattended-Upgrade "1";$' "$apt_auto" &&
+   grep -q '^Acquire::PDiffs "false";$' "$apt_no_pdiffs" &&
    grep -q '^Unattended-Upgrade::MailReport "on-change";$' "$apt_unattended" &&
    grep -q '^Unattended-Upgrade::Remove-New-Unused-Dependencies "true";$' "$apt_unattended" &&
    grep -q '^Unattended-Upgrade::Remove-Unused-Dependencies "true";$' "$apt_unattended" &&
@@ -354,17 +356,19 @@ if grep -q '^APT::Periodic::Update-Package-Lists "1";$' "$apt_auto" &&
    grep -q '^APT::Install-Suggests "false";$' "$apt_no_recommends" &&
    grep -q '^ENCRYPT_METHOD YESCRYPT$' "$login_defs" &&
    grep -q '^Environment=PYTHONWARNINGS=ignore::DeprecationWarning$' "$unattended_dropin"; then
-  pass "shared target policy assets configure unattended upgrades and YESCRYPT login defaults"
+  pass "shared target policy assets configure unattended upgrades, pdiff policy, and YESCRYPT login defaults"
 else
-  fail "shared target policy assets configure unattended upgrades and YESCRYPT login defaults"
+  fail "shared target policy assets configure unattended upgrades, pdiff policy, and YESCRYPT login defaults"
 fi
 
 storage_script="$ROOT_DIR/d-i/debian/scripts/late/storage-maintenance.sh"
 if grep -q 'managed_target_policy_assets()' "$storage_script" &&
    grep -q 'etc/apt/apt.conf.d/20auto-upgrades' "$storage_script" &&
+   grep -q 'etc/apt/apt.conf.d/25no-pdiffs' "$storage_script" &&
    grep -q 'etc/apt/apt.conf.d/52unattended-upgrades' "$storage_script" &&
    grep -q 'etc/apt/apt.conf.d/99noinstall-recommends' "$storage_script" &&
    grep -q 'etc/login.defs' "$storage_script" &&
+   grep -q 'Acquire::PDiffs' "$storage_script" &&
    grep -q 'Unattended-Upgrade::MailReport' "$storage_script" &&
    grep -q 'APT::Install-Recommends' "$storage_script" &&
    grep -q 'ENCRYPT_METHOD' "$storage_script"; then

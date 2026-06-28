@@ -55,6 +55,7 @@ done
 managed_target_policy_assets() {
   cat <<'EOF'
 etc/apt/apt.conf.d/20auto-upgrades|/etc/apt/apt.conf.d/20auto-upgrades|0644
+etc/apt/apt.conf.d/25no-pdiffs|/etc/apt/apt.conf.d/25no-pdiffs|0644
 etc/apt/apt.conf.d/52unattended-upgrades|/etc/apt/apt.conf.d/52unattended-upgrades|0644
 etc/apt/apt.conf.d/99noinstall-recommends|/etc/apt/apt.conf.d/99noinstall-recommends|0644
 etc/login.defs|/etc/login.defs|0644
@@ -315,6 +316,7 @@ check_policy_line() {
 [ -r "$fstrim_timer_override" ]
 check_policy_line /etc/apt/apt.conf.d/20auto-upgrades "^APT::Periodic::Update-Package-Lists \"1\";"
 check_policy_line /etc/apt/apt.conf.d/20auto-upgrades "^APT::Periodic::Unattended-Upgrade \"1\";"
+check_policy_line /etc/apt/apt.conf.d/25no-pdiffs "^Acquire::PDiffs \"false\";$"
 check_policy_line /etc/apt/apt.conf.d/52unattended-upgrades "^Unattended-Upgrade::MailReport \"on-change\";"
 check_policy_line /etc/apt/apt.conf.d/52unattended-upgrades "^Unattended-Upgrade::Remove-New-Unused-Dependencies \"true\";"
 check_policy_line /etc/apt/apt.conf.d/52unattended-upgrades "^Unattended-Upgrade::Remove-Unused-Dependencies \"true\";"
