@@ -4,7 +4,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
-TEST_COUNT=20
+TEST_COUNT=21
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -63,11 +63,22 @@ else
   fail "service/gitlab-runner class is registered and stays package-selected only"
 fi
 
-if grep -q '^d-i apt-setup/local3/repository string https://packages.gitlab.com/runner/gitlab-runner/debian trixie main$' "$class_select" &&
-   grep -q '^d-i pkgsel/include string .*gitlab-runner .*aptly .*podman .*buildah .*uidmap .*netavark .*aardvark-dns .*passt .*slirp4netns .*fuse-overlayfs .*golang-github-containernetworking-plugin-dnsname .*dbus-user-session$' "$class_select"; then
+if grep -q '^d-i apt-setup/local9/repository string https://packages.gitlab.com/runner/gitlab-runner/debian trixie main$' "$class_select" &&
+   grep -q '^d-i pkgsel/include string .*gitlab-runner .*aptly .*podman .*buildah .*uidmap .*netavark .*aardvark-dns .*passt .*slirp4netns .*fuse-overlayfs .*golang-github-containernetworking-plugin-dnsname .*dbus-user-session' "$class_select"; then
   pass "service/gitlab-runner selects GitLab Runner and rootless Podman packages"
 else
   fail "service/gitlab-runner selects GitLab Runner and rootless Podman packages"
+fi
+
+if grep -q '^gitlab_runner_install_target_bazelisk() {$' "$gitlab_late" &&
+   grep -q 'https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64' "$gitlab_late" &&
+   grep -q 'curl -fsSLo "\$tmp_bazelisk" "\$bazelisk_url"' "$gitlab_late" &&
+   grep -q 'install -m 0755 "\$tmp_bazelisk" /usr/local/bin/bazelisk' "$gitlab_late" &&
+   grep -q 'ln -sfn /usr/local/bin/bazelisk /usr/local/bin/bazel' "$gitlab_late" &&
+   grep -q 'gitlab_runner_install_target_bazelisk' "$gitlab_late"; then
+  pass "GitLab runner late helper installs Bazelisk into /usr/local/bin with bazel symlink"
+else
+  fail "GitLab runner late helper installs Bazelisk into /usr/local/bin with bazel symlink"
 fi
 
 if grep -Fq "  gitlab-runner \\" "$shared_loader" &&

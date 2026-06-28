@@ -238,6 +238,52 @@ gitlab_runner_stage_service_assets() {
     /target/pool/aptly/bin/aptly-bridge
 }
 
+gitlab_runner_install_target_bazelisk() {
+  run_in_target "install Bazelisk for GitLab Runner" /bin/sh -eu -c '
+arch=$(dpkg --print-architecture)
+case "$arch" in
+  amd64)
+    bazelisk_url="https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64"
+    ;;
+  *)
+    printf "skipping Bazelisk install for unsupported target architecture: %s\n" "$arch"
+    exit 0
+    ;;
+esac
+
+command -v curl >/dev/null 2>&1 || {
+  printf "fatal: curl is required to install Bazelisk in the target environment\n" >&2
+  exit 1
+}
+
+tmp_bazelisk=$(mktemp /tmp/bazelisk.XXXXXX)
+trap '\''rm -f "$tmp_bazelisk"'\'' EXIT HUP INT TERM
+
+curl -fsSLo "$tmp_bazelisk" "$bazelisk_url"
+[ -s "$tmp_bazelisk" ] || {
+  printf "fatal: downloaded Bazelisk binary is empty\n" >&2
+  exit 1
+}
+
+install -d -m 0755 /usr/local/bin
+install -m 0755 "$tmp_bazelisk" /usr/local/bin/bazelisk
+ln -sfn /usr/local/bin/bazelisk /usr/local/bin/bazel
+
+[ -x /usr/local/bin/bazelisk ] || {
+  printf "fatal: Bazelisk binary was not installed successfully\n" >&2
+  exit 1
+}
+[ -L /usr/local/bin/bazel ] || {
+  printf "fatal: bazel symlink was not installed successfully\n" >&2
+  exit 1
+}
+[ "$(readlink /usr/local/bin/bazel)" = "/usr/local/bin/bazelisk" ] || {
+  printf "fatal: bazel symlink does not target Bazelisk\n" >&2
+  exit 1
+}
+' sh
+}
+
 gitlab_runner_configure_podman_user() {
   podman_user=$1
   podman_comment="${GITLAB_PODMAN_USER_COMMENT_PREFIX} ${podman_user}"
@@ -564,6 +610,7 @@ configure_target_gitlab_runner_if_selected() {
   gitlab_runner_prepare_runner_paths "$GITLAB_RUNNER_BUILD_USERNAME" "$GITLAB_RUNNER_SHARED_UID" "$GITLAB_RUNNER_SHARED_GID" \
     "$GITLAB_RUNNER_BUILD_BUILDS_DIR" "$GITLAB_RUNNER_BUILD_GITLAB_CACHE_DIR" "$GITLAB_RUNNER_BUILD_CACHE_ROOT"
 
+  gitlab_runner_install_target_bazelisk
   gitlab_runner_stage_service_assets
   gitlab_runner_stage_target_envs
   stage_target_helper_doc gitlab-runner.md gitlab-runner.md
