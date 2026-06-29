@@ -443,11 +443,11 @@ gitlab_runner_prepare_runner_root() {
   backup_dir="${backup_root}/systemd"
   system_id_path="${base_dir}/${GITLAB_RUNNER_SYSTEM_ID_BASENAME}"
 
-  gitlab_runner_ensure_target_tree "$base_dir" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$GITLAB_RUNNER_CONTROL_GID"
-  gitlab_runner_ensure_target_tree "$backup_root" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$GITLAB_RUNNER_CONTROL_GID"
-  gitlab_runner_ensure_target_tree "$backup_dir" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$GITLAB_RUNNER_CONTROL_GID"
-  gitlab_runner_ensure_target_tree "${base_dir}/systemd" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$GITLAB_RUNNER_CONTROL_GID"
-  gitlab_runner_ensure_target_tree "${base_dir}/systemd/user" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$GITLAB_RUNNER_CONTROL_GID"
+  gitlab_runner_ensure_target_tree "$base_dir" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$runner_gid"
+  gitlab_runner_ensure_target_tree "$backup_root" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$runner_gid"
+  gitlab_runner_ensure_target_tree "$backup_dir" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$runner_gid"
+  gitlab_runner_ensure_target_tree "${base_dir}/systemd" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$runner_gid"
+  gitlab_runner_ensure_target_tree "${base_dir}/systemd/user" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$runner_gid"
   gitlab_runner_ensure_target_tree "$work_dir" 0700 "$runner_uid" "$runner_gid"
   gitlab_runner_ensure_target_tree "$job_home" 0700 "$runner_uid" "$runner_gid"
   gitlab_runner_ensure_target_tree "${job_home}/.config" 0700 "$runner_uid" "$runner_gid"
@@ -566,7 +566,7 @@ gitlab_runner_render_unit() {
     GITLAB_RUNNER_READ_ONLY_PATHS "$read_only_paths"
 
   install -m "${GITLAB_RUNNER_CONTROL_FILE_MODE}" "$rendered_tmp" "/target${GITLAB_RUNNER_MANAGED_UNIT_FILE}"
-  chown "root:${GITLAB_RUNNER_CONTROL_GID}" "/target${GITLAB_RUNNER_MANAGED_UNIT_FILE}"
+  chown "root:${runner_gid}" "/target${GITLAB_RUNNER_MANAGED_UNIT_FILE}"
 
   podman_install_symlink_with_backup "/target${GITLAB_RUNNER_HOME_UNIT_FILE}" "${GITLAB_RUNNER_MANAGED_UNIT_FILE}" "/target${GITLAB_RUNNER_BACKUP_UNIT_DIR}"
   chown -h "$runner_uid:$runner_gid" "/target${GITLAB_RUNNER_HOME_UNIT_FILE}"
@@ -601,9 +601,6 @@ configure_target_gitlab_runner_if_selected() {
   gitlab_runner_configure_podman_user "$GITLAB_RUNNER_BUILD_USERNAME"
   gitlab_runner_configure_podman_user "$GITLAB_RUNNER_BAZEL_USERNAME"
   gitlab_runner_add_managed_users_to_devops_group
-
-  GITLAB_RUNNER_CONTROL_GID=$(gitlab_runner_target_group_gid "$GITLAB_RUNNER_CONFIG_GROUP")
-  [ -n "$GITLAB_RUNNER_CONTROL_GID" ] || installer_fatal "target GitLab runner control group is missing: ${GITLAB_RUNNER_CONFIG_GROUP}"
 
   aptly_record=$(gitlab_runner_target_passwd_record "$GITLAB_RUNNER_APTLY_USERNAME")
   [ -n "$aptly_record" ] || installer_fatal "target GitLab aptly user is missing: ${GITLAB_RUNNER_APTLY_USERNAME}"

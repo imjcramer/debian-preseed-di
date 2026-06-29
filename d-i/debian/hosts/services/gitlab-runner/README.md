@@ -14,6 +14,11 @@ The installer copies these files into the target host:
 - `/etc/default/gitlab-runner/gitlab-runner-bazel.env`
 - `/etc/default/gitlab-runner/README.md`
 
+The staged `server.env` keeps `NFT_PROFILE=default` and explicitly selects
+`NFT_SERVICES=gitlab-runner`, so the managed runner host always carries the
+GitLab Runner firewall overlay in addition to the security late hook's
+service-selection auto-merge.
+
 The shared env file sets the managed state roots:
 
 - runner env dir: `/etc/default/gitlab-runner`
@@ -169,15 +174,28 @@ Behavior:
   sandboxing and managed config take effect immediately. A successful `once`
   now means the user service both reached `active` and stayed active through
   the configured verification window instead of only blipping active once
+- The staged user unit no longer re-runs `gitlab-runner-managed preflight` or
+  `ensure-images` inside `ExecStartPre`. Those heavier checks now stay on the
+  explicit `once` or operator-driven helper path so first start does not recurse
+  back through Podman readiness and image-ensure logic during unit activation.
 - `ensure-images`: builds any missing runner image and ensures the Aptly runner
   has local `stable`, `testing`, and `unstable` unshare tarballs plus a managed
   `~/.config/sbuild/config.pl`
 
 The Bazel runner also renders a managed BuildBuddy auth include into the
-runner job home and bind-mounts the host `bazelisk` binary into both
-`/usr/local/bin/bazel` and `/usr/local/bin/bazelisk` inside Bazel CI
-containers. That keeps BuildBuddy auth off the project checkout while still
-making both command names available to generic Debian-based job images.
+`glab-bazel` service home (`/data/services/usr/glab-bazel`) and the dedicated
+runner job home (`/data/config/runners/glab-bazel/home`), then bind-mounts the
+host `bazelisk` binary into both `/usr/local/bin/bazel` and
+`/usr/local/bin/bazelisk` inside Bazel CI containers. That keeps BuildBuddy
+auth off the project checkout while still making both command names available
+to generic Debian-based job images.
+
+The staged `gitlab-runner` nftables service overlay also keeps the Bazel runner
+usable under hardened policy by enabling host-side DNS/NTP/HTTP(S) egress plus
+Podman forwarding and masquerade for the runner bridge interfaces. That allows
+BuildBuddy `grpcs://remote.buildbuddy.io` traffic and the
+`https://app.buildbuddy.io/invocation/` results URL to work from Bazel job
+containers without switching the host back to broad allow-all forwarding.
 
 ## GitLab CI targeting
 
@@ -242,6 +260,7 @@ Use the controlled helper for Aptly publication and signing:
 sudo glab-helper --user glab-aptly aptly-managed render-config
 sudo glab-helper --user glab-aptly aptly-managed --channel stable publish snapshot repo-name
 sudo glab-helper --user glab-aptly aptly-managed --channel testing publish switch testing repo-name-20260617
+sudo glab-helper --user glab-aptly aptly-managed --channel unstable publish switch unstable repo-name-20260617
 ```
 
 Direct container-side publish is no longer a direct signing operation. The job
@@ -256,20 +275,23 @@ and also provide:
 - `GITLAB_RUNNER_APTLY_R2_ACCESS_KEY_ID`
 - `GITLAB_RUNNER_APTLY_R2_SECRET_ACCESS_KEY`
 
-The managed Aptly host path now exposes two publication channels:
+The managed Aptly host path now exposes three publication channels:
 
 - `stable`: maps to distribution `stable`, publishes to `s3:r2:`, keeps the
   current snapshot plus one older snapshot, and has no age-based expiry
 - `testing`: maps to distribution `testing`, publishes to `s3:r2:`, keeps up to
   three snapshots total, and drops retired snapshots older than `14` days by
   their Aptly `CreatedAt` timestamp after the new publication is confirmed live
+- `unstable`: maps to distribution `unstable`, publishes to `s3:r2:`, keeps up
+  to four snapshots total, and drops retired snapshots older than `21` days by
+  their Aptly `CreatedAt` timestamp after the new publication is confirmed live
 
-Inside CI, set `APTLY_CHANNEL=stable` or `APTLY_CHANNEL=testing` before calling
-`aptly publish ...`. The container-side bridge now accepts `aptly publish repo`,
-`aptly publish snapshot`, and `aptly publish switch`; when the target channel
-already exists, the host helper automatically converts repeated snapshot
-publishes into `publish switch` and repeated local-repo publishes into
-`publish update`.
+Inside CI, set `APTLY_CHANNEL=stable`, `APTLY_CHANNEL=testing`, or
+`APTLY_CHANNEL=unstable` before calling `aptly publish ...`. The container-side
+bridge now accepts `aptly publish repo`, `aptly publish snapshot`, and
+`aptly publish switch`; when the target channel already exists, the host helper
+automatically converts repeated snapshot publishes into `publish switch` and
+repeated local-repo publishes into `publish update`.
 
 ## Rendered state
 
@@ -286,6 +308,8 @@ Expected config paths:
 - `/data/config/runners/glab-user/.runner_system_id`
 - `/data/config/runners/glab-bazel/config.toml`
 - `/data/config/runners/glab-bazel/.runner_system_id`
+- `/data/services/usr/glab-bazel/.bazelrc`
+- `/data/services/usr/glab-bazel/.config/buildbuddy/auth.bazelrc`
 - `/data/config/runners/glab-bazel/home/.bazelrc`
 - `/data/config/runners/glab-bazel/home/.config/buildbuddy/auth.bazelrc`
 
@@ -297,8 +321,9 @@ into every job by default. It now keeps job-container temp space on a dedicated
 container. The managed Podman user service also overrides `podman system
 service` to run with `--time=0` so the API backend does not expire mid-run.
 The control-plane files inside `/data/config/runners/<user>/` are rendered
-root-owned with `devops` group read access, while the writable runner work and
-job-home trees remain under the managed service account.
+root-owned with the managed runner account's primary group for runtime
+readability, while the writable runner work and job-home trees remain under the
+managed service account.
 
 The CI publish bridge adds these host-side paths:
 
@@ -308,6 +333,12 @@ The CI publish bridge adds these host-side paths:
 - `/pool/aptly/.managed/channels`
 - `/etc/systemd/system/aptly-bridge.path`
 - `/etc/systemd/system/aptly-bridge.service`
+
+The staged `/etc/tmpfiles.d/80-gitlab-runner-storage.conf` policy also
+recreates the dedicated `/pool/build/...`, `/pool/cache/...`, `/pool/aptly/...`,
+and `/pool/podman/...` service-account directories for `glab-aptly`,
+`glab-user`, and `glab-bazel` on boot so runner preflight can recover cleanly
+after manual cleanup.
 
 The runner user service itself now runs with `HOME=/data/services/usr/<user>`
 and matching `XDG_*` roots so the rootless Podman and systemd-user config that

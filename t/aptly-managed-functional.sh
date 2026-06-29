@@ -7,7 +7,7 @@ MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/loc
 PUBLISH_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/libexec/aptly-publish-managed"
 APTLY_WRAPPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/aptly/bin/aptly"
 
-TEST_COUNT=2
+TEST_COUNT=3
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -84,7 +84,7 @@ GITLAB_RUNNER_APTLY_PUBLISH_ORIGIN="GitLab CI"
 GITLAB_RUNNER_APTLY_PUBLISH_LABEL="GitLab CI"
 GITLAB_RUNNER_APTLY_PUBLISH_ACQUIRE_BY_HASH="true"
 GITLAB_RUNNER_APTLY_SKIP_CONTENTS="false"
-GITLAB_RUNNER_APTLY_CHANNELS="stable testing"
+GITLAB_RUNNER_APTLY_CHANNELS="stable testing unstable"
 GITLAB_RUNNER_APTLY_CHANNEL_STATE_DIR="$STATE_DIR"
 GITLAB_RUNNER_APTLY_CHANNEL_STABLE_DISTRIBUTION="stable"
 GITLAB_RUNNER_APTLY_CHANNEL_STABLE_ENDPOINT="s3:r2:"
@@ -96,6 +96,11 @@ GITLAB_RUNNER_APTLY_CHANNEL_TESTING_ENDPOINT="s3:r2:"
 GITLAB_RUNNER_APTLY_CHANNEL_TESTING_PREFIX="."
 GITLAB_RUNNER_APTLY_CHANNEL_TESTING_KEEP_SNAPSHOTS="3"
 GITLAB_RUNNER_APTLY_CHANNEL_TESTING_MAX_AGE_DAYS="14"
+GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_DISTRIBUTION="unstable"
+GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_ENDPOINT="s3:r2:"
+GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_PREFIX="."
+GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_KEEP_SNAPSHOTS="4"
+GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_MAX_AGE_DAYS="21"
 EOF
 
 cat >"$PREPARE_ENV" <<'EOF'
@@ -482,6 +487,80 @@ if bash "$PATCHED_HELPER" --channel testing publish switch testing testing-004 >
 else
   dump_debug testing
   fail "testing channel accepts publish switch through the managed path and drops aged snapshots after confirmation"
+fi
+
+: >"$APTLY_LOG"
+cat >"$STATE_DIR/unstable.json" <<'EOF'
+{
+  "version": 1,
+  "channel": "unstable",
+  "distribution": "unstable",
+  "releases": [
+    {
+      "sources": [{"component": "main", "name": "unstable-001"}],
+      "created_at": "2026-05-01T00:00:00+00:00",
+      "published_at": "2026-05-01T00:00:00+00:00"
+    },
+    {
+      "sources": [{"component": "main", "name": "unstable-002"}],
+      "created_at": "2026-06-08T00:00:00+00:00",
+      "published_at": "2026-06-08T00:00:00+00:00"
+    },
+    {
+      "sources": [{"component": "main", "name": "unstable-003"}],
+      "created_at": "2026-06-14T00:00:00+00:00",
+      "published_at": "2026-06-14T00:00:00+00:00"
+    },
+    {
+      "sources": [{"component": "main", "name": "unstable-004"}],
+      "created_at": "2026-06-20T00:00:00+00:00",
+      "published_at": "2026-06-20T00:00:00+00:00"
+    }
+  ]
+}
+EOF
+
+cat >"$APTLY_STATE_JSON" <<'EOF'
+{
+  "publications": [
+    {
+      "Storage": "s3",
+      "Prefix": ".",
+      "Distribution": "unstable",
+      "SourceKind": "snapshot",
+      "Sources": [{"Component": "main", "Name": "unstable-004"}]
+    }
+  ],
+  "snapshots": [
+    {"Name": "unstable-001", "CreatedAt": "2026-05-01T00:00:00Z"},
+    {"Name": "unstable-002", "CreatedAt": "2026-06-08T00:00:00Z"},
+    {"Name": "unstable-003", "CreatedAt": "2026-06-14T00:00:00Z"},
+    {"Name": "unstable-004", "CreatedAt": "2026-06-20T00:00:00Z"},
+    {"Name": "unstable-005", "CreatedAt": "2026-06-27T00:00:00Z"}
+  ]
+}
+EOF
+
+if bash "$PATCHED_HELPER" --channel unstable publish switch unstable unstable-005 >"$TMP_ROOT/unstable.stdout" 2>"$TMP_ROOT/unstable.stderr" &&
+   assert_contains "$APTLY_LOG" "publish" &&
+   assert_contains "$APTLY_LOG" "switch" &&
+   assert_contains "$APTLY_LOG" "unstable-005" &&
+   assert_contains "$APTLY_LOG" "snapshot" &&
+   assert_contains "$APTLY_LOG" "drop" &&
+   assert_contains "$APTLY_LOG" "unstable-001" &&
+   ! assert_contains "$APTLY_LOG" "unstable-002" &&
+   assert_contains "$APTLY_LOG" "db" &&
+   assert_contains "$APTLY_LOG" "cleanup" &&
+   assert_contains "$STATE_DIR/unstable.json" '"name": "unstable-005"' &&
+   assert_contains "$STATE_DIR/unstable.json" '"name": "unstable-004"' &&
+   assert_contains "$STATE_DIR/unstable.json" '"name": "unstable-003"' &&
+   assert_contains "$STATE_DIR/unstable.json" '"name": "unstable-002"' &&
+   ! assert_contains "$STATE_DIR/unstable.json" '"name": "unstable-001"' &&
+   ! assert_contains "$APTLY_STATE_JSON" '"Name": "unstable-001"'; then
+  pass "unstable channel keeps four recent snapshots with its own 21-day retention window"
+else
+  dump_debug unstable
+  fail "unstable channel keeps four recent snapshots with its own 21-day retention window"
 fi
 
 [ "$FAIL_COUNT" -eq 0 ]

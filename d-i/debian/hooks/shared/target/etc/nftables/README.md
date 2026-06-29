@@ -95,7 +95,10 @@ Output policy modes are generator-validated:
 
 Container overlays do not open forwarding by default. Docker/Podman forwarding
 requires both a selected container overlay with `allow_container_outbound: true`
-and a profile/overlay that enables `forwarding.enabled` or `forwarding.router_mode`.
+and a profile/overlay that enables `forwarding.enabled` or
+`forwarding.router_mode`. Outbound internet access from bridged container
+subnets also needs `nat.enabled: true` with masquerade enabled, otherwise the
+generator leaves a diagnostic comment instead of a live masquerade rule.
 
 The installer stages the full YAML catalog under `/etc/nftables/profiles/` and
 `/etc/nftables/services/`. `NFT_SERVICES` only controls which overlays are

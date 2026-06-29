@@ -5,7 +5,7 @@ IFS=$'\n\t'
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 MANAGED_HELPER="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/gitlab-runner-managed"
 
-TEST_COUNT=11
+TEST_COUNT=13
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -64,6 +64,7 @@ GITLAB_RUNNER_DEBUG_TRACE_DISABLED="true"
 GITLAB_RUNNER_CUSTOM_BUILD_DIR_ENABLED="false"
 GITLAB_RUNNER_REQUIRE_PODMAN="true"
 GITLAB_RUNNER_VERIFY_ACTIVE="true"
+GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS="4"
 GITLAB_RUNNER_SERVICE_STABLE_SECONDS="2"
 GITLAB_RUNNER_DOCKER_TLS_VERIFY="false"
 GITLAB_RUNNER_DOCKER_PRIVILEGED="false"
@@ -125,6 +126,25 @@ GITLAB_RUNNER_APTLY_SBUILD_SUITES="stable testing unstable"
 GITLAB_RUNNER_APTLY_SBUILD_MIRROR="https://deb.debian.org/debian"
 GITLAB_RUNNER_APTLY_SBUILD_TARBALL_DIR="$TMP_ROOT/pool/cache/aptly/tools/sbuild"
 EOF
+  cat >"$ENV_DIR/gitlab-runner-bazel.env" <<EOF
+GITLAB_RUNNER_BAZEL_USERNAME="glab-bazel"
+GITLAB_RUNNER_BAZEL_GITLAB_URL="https://gitlab.com"
+GITLAB_RUNNER_BAZEL_TOKEN="bazel-token"
+GITLAB_RUNNER_BAZEL_NAME="bazel"
+GITLAB_RUNNER_BAZEL_TAGS="bazel"
+GITLAB_RUNNER_BAZEL_METRICS_ADDRESS="127.0.0.1:9273"
+GITLAB_RUNNER_BAZEL_IMAGE="docker.io/library/debian:trixie-slim"
+GITLAB_RUNNER_BAZEL_IMAGE_BUILD_MODE="none"
+GITLAB_RUNNER_BAZEL_BUILDS_DIR="$TMP_ROOT/pool/build/runners/bazel"
+GITLAB_RUNNER_BAZEL_GITLAB_CACHE_DIR="$TMP_ROOT/pool/cache/runners/bazel/gitlab"
+GITLAB_RUNNER_BAZEL_CACHE_ROOT="$TMP_ROOT/pool/cache/runners/bazel/tools"
+GITLAB_RUNNER_BAZEL_ALLOWED_IMAGES="debian:*"
+GITLAB_RUNNER_BAZEL_ALLOWED_SERVICES="postgres:*"
+GITLAB_RUNNER_BAZEL_EXTRA_VOLUMES=""
+GITLAB_RUNNER_BUILDBUDDY_API="buildbuddy-token"
+GITLAB_RUNNER_BUILDBUDDY_ENDPOINT="grpcs://remote.buildbuddy.io"
+GITLAB_RUNNER_BUILDBUDDY_RESULTS_URL="https://app.buildbuddy.io/invocation/"
+EOF
 }
 
 printf '1..%s\n' "$TEST_COUNT"
@@ -139,6 +159,7 @@ PODMAN_CONFIG_BASE="$TMP_ROOT/data/config/podman"
 PODMAN_STATE_BASE="$TMP_ROOT/pool/podman"
 RUNTIME_BASE="$TMP_ROOT/run/user"
 CONFIG_PATH="$STATE_BASE/glab-user/config.toml"
+BAZEL_CONFIG_PATH="$STATE_BASE/glab-bazel/config.toml"
 SYSTEMCTL_LOG="$TMP_ROOT/systemctl.log"
 SYSTEMCTL_STATE="$TMP_ROOT/systemctl.state"
 SYSTEMCTL_EVENTS="$TMP_ROOT/systemctl.events"
@@ -147,9 +168,12 @@ PATCHED_HELPER="$TMP_ROOT/gitlab-runner-managed"
 MOCK_BIN="$TMP_ROOT/bin"
 CURRENT_UID=$(id -u)
 CURRENT_GID=$(id -g)
+PODMAN_SOCKET="$RUNTIME_BASE/$CURRENT_UID/podman/podman.sock"
 
 mkdir -p "$ENV_DIR" "$MOCK_BIN" "$RUNTIME_BASE/$CURRENT_UID" "$STATE_BASE/glab-user" "$TMP_ROOT/pool/aptly/bin"
 : >"$STATE_BASE/glab-user/.runner_system_id"
+mkdir -p "$STATE_BASE/glab-bazel"
+: >"$STATE_BASE/glab-bazel/.runner_system_id"
 write_shared_env
 write_runner_envs
 cat >"$TMP_ROOT/pool/aptly/Containerfile" <<'EOF'
@@ -205,6 +229,10 @@ if [[ "\${1:-}" == "passwd" && "\${2:-}" == "glab-aptly" ]]; then
   printf 'glab-aptly:x:%s:%s::%s/glab-aptly:/usr/sbin/nologin\n' "$CURRENT_UID" "$CURRENT_GID" "$HOME_BASE"
   exit 0
 fi
+if [[ "\${1:-}" == "passwd" && "\${2:-}" == "glab-bazel" ]]; then
+  printf 'glab-bazel:x:%s:%s::%s/glab-bazel:/usr/sbin/nologin\n' "$CURRENT_UID" "$CURRENT_GID" "$HOME_BASE"
+  exit 0
+fi
 exit 2
 EOF
 chmod +x "$MOCK_BIN/getent"
@@ -251,6 +279,18 @@ case "$*" in
     exit 0
     ;;
   "--user is-failed --quiet gitlab-runner.service")
+    if [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "retry" ]] && [[ -f "$TEST_SYSTEMCTL_STATE" ]] && [[ "$(cat "$TEST_SYSTEMCTL_STATE")" == "failed" ]]; then
+      retry_count=0
+      if [[ -f "${TEST_SYSTEMCTL_STATE}.retry-count" ]]; then
+        retry_count="$(cat "${TEST_SYSTEMCTL_STATE}.retry-count")"
+      fi
+      if [[ "$retry_count" -lt 1 ]]; then
+        printf '%s\n' $((retry_count + 1)) >"${TEST_SYSTEMCTL_STATE}.retry-count"
+        exit 0
+      fi
+      printf 'active\n' >"$TEST_SYSTEMCTL_STATE"
+      exit 3
+    fi
     if [[ -f "$TEST_SYSTEMCTL_STATE" ]] && [[ "$(cat "$TEST_SYSTEMCTL_STATE")" == "failed" ]]; then
       exit 0
     fi
@@ -265,12 +305,26 @@ case "$*" in
   "--user reset-failed podman.socket")
     exit 0
     ;;
+  "--user is-active --quiet podman.socket")
+    if [[ -e "$TEST_PODMAN_SOCKET" ]]; then
+      exit 0
+    fi
+    exit 3
+    ;;
   "--user restart podman.service")
     printf 'podman-restart\n' >>"$TEST_SYSTEMCTL_EVENTS"
     exit 0
     ;;
   "--user restart podman.socket")
+    mkdir -p "$(dirname "$TEST_PODMAN_SOCKET")"
+    : >"$TEST_PODMAN_SOCKET"
     printf 'podman-socket-restart\n' >>"$TEST_SYSTEMCTL_EVENTS"
+    exit 0
+    ;;
+  "--user start podman.socket")
+    mkdir -p "$(dirname "$TEST_PODMAN_SOCKET")"
+    : >"$TEST_PODMAN_SOCKET"
+    printf 'podman-socket-start\n' >>"$TEST_SYSTEMCTL_EVENTS"
     exit 0
     ;;
   "--user restart gitlab-runner.service")
@@ -279,6 +333,9 @@ case "$*" in
       printf 'failed\n' >"$TEST_SYSTEMCTL_STATE"
     elif [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "flap" ]]; then
       printf 'active\n' >"$TEST_SYSTEMCTL_STATE"
+    elif [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "retry" ]]; then
+      printf 'failed\n' >"$TEST_SYSTEMCTL_STATE"
+      printf '0\n' >"${TEST_SYSTEMCTL_STATE}.retry-count"
     else
       printf 'active\n' >"$TEST_SYSTEMCTL_STATE"
     fi
@@ -291,6 +348,9 @@ case "$*" in
       printf 'failed\n' >"$TEST_SYSTEMCTL_STATE"
     elif [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "flap" ]]; then
       printf 'active\n' >"$TEST_SYSTEMCTL_STATE"
+    elif [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "retry" ]]; then
+      printf 'failed\n' >"$TEST_SYSTEMCTL_STATE"
+      printf '0\n' >"${TEST_SYSTEMCTL_STATE}.retry-count"
     else
       printf 'active\n' >"$TEST_SYSTEMCTL_STATE"
     fi
@@ -306,6 +366,15 @@ case "$*" in
         printf '1\n' >"${TEST_SYSTEMCTL_STATE}.active-count"
         printf 'failed\n' >"$TEST_SYSTEMCTL_STATE"
         exit 0
+      fi
+    fi
+    if [[ "${TEST_SYSTEMCTL_START_MODE:-active}" == "retry" ]] && [[ -f "$TEST_SYSTEMCTL_STATE" ]] && [[ "$(cat "$TEST_SYSTEMCTL_STATE")" == "failed" ]]; then
+      retry_count=0
+      if [[ -f "${TEST_SYSTEMCTL_STATE}.retry-count" ]]; then
+        retry_count="$(cat "${TEST_SYSTEMCTL_STATE}.retry-count")"
+      fi
+      if [[ "$retry_count" -ge 1 ]]; then
+        printf 'active\n' >"$TEST_SYSTEMCTL_STATE"
       fi
     fi
     if [[ -f "$TEST_SYSTEMCTL_STATE" ]] && [[ "$(cat "$TEST_SYSTEMCTL_STATE")" == "active" ]]; then
@@ -418,10 +487,12 @@ chmod +x "$MOCK_BIN/podman"
 sed \
   -e "s|^ENV_DIR=.*|ENV_DIR=\"$ENV_DIR\"|" \
   -e "s|/pool/aptly|$TMP_ROOT/pool/aptly|g" \
+  -e "s|context_docker_host=\"unix:///run/user/\${context_uid}/podman/podman.sock\"|context_docker_host=\"unix://$RUNTIME_BASE/\${context_uid}/podman/podman.sock\"|" \
   -e "s|context_runtime_root=\"/run/user/\${context_uid}/gitlab-runner\"|context_runtime_root=\"$RUNTIME_BASE/\${context_uid}/gitlab-runner\"|" \
   -e "s|context_podman_runtime_root=\"/run/user/\${context_uid}\"|context_podman_runtime_root=\"$RUNTIME_BASE/\${context_uid}\"|" \
   -e "s|context_podman_runtime_libpod_dir=\"/run/user/\${context_uid}/libpod\"|context_podman_runtime_libpod_dir=\"$RUNTIME_BASE/\${context_uid}/libpod\"|" \
   -e "s|context_podman_runroot=\"/run/user/\${context_uid}/run\"|context_podman_runroot=\"$RUNTIME_BASE/\${context_uid}/run\"|" \
+  -e 's|\[\[ -S "\$socket_path" \]\]|\[\[ -e "\$socket_path" \]\]|' \
   "$MANAGED_HELPER" >"$PATCHED_HELPER"
 chmod +x "$PATCHED_HELPER"
 
@@ -430,6 +501,7 @@ export TEST_SYSTEMCTL_LOG="$SYSTEMCTL_LOG"
 export TEST_SYSTEMCTL_STATE="$SYSTEMCTL_STATE"
 export TEST_SYSTEMCTL_EVENTS="$SYSTEMCTL_EVENTS"
 export TEST_PODMAN_LOG="$PODMAN_LOG"
+export TEST_PODMAN_SOCKET="$PODMAN_SOCKET"
 export TEST_EXPECTED_PODMAN_HOME="$HOME_BASE/glab-user"
 export TEST_EXPECTED_XDG_RUNTIME_DIR="/run/user/$CURRENT_UID"
 export TEST_FORBIDDEN_CONTEXT="$TMP_ROOT/pool/aptly"
@@ -446,6 +518,30 @@ if bash "$PATCHED_HELPER" --user glab-user preflight >"$TMP_ROOT/preflight-first
 else
   fail "preflight succeeds with only the build token populated"
 fi
+
+if bash "$PATCHED_HELPER" --user glab-bazel refresh --require-active >"$TMP_ROOT/bazel-refresh.stdout" 2>"$TMP_ROOT/bazel-refresh.stderr" &&
+   assert_contains "$BAZEL_CONFIG_PATH" "HOME=$STATE_BASE/glab-bazel/home" &&
+   assert_contains "$BAZEL_CONFIG_PATH" "XDG_CONFIG_HOME=$STATE_BASE/glab-bazel/home/.config" &&
+   assert_contains "$BAZEL_CONFIG_PATH" "XDG_DATA_HOME=$STATE_BASE/glab-bazel/home/.local/share" &&
+   assert_contains "$BAZEL_CONFIG_PATH" "XDG_STATE_HOME=$STATE_BASE/glab-bazel/home/.local/state" &&
+   assert_contains "$STATE_BASE/glab-bazel/home/.bazelrc" "try-import $STATE_BASE/glab-bazel/home/.config/buildbuddy/auth.bazelrc" &&
+   assert_contains "$HOME_BASE/glab-bazel/.bazelrc" "try-import $HOME_BASE/glab-bazel/.config/buildbuddy/auth.bazelrc" &&
+   assert_contains "$STATE_BASE/glab-bazel/home/.config/buildbuddy/auth.bazelrc" 'build --remote_header=x-buildbuddy-api-key=buildbuddy-token' &&
+   assert_contains "$HOME_BASE/glab-bazel/.config/buildbuddy/auth.bazelrc" 'build --remote_header=x-buildbuddy-api-key=buildbuddy-token'; then
+  pass "bazel refresh renders BuildBuddy auth into both glab-bazel homes and exports bazel config paths to job containers"
+else
+  fail "bazel refresh renders BuildBuddy auth into both glab-bazel homes and exports bazel config paths to job containers"
+fi
+
+rm -f "$SYSTEMCTL_STATE" "${TEST_SYSTEMCTL_STATE}.active-count" "${TEST_SYSTEMCTL_STATE}.retry-count"
+export TEST_SYSTEMCTL_START_MODE="retry"
+if bash "$PATCHED_HELPER" --user glab-user once >"$TMP_ROOT/once-retry.stdout" 2>"$TMP_ROOT/once-retry.stderr" &&
+   assert_contains "$TMP_ROOT/once-retry.stderr" 'completed once for glab-user'; then
+  pass "once tolerates an initial runner service failure while systemd restart recovery completes"
+else
+  fail "once tolerates an initial runner service failure while systemd restart recovery completes"
+fi
+unset TEST_SYSTEMCTL_START_MODE
 
 if assert_contains "$CONFIG_PATH" 'name = "build"' &&
    assert_not_contains "$CONFIG_PATH" 'name = "task"'; then

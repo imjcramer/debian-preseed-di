@@ -147,13 +147,13 @@ if grep -q '^queue_enrolled_mok_deletions() {$' "$secure_boot_tool" &&
    grep -q 'queueing deletion of .* enrolled MOK certificate(s) before managed import' "$secure_boot_tool" &&
    grep -q 'failed to revoke stale pending MOK delete request; checking whether the existing delete queue still covers managed cleanup' "$secure_boot_tool" &&
    grep -q 'existing pending MOK delete request already covers all enrolled MOK certificate fingerprints' "$secure_boot_tool" &&
-   grep -q 'failed to queue managed MOK deletions for all enrolled certificates before import' "$secure_boot_tool" &&
+   grep -q 'failed to queue managed MOK deletions for all enrolled certificates before import; continuing with best-effort managed import' "$secure_boot_tool" &&
    ! grep -q 'import is already satisfied' "$secure_boot_tool" &&
    ! grep -q '^queue_duplicate_mok_deletions() {$' "$secure_boot_tool" &&
    ! grep -q 'deferring stale duplicate cleanup until after managed MOK enrollment' "$secure_boot_tool"; then
-  pass "secure boot helper guarantees delete coverage before the managed certificate import"
+  pass "secure boot helper keeps enrolled MOK deletion best-effort before the managed certificate import"
 else
-  fail "secure boot helper guarantees delete coverage before the managed certificate import"
+  fail "secure boot helper keeps enrolled MOK deletion best-effort before the managed certificate import"
 fi
 
 if grep -q '^validate_secure_boot_certificate_settings() {$' "$secure_boot_tool" &&

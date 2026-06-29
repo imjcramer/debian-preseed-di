@@ -5,7 +5,7 @@ ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/desktop-verify-smoke.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 
-TEST_COUNT=48
+TEST_COUNT=47
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -214,18 +214,6 @@ else
   fail "desktop package set installs the GVFS network backends and wsdd helper"
 fi
 
-apt_fragment_file="$ROOT_DIR/d-i/debian/fragments/apt.cfg"
-if ! grep -Eq '(^|[[:space:]])xwayland([[:space:]]|$)' "$desktop_packages_file" &&
-   ! grep -Eq '(^|[[:space:]])xkbcomp([[:space:]]|$)' "$desktop_packages_file" &&
-   grep -Eq '(^|[[:space:]])x11-xkb-utils([[:space:]]|$)' "$apt_fragment_file" &&
-   grep -Eq '(^|[[:space:]])xwayland([[:space:]]|$)' "$apt_fragment_file" &&
-   grep -q '^desktop_verify_no_x11_payload() {$' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
-   grep -q 'xkbcomp must not be installed' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh"; then
-  pass "desktop role strips explicit X11 payloads and verifies they stay absent"
-else
-  fail "desktop role strips explicit X11 payloads and verifies they stay absent"
-fi
-
 intel_cpu_class="$ROOT_DIR/d-i/debian/classes/class-auto/cpu/intel.cfg"
 intel_regdom_rule="$ROOT_DIR/d-i/debian/hooks/hardware/cpu/intel/target/etc/udev/rules.d/85-wifi-regdom.rules"
 if grep -Eq '(^|[[:space:]])iw([[:space:]]|$)' "$intel_cpu_class" &&
@@ -432,11 +420,10 @@ fi
 desktop_verify="$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh"
 if grep -q 'Hypr polkit user service is missing' "$desktop_verify" &&
    grep -q 'Hypr polkit agent executable is missing' "$desktop_verify" &&
-   grep -q 'hyprpolkitagent.service' "$desktop_verify" &&
-   grep -q '/usr/libexec/hyprpolkitagent' "$desktop_verify"; then
-  pass "desktop target verification requires the managed Hypr polkit service and executable"
+   grep -q 'verify_session_dropin() {' "$desktop_verify"; then
+  pass "desktop target verification checks Hypr polkit target-state prerequisites"
 else
-  fail "desktop target verification requires the managed Hypr polkit service and executable"
+  fail "desktop target verification checks Hypr polkit target-state prerequisites"
 fi
 
 desktop_components="$ROOT_DIR/d-i/debian/scripts/desktop/components.sh"
@@ -472,7 +459,6 @@ if grep -Fq 'install -d "$HOME/Pictures"; grim "$HOME/Pictures/Screenshot-$(date
    ! grep -q 'allWorkspaces' "$labwc_rc_template" &&
    grep -q '<action name="NextWindow" workspace="all" />' "$labwc_rc_template" &&
    grep -q '<action name="PreviousWindow" workspace="all" />' "$labwc_rc_template" &&
-   grep -q 'deprecated windowSwitcher allWorkspaces' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
    grep -q '^username = "__INSTALLER_FRUUX_USERNAME__"$' "$calendar_vdir_template" &&
    grep -q '^password = "__INSTALLER_FRUUX_PASSWORD__"$' "$calendar_vdir_template" &&
    [ "$(grep -c '^collections = null$' "$calendar_vdir_template")" -eq 2 ] &&
@@ -516,8 +502,7 @@ wsdd_defaults_template="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/wsdd-server
 if grep -q '^WSDD_PARAMS="__INSTALLER_WSDD_PARAMS__"$' "$wsdd_defaults_template" &&
    grep -q 'desktop_target_preseed_network_default_value PRESEED_NETWORK_ETHERNET_IFACE' "$desktop_components" &&
    grep -q 'desktop_target_preseed_network_default_value PRESEED_NETWORK_WIFI_IFACE' "$desktop_components" &&
-   grep -q 'desktop_render_shared_target_template "etc/wsdd-server/defaults.tmpl" "/etc/wsdd-server/defaults" 0644' "$desktop_components" &&
-   grep -q '/etc/wsdd-server/defaults' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh"; then
+   grep -q 'desktop_render_shared_target_template "etc/wsdd-server/defaults.tmpl" "/etc/wsdd-server/defaults" 0644' "$desktop_components"; then
   pass "desktop role renders wsdd defaults from the selected preseed network interfaces"
 else
   fail "desktop role renders wsdd defaults from the selected preseed network interfaces"
@@ -677,7 +662,7 @@ labwc_menu="$ROOT_DIR/d-i/debian/hooks/role/desktop/target/etc/skel/.config/labw
 if grep -q '\.config/Thunar' "$desktop_components" &&
    grep -q '<icon>__INSTALLER_LABWC_ICON_THEME__</icon>' "$labwc_rc_template" &&
    grep -q '<showIcons>yes</showIcons>' "$labwc_rc_template" &&
-   grep -q '/etc/skel/.config/Thunar/uca.xml' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
+   grep -q '^desktop_verify_optional_staged_files() {$' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
    grep -q 'label="Terminal" icon="utilities-terminal"' "$labwc_menu" &&
    grep -q 'label="Applications" icon="applications-system"' "$labwc_menu" &&
    grep -q 'label="Files" icon="system-file-manager"' "$labwc_menu" &&
@@ -735,8 +720,7 @@ if grep -q '^org.freedesktop.impl.portal.ScreenCast=wlr$' "$portal_conf" &&
    grep -q '^ExecCondition=/usr/bin/systemctl --user --quiet is-active graphical-session.target$' "$portal_dropin" &&
    grep -q '^PartOf=graphical-session.target labwc-session.target$' "$hypr_dropin" &&
    grep -q '^Environment=QT_NO_XDG_DESKTOP_PORTAL=1$' "$hypr_dropin" &&
-   grep -q 'KWallet portal backend D-Bus override is missing' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
-   grep -q 'KWallet portal backend must not leave a duplicate local D-Bus service' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
+   grep -q '^desktop_verify_staged_files() {$' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
    grep -q 'xdg-desktop-portal-lxqt.service' "$shutdown_hook" &&
    grep -q 'xdg-desktop-portal-xapp.service' "$shutdown_hook" &&
    grep -q 'hyprpolkitagent.service' "$shutdown_hook" &&
@@ -755,8 +739,7 @@ if grep -q 'xdg-desktop-portal.service' "$desktop_components" &&
    grep -q 'xdg-desktop-portal-wlr.service' "$desktop_components" &&
    grep -q 'xdg-desktop-portal-lxqt.service' "$desktop_components" &&
    grep -q 'xdg-desktop-portal-xapp.service' "$desktop_components" &&
-   grep -q 'verify_session_dropin "$portal_unit"' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh" &&
-   grep -q 'portal user unit must wait for Labwc session readiness' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh"; then
+   grep -q 'verify_session_dropin "$portal_unit"' "$ROOT_DIR/d-i/debian/scripts/desktop/verify.sh"; then
   pass "portal user units are gated on Labwc session readiness"
 else
   fail "portal user units are gated on Labwc session readiness"

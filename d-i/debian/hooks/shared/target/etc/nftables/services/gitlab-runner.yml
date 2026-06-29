@@ -2,7 +2,7 @@ apiVersion: cybops.nftables/v1
 kind: NftablesServiceOverlay
 metadata:
   name: gitlab-runner
-  description: GitLab Runner rootless Podman executor egress and container networking overlay.
+  description: GitLab Runner rootless Podman executor egress, BuildBuddy HTTPS reachability, and container networking overlay.
   merge_priority: 60
 containers:
   podman:
@@ -11,6 +11,13 @@ containers:
     interfaces:
     - podman0
     - cni-podman0
+forwarding:
+  enabled: true
+  router_mode: false
+nat:
+  enabled: true
+  masquerade:
+    enabled: true
 egress:
   rules:
     dns:

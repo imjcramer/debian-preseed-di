@@ -147,9 +147,34 @@ run_as_user() {
 }
 
 verify_managed_runner_once_is_active() {
+  local tries stable_required stable_seen=0 verify_active
+
   ensure_user_manager
-  run_as_user /usr/bin/systemctl --user is-active --quiet gitlab-runner.service ||
-    die "gitlab-runner-managed once returned success but gitlab-runner.service is not active for ${context_user}"
+  tries="${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-45}"
+  stable_required="${GITLAB_RUNNER_SERVICE_STABLE_SECONDS:-3}"
+  verify_active="${GITLAB_RUNNER_VERIFY_ACTIVE:-true}"
+  [[ "$tries" =~ ^[0-9]+$ ]] || die "GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS must be numeric, got: ${tries:-unset}"
+  (( 10#$tries >= 1 )) || die "GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS must be greater than zero"
+  [[ "$stable_required" =~ ^[0-9]+$ ]] || die "GITLAB_RUNNER_SERVICE_STABLE_SECONDS must be numeric, got: ${stable_required:-unset}"
+  (( 10#$stable_required >= 1 )) || die "GITLAB_RUNNER_SERVICE_STABLE_SECONDS must be greater than zero"
+
+  while (( tries > 0 )); do
+    if run_as_user /usr/bin/systemctl --user is-active --quiet gitlab-runner.service; then
+      if [[ "$verify_active" != "true" ]]; then
+        return 0
+      fi
+      stable_seen=$((stable_seen + 1))
+      if (( stable_seen >= 10#$stable_required )); then
+        return 0
+      fi
+    else
+      stable_seen=0
+    fi
+    sleep 1
+    tries=$((tries - 1))
+  done
+
+  die "gitlab-runner-managed once returned success but gitlab-runner.service did not remain active for ${context_user}"
 }
 
 ensure_user_manager() {

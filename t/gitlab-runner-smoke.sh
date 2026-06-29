@@ -4,7 +4,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
-TEST_COUNT=21
+TEST_COUNT=24
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -33,9 +33,11 @@ gitlab_late="$ROOT_DIR/d-i/debian/scripts/late/gitlab-runner.sh"
 podman_late="$ROOT_DIR/d-i/debian/scripts/late/podman.sh"
 security_script="$ROOT_DIR/d-i/debian/scripts/late/security.sh"
 shared_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-shared.env"
+server_policy_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/server.env"
 runtime_storage_tmpfiles="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/tmpfiles.d/10-runtime-storage-roots.conf"
 aptly_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-aptly.env"
 build_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-build.env"
+bazel_env="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-bazel.env"
 managed_helper="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/gitlab-runner-managed"
 aptly_managed="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/aptly-managed"
 aptly_bridge_processor="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/usr/local/sbin/aptly-bridge-processor"
@@ -51,6 +53,8 @@ aptly_template="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/pool/ap
 aptly_bridge_service="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/etc/systemd/system/aptly-bridge.service"
 aptly_bridge_path="$ROOT_DIR/d-i/debian/hooks/services/gitlab-runner/target/etc/systemd/system/aptly-bridge.path"
 gitlab_nft_overlay="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/nftables/services/gitlab-runner.yml"
+nft_generator="$ROOT_DIR/d-i/debian/hooks/shared/target/usr/local/sbin/nft-policy-generate.py"
+nft_server_profile="$ROOT_DIR/d-i/debian/hooks/shared/target/etc/nftables/profiles/server.yml"
 docs_index="$ROOT_DIR/d-i/debian/hooks/shared/target/data/docs/README.md"
 gitlab_runner_doc="$ROOT_DIR/d-i/debian/hooks/shared/target/data/docs/gitlab-runner.md"
 service_readme="$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/README.md"
@@ -106,12 +110,24 @@ else
   fail "repo path resolver exposes service env and GitLab Runner service asset roots"
 fi
 
+if grep -q '^NFT_PROFILE="default"$' "$server_policy_env" &&
+   grep -q '^NFT_SERVICES="gitlab-runner"$' "$server_policy_env"; then
+  pass "gitlab-runner host policy override explicitly enables the gitlab-runner nftables overlay"
+else
+  fail "gitlab-runner host policy override explicitly enables the gitlab-runner nftables overlay"
+fi
+
 if grep -q '^GITLAB_RUNNER_APTLY_USERNAME="glab-aptly"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_DOCKER_USERNS_MODE="keep-id"$' "$aptly_env" &&
-   grep -q '^GITLAB_RUNNER_APTLY_CHANNELS="stable testing"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNELS="stable testing unstable"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_STABLE_KEEP_SNAPSHOTS="2"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_TESTING_KEEP_SNAPSHOTS="3"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_TESTING_MAX_AGE_DAYS="14"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_DISTRIBUTION="unstable"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_ENDPOINT="s3:r2:"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_PREFIX="\."$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_KEEP_SNAPSHOTS="4"$' "$aptly_env" &&
+   grep -q '^GITLAB_RUNNER_APTLY_CHANNEL_UNSTABLE_MAX_AGE_DAYS="21"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_SBUILD_ARCH="amd64"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_SBUILD_SUITES="stable testing unstable"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_SBUILD_MIRROR="https://deb.debian.org/debian"$' "$aptly_env" &&
@@ -119,10 +135,15 @@ if grep -q '^GITLAB_RUNNER_APTLY_USERNAME="glab-aptly"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_BUILD_USERNAME="glab-user"$' "$build_env" &&
    grep -q '^GITLAB_RUNNER_APTLY_NAME="aptly"$' "$aptly_env" &&
    grep -q '^GITLAB_RUNNER_BUILD_NAME="build"$' "$build_env" &&
+   grep -q '^GITLAB_RUNNER_BAZEL_USERNAME="glab-bazel"$' "$bazel_env" &&
+   grep -q '^GITLAB_RUNNER_BAZEL_NAME="bazel"$' "$bazel_env" &&
+   grep -q '^GITLAB_RUNNER_BAZEL_TAGS="bazel,release,internal"$' "$bazel_env" &&
+   grep -q '^GITLAB_RUNNER_BUILDBUDDY_ENDPOINT="grpcs://remote.buildbuddy.io"$' "$bazel_env" &&
+   grep -q '^GITLAB_RUNNER_BUILDBUDDY_RESULTS_URL="https://app.buildbuddy.io/invocation/"$' "$bazel_env" &&
    [ ! -e "$ROOT_DIR/d-i/debian/hosts/services/gitlab-runner/gitlab-runner-task.env" ]; then
-  pass "runner env files define only the aptly and build runners and pin the managed sbuild settings"
+  pass "runner env files pin the BuildBuddy Bazel runner contract and the stable/testing/unstable aptly channels"
 else
-  fail "runner env files define only the aptly and build runners and pin the managed sbuild settings"
+  fail "runner env files pin the BuildBuddy Bazel runner contract and the stable/testing/unstable aptly channels"
 fi
 
 if grep -q '^GITLAB_RUNNER_STATE_BASE="/data/config/runners"$' "$shared_env" &&
@@ -137,6 +158,7 @@ if grep -q '^GITLAB_RUNNER_STATE_BASE="/data/config/runners"$' "$shared_env" &&
    grep -q '^GITLAB_PODMAN_UNQUALIFIED_SEARCH_REGISTRIES="docker.io,ghcr.io,registry.gitlab.com"$' "$shared_env" &&
    grep -q '^GITLAB_PODMAN_TLS_ENABLE="0"$' "$shared_env" &&
    grep -q '^GITLAB_PODMAN_TLS_REGISTRIES=""$' "$shared_env" &&
+   grep -q '^GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS="45"$' "$shared_env" &&
    grep -q '^GITLAB_RUNNER_SERVICE_STABLE_SECONDS="3"$' "$shared_env" &&
    grep -q '^helm/cache$' "$shared_env" &&
    grep -q '^helm/config$' "$shared_env" &&
@@ -196,12 +218,27 @@ if ! grep -q '__INSTALLER_DIR_POOL_APTLY__' "$runtime_storage_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/requests 03770 root __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/results 03770 root __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d /pool/aptly/queue/processing 0700 root root -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_BUILD__/aptly 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE__/aptly 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE__/aptly/gitlab 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE__/aptly/tools 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE__/aptly/tools/sbuild 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__/tmp 0700 __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ __INSTALLER_GITLAB_RUNNER_APTLY_USERNAME__ -$' "$aptly_tmpfiles" &&
    ! grep -q '/runtime/run/networks/rootless-netns ' "$aptly_tmpfiles" &&
    ! grep -q '/gitlab-runner/tmp ' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_BUILD_RUNNERS__/__INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE_RUNNERS__/__INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE_RUNNERS__/__INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__/gitlab 0700 __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE_RUNNERS__/__INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__/tools 0700 __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__/tmp 0700 __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ __INSTALLER_GITLAB_RUNNER_BUILD_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_BUILD_RUNNERS__/__INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE_RUNNERS__/__INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE_RUNNERS__/__INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__/gitlab 0700 __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_CACHE_RUNNERS__/__INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__/tools 0700 __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ 0700 __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ -$' "$aptly_tmpfiles" &&
+   grep -q '^d __INSTALLER_DIR_POOL_PODMAN__/__INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__/tmp 0700 __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ __INSTALLER_GITLAB_RUNNER_BAZEL_USERNAME__ -$' "$aptly_tmpfiles" &&
    grep -q '/pool/aptly:/pool/aptly:rw' "$aptly_env" &&
    grep -Fq 'exec "$bridge_bin" submit "$@"' "$aptly_wrapper" &&
    grep -Fq 'snapshot|repo|switch' "$aptly_bridge" &&
@@ -236,6 +273,10 @@ if grep -q '^gitlab-runner$' "$security_script" &&
    grep -q 'nftables_merge_selected_services "$effective_services" gitlab-runner' "$security_script" &&
    grep -q '^  name: gitlab-runner$' "$gitlab_nft_overlay" &&
    grep -q '^    allow_container_outbound: true$' "$gitlab_nft_overlay" &&
+   grep -q '^forwarding:$' "$gitlab_nft_overlay" &&
+   grep -q '^  enabled: true$' "$gitlab_nft_overlay" &&
+   grep -q '^nat:$' "$gitlab_nft_overlay" &&
+   grep -q '^    enabled: true$' "$gitlab_nft_overlay" &&
    grep -q '^    http_https:$' "$gitlab_nft_overlay" &&
    grep -q '^      - 443$' "$gitlab_nft_overlay"; then
   pass "GitLab runner selection auto-enables hardened nftables egress and Podman container outbound policy"
@@ -243,11 +284,27 @@ else
   fail "GitLab runner selection auto-enables hardened nftables egress and Podman container outbound policy"
 fi
 
+rendered_gitlab_runner_nft=$(mktemp "${TMPDIR:-/tmp}/gitlab-runner-nft.XXXXXX")
+if python3 "$nft_generator" \
+     --profile "$nft_server_profile" \
+     --overlay "$gitlab_nft_overlay" \
+     --allow-placeholders \
+     --print >"$rendered_gitlab_runner_nft" &&
+   grep -q 'egress http_https outbound' "$rendered_gitlab_runner_nft" &&
+   grep -q 'container outbound podman' "$rendered_gitlab_runner_nft" &&
+   grep -q 'counter masquerade' "$rendered_gitlab_runner_nft"; then
+  pass "rendered gitlab-runner nftables policy preserves HTTPS egress and Podman forwarding or masquerade for BuildBuddy traffic"
+else
+  fail "rendered gitlab-runner nftables policy preserves HTTPS egress and Podman forwarding or masquerade for BuildBuddy traffic"
+fi
+rm -f -- "$rendered_gitlab_runner_nft"
+
 if grep -q '^Wants=podman.socket$' "$service_template" &&
    grep -q '^After=podman.socket$' "$service_template" &&
    grep -q '^StartLimitIntervalSec=5min$' "$service_template" &&
    grep -q '^StartLimitBurst=3$' "$service_template" &&
-   grep -q '^ExecStartPre=/usr/local/sbin/gitlab-runner-managed --user __INSTALLER_GITLAB_RUNNER_USER__ preflight$' "$service_template" &&
+   ! grep -q '^ExecStartPre=/usr/local/sbin/gitlab-runner-managed --user __INSTALLER_GITLAB_RUNNER_USER__ preflight$' "$service_template" &&
+   ! grep -q '^ExecStartPre=/usr/local/sbin/gitlab-runner-managed --user __INSTALLER_GITLAB_RUNNER_USER__ ensure-images$' "$service_template" &&
    ! grep -q '^Environment=DOCKER_HOST=' "$service_template" &&
    ! grep -q '^Environment=CONTAINER_HOST=' "$service_template" &&
    grep -q '^Restart=on-failure$' "$service_template" &&
@@ -262,9 +319,9 @@ if grep -q '^Wants=podman.socket$' "$service_template" &&
    grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_APTLY_USERNAME}"' "$gitlab_late" &&
    grep -Fq '"${GITLAB_RUNNER_PODMAN_CONFIG_BASE}/${GITLAB_RUNNER_BUILD_USERNAME}"' "$gitlab_late" &&
    grep -Fq 'podman_state_root="${GITLAB_RUNNER_PODMAN_STATE_BASE}/${runner_user}"' "$gitlab_late"; then
-  pass "user service template keeps Podman control-plane access while leaving the managed Podman state roots, Buildah tmpdir, and runner system-id file writable inside ExecStartPre"
+  pass "user service template keeps Podman control-plane access while leaving runtime paths writable without recursively re-running preflight or ensure-images inside ExecStartPre"
 else
-  fail "user service template keeps Podman control-plane access while leaving the managed Podman state roots, Buildah tmpdir, and runner system-id file writable inside ExecStartPre"
+  fail "user service template keeps Podman control-plane access while leaving runtime paths writable without recursively re-running preflight or ensure-images inside ExecStartPre"
 fi
 
 if grep -q 'context_runner_ids=(APTLY)' "$managed_helper" &&
@@ -299,6 +356,10 @@ fi
 
 if grep -q 'GITLAB_RUNNER_CACHE_DIR_NAMES' "$managed_helper" &&
    grep -q 'validate_cache_dir_name' "$managed_helper" &&
+   grep -q '^ensure_runner_storage_dirs() {$' "$managed_helper" &&
+   grep -q 'gitlab_cache_parent="\$(gitlab_runner_parent_dir \"\$gitlab_cache_dir\")"' "$managed_helper" &&
+   grep -q 'ensure_runner_storage_dirs "\$id_upper"' "$managed_helper" &&
+   grep -Fq 'chown -- "${context_uid}:${context_gid}" "$builds_dir" "$gitlab_cache_parent" "$gitlab_cache_dir" "$cache_root"' "$managed_helper" &&
    ! grep -q '^cache_dir_names=(' "$managed_helper" &&
    grep -q 'IFS=: read -r _passwd_name' "$managed_helper" &&
    ! grep -q 'run_as_context_user test -w' "$managed_helper" &&
@@ -327,6 +388,7 @@ if grep -q '^set_return_file_cleanup() {$' "$managed_helper" &&
    grep -q 'containerfile-context\.' "$managed_helper" &&
    grep -q 'run_podman_as_context_user build --pull=missing --tag "\$image_ref" -f "\$build_containerfile" "\$build_context"' "$managed_helper" &&
    grep -q 'no active runner tokens found for ${context_user}' "$managed_helper" &&
+   grep -q 'did not recover to a stable active state for ${context_user} within ${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-10}s' "$managed_helper" &&
    grep -q 'completed once for ${context_user}' "$managed_helper"; then
   pass "managed helper self-clears RETURN traps, reports missing tokens clearly, and keeps once on the public preflight and ensure-images path"
 else
@@ -352,6 +414,8 @@ if grep -q '^reconcile_runner_service() {$' "$managed_helper" &&
    grep -Fq 'systemctl --user start gitlab-runner.service' "$managed_helper" &&
    grep -Fq 'restarted podman.socket for ${context_user}' "$managed_helper" &&
    grep -Fq 'restarted gitlab-runner.service for ${context_user}' "$managed_helper" &&
+   grep -Fq 'chown "root:${context_gid}" "$context_base_dir" "${context_base_dir}/backups" "${context_base_dir}/backups/systemd" "${context_base_dir}/systemd" "${context_base_dir}/systemd/user"' "$managed_helper" &&
+   grep -Fq 'chown "root:${context_gid}" "$context_config_path"' "$managed_helper" &&
    ! grep -Fq 'podman_install_symlink_with_backup "/target${GITLAB_RUNNER_HOME_WANTS_FILE}"' "$gitlab_late" &&
    grep -Fq 'GitLab runner unit must not be enabled before first successful once' "$gitlab_late" &&
    grep -q 'does not enable it until `gitlab-runner-managed once` has rendered a valid' "$service_readme" &&
@@ -361,6 +425,16 @@ if grep -q '^reconcile_runner_service() {$' "$managed_helper" &&
   pass "managed helper refreshes the Podman and runner user services on successful once and the unit no longer retries forever after enablement"
 else
   fail "managed helper refreshes the Podman and runner user services on successful once and the unit no longer retries forever after enablement"
+fi
+
+if grep -Fq 'gitlab_runner_ensure_target_tree "$base_dir" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$runner_gid"' "$gitlab_late" &&
+   grep -Fq 'gitlab_runner_ensure_target_tree "${base_dir}/systemd/user" "${GITLAB_RUNNER_CONTROL_DIR_MODE}" 0 "$runner_gid"' "$gitlab_late" &&
+   grep -Fq 'chown "root:${runner_gid}" "/target${GITLAB_RUNNER_MANAGED_UNIT_FILE}"' "$gitlab_late" &&
+   grep -q "primary group for runtime" "$service_readme" &&
+   grep -q "primary group so the service" "$gitlab_runner_doc"; then
+  pass "runner control files and managed unit paths stay readable to the owning runner service account"
+else
+  fail "runner control files and managed unit paths stay readable to the owning runner service account"
 fi
 
 if grep -q 'secret file path does not exist' "$managed_helper" &&

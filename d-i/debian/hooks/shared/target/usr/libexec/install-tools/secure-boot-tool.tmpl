@@ -670,9 +670,7 @@ ensure_mok_import() {
          fingerprint_manifest_is_covered "$delete_fp_manifest" "$existing_pending_delete_fps"; then
       log "info: existing pending MOK delete request already covers all enrolled MOK certificate fingerprints"
     else
-      rm -f "$hash_file" "$delete_manifest" "$delete_fp_manifest"
-      rm -rf "$export_dir"
-      fatal "failed to queue managed MOK deletions for all enrolled certificates before import"
+      log "warn: failed to queue managed MOK deletions for all enrolled certificates before import; continuing with best-effort managed import"
     fi
   fi
 

@@ -52,6 +52,15 @@ validate_absolute_path() {
   [[ "$value" != *".."* ]] || die "${label} must not contain .."
 }
 
+gitlab_runner_parent_dir() {
+  local target_path="$1"
+  case "$target_path" in
+    /*/*) printf '%s\n' "${target_path%/*}" ;;
+    /*) printf '%s\n' / ;;
+    *) die "cannot derive parent for non-absolute path: ${target_path:-unset}" ;;
+  esac
+}
+
 validate_cache_dir_name() {
   local value="$1"
   [[ -n "$value" ]] || die "cache directory name must not be empty"
@@ -345,6 +354,7 @@ load_user_context() {
 }
 
 ensure_common_runtime_dirs() {
+  local id_upper
   install -d -m 0700 -- \
     "$context_work_dir" \
     "$context_job_home" \
@@ -397,6 +407,9 @@ ensure_common_runtime_dirs() {
       "$context_buildah_tmpdir"
   fi
   normalize_podman_runtime_tree "$context_podman_tmp_root"
+  for id_upper in "${context_runner_ids[@]}"; do
+    ensure_runner_storage_dirs "$id_upper"
+  done
   if [[ ! -e "$context_system_id_file" ]]; then
     if [[ "$(id -u)" -ne 0 ]]; then
       die "runner system-id state file is missing for ${context_user}; rerun gitlab-runner-managed once through glab-helper to recreate ${context_system_id_file}"
@@ -464,18 +477,25 @@ run_as_context_user() {
 
 ensure_runner_storage_dirs() {
   local id_upper="$1"
-  local builds_dir gitlab_cache_dir cache_root cache_name
+  local builds_dir gitlab_cache_dir cache_root cache_name gitlab_cache_parent
   builds_dir="$(runner_var "$id_upper" BUILDS_DIR)"
   gitlab_cache_dir="$(runner_var "$id_upper" GITLAB_CACHE_DIR)"
   cache_root="$(runner_var "$id_upper" CACHE_ROOT)"
   validate_absolute_path "${id_upper} BUILDS_DIR" "$builds_dir"
   validate_absolute_path "${id_upper} GITLAB_CACHE_DIR" "$gitlab_cache_dir"
   validate_absolute_path "${id_upper} CACHE_ROOT" "$cache_root"
-  install -d -m 0700 -- "$builds_dir" "$gitlab_cache_dir" "$cache_root"
+  gitlab_cache_parent="$(gitlab_runner_parent_dir "$gitlab_cache_dir")"
+  install -d -m 0700 -- "$builds_dir" "$gitlab_cache_parent" "$gitlab_cache_dir" "$cache_root"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown -- "${context_uid}:${context_gid}" "$builds_dir" "$gitlab_cache_parent" "$gitlab_cache_dir" "$cache_root"
+  fi
   while IFS= read -r cache_name || [[ -n "$cache_name" ]]; do
     [[ -n "$cache_name" ]] || continue
     validate_cache_dir_name "$cache_name"
     install -d -m 0700 -- "${cache_root}/${cache_name}"
+    if [[ "$(id -u)" -eq 0 ]]; then
+      chown -- "${context_uid}:${context_gid}" "${cache_root}/${cache_name}"
+    fi
   done <<<"$GITLAB_RUNNER_CACHE_DIR_NAMES"
 }
 
@@ -627,34 +647,36 @@ EOF
 }
 
 render_bazel_buildbuddy_config() {
-  local auth_dir auth_file bazelrc_file
+  local target_home auth_dir auth_file bazelrc_file
 
   [[ "$context_kind" == "shared" ]] || return 0
   [[ " ${context_runner_ids[*]} " == *" BAZEL "* ]] || return 0
   (( active_runner_count > 0 )) || return 0
 
   load_buildbuddy_auth
-  auth_dir="${context_job_home}/.config/buildbuddy"
-  auth_file="${auth_dir}/auth.bazelrc"
-  bazelrc_file="${context_job_home}/.bazelrc"
+  for target_home in "$context_home" "$context_job_home"; do
+    auth_dir="${target_home}/.config/buildbuddy"
+    auth_file="${auth_dir}/auth.bazelrc"
+    bazelrc_file="${target_home}/.bazelrc"
 
-  install -d -m 0700 -- "$auth_dir"
-  cat >"$auth_file" <<EOF
+    install -d -m 0700 -- "$auth_dir"
+    cat >"$auth_file" <<EOF
 # Managed by gitlab-runner-managed for ${context_user}.
 build --bes_backend=${buildbuddy_endpoint}
 build --bes_results_url=${buildbuddy_results_url}
 build --remote_cache=${buildbuddy_endpoint}
 build --remote_header=x-buildbuddy-api-key=${buildbuddy_api_key}
 EOF
-  cat >"$bazelrc_file" <<EOF
+    cat >"$bazelrc_file" <<EOF
 # Managed by gitlab-runner-managed for ${context_user}.
 try-import ${auth_file}
 EOF
-  if [[ "$(id -u)" -eq 0 ]]; then
-    chown "${context_uid}:${context_gid}" "$auth_dir" "$auth_file" "$bazelrc_file"
-  fi
-  chmod 0700 "$auth_dir"
-  chmod 0600 "$auth_file" "$bazelrc_file"
+    if [[ "$(id -u)" -eq 0 ]]; then
+      chown "${context_uid}:${context_gid}" "$auth_dir" "$auth_file" "$bazelrc_file"
+    fi
+    chmod 0700 "$auth_dir"
+    chmod 0600 "$auth_file" "$bazelrc_file"
+  done
   info "rendered managed BuildBuddy Bazel auth for ${context_user}"
 }
 
@@ -879,7 +901,10 @@ def env_lines_for_runner(runner):
         f"TMPDIR={container_tmp_dir}",
         f"TMP={container_tmp_dir}",
         f"TEMP={container_tmp_dir}",
+        f"XDG_CONFIG_HOME={globals_cfg['job_home']}/.config",
+        f"XDG_DATA_HOME={globals_cfg['job_home']}/.local/share",
         f"XDG_CACHE_HOME={container_cache_dir}/xdg",
+        f"XDG_STATE_HOME={globals_cfg['job_home']}/.local/state",
         f"BUILDAH_ISOLATION={globals_cfg['buildah_isolation']}",
         f"BUILDAH_TMPDIR={buildah_tmpdir}",
         "KANIKO_CACHE_DIR=/kaniko/.cache",
@@ -1151,7 +1176,7 @@ validate_global_runner_toggles() {
 
 refresh_config() {
   local require_active="${1:-false}"
-  local spec_path rendered_config_path config_group_gid
+  local spec_path rendered_config_path
   load_user_context "$requested_user"
   ensure_common_runtime_dirs
   validate_global_runner_toggles
@@ -1207,13 +1232,17 @@ refresh_config() {
   rendered_config_path="$(mktemp "${TMPDIR:-/tmp}/${PROG}.config.XXXXXX")"
   render_config_from_spec "$spec_path" "$rendered_config_path"
   if [[ "$(id -u)" -eq 0 ]]; then
-    config_group_gid="$(getent group "${GITLAB_RUNNER_CONFIG_GROUP}" | awk -F: 'NR == 1 { print $3; exit }')"
-    [[ -n "$config_group_gid" ]] || die "control group is missing: ${GITLAB_RUNNER_CONFIG_GROUP}"
     install -d -m "${GITLAB_RUNNER_CONTROL_DIR_MODE:-0750}" -- "$context_base_dir"
-    chown "root:${config_group_gid}" "$context_base_dir"
+    install -d -m "${GITLAB_RUNNER_CONTROL_DIR_MODE:-0750}" -- "${context_base_dir}/backups" "${context_base_dir}/backups/systemd" "${context_base_dir}/systemd" "${context_base_dir}/systemd/user"
+    chown "root:${context_gid}" "$context_base_dir" "${context_base_dir}/backups" "${context_base_dir}/backups/systemd" "${context_base_dir}/systemd" "${context_base_dir}/systemd/user"
     chmod "${GITLAB_RUNNER_CONTROL_DIR_MODE:-0750}" "$context_base_dir"
+    chmod "${GITLAB_RUNNER_CONTROL_DIR_MODE:-0750}" "${context_base_dir}/backups" "${context_base_dir}/backups/systemd" "${context_base_dir}/systemd" "${context_base_dir}/systemd/user"
     install -m "${GITLAB_RUNNER_CONTROL_FILE_MODE:-0640}" "$rendered_config_path" "$context_config_path"
-    chown "root:${config_group_gid}" "$context_config_path"
+    chown "root:${context_gid}" "$context_config_path"
+    if [[ -e "${context_base_dir}/systemd/user/gitlab-runner.service" && ! -L "${context_base_dir}/systemd/user/gitlab-runner.service" ]]; then
+      chown "root:${context_gid}" "${context_base_dir}/systemd/user/gitlab-runner.service"
+      chmod "${GITLAB_RUNNER_CONTROL_FILE_MODE:-0640}" "${context_base_dir}/systemd/user/gitlab-runner.service"
+    fi
   else
     cat -- "$rendered_config_path" >"$context_config_path"
     chmod 0600 "$context_config_path"
@@ -1434,7 +1463,7 @@ reconcile_runner_service() {
 wait_for_runner_service_active() {
   local return_only="${1:-false}"
   local tries="${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-10}"
-  local verify_active stable_required stable_seen=0
+  local verify_active stable_required stable_seen=0 failed_seen=false
   [[ "$tries" =~ ^[0-9]+$ ]] || die "GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS must be numeric, got: ${tries:-unset}"
   (( 10#$tries >= 1 )) || die "GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS must be greater than zero"
   verify_active="$(normalize_bool GITLAB_RUNNER_VERIFY_ACTIVE "${GITLAB_RUNNER_VERIFY_ACTIVE:-true}")"
@@ -1443,18 +1472,6 @@ wait_for_runner_service_active() {
   (( 10#$stable_required >= 1 )) || die "GITLAB_RUNNER_SERVICE_STABLE_SECONDS must be greater than zero"
 
   while (( tries > 0 )); do
-    if run_as_context_user systemctl --user is-failed --quiet gitlab-runner.service; then
-      if (( stable_seen > 0 )); then
-        if [[ "$return_only" == "true" ]]; then
-          return 1
-        fi
-        die "gitlab-runner.service did not remain active for ${context_user} during the ${GITLAB_RUNNER_SERVICE_STABLE_SECONDS:-3}s verification window; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
-      fi
-      if [[ "$return_only" == "true" ]]; then
-        return 1
-      fi
-      die "gitlab-runner.service failed to reach active for ${context_user}; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
-    fi
     if run_as_context_user systemctl --user is-active --quiet gitlab-runner.service; then
       if [[ "$verify_active" != "true" ]]; then
         return 0
@@ -1465,6 +1482,9 @@ wait_for_runner_service_active() {
       fi
     else
       stable_seen=0
+      if run_as_context_user systemctl --user is-failed --quiet gitlab-runner.service; then
+        failed_seen=true
+      fi
     fi
     sleep 1
     tries=$((tries - 1))
@@ -1478,6 +1498,9 @@ wait_for_runner_service_active() {
   fi
   if [[ "$return_only" == "true" ]]; then
     return 1
+  fi
+  if [[ "$failed_seen" == "true" ]]; then
+    die "gitlab-runner.service did not recover to a stable active state for ${context_user} within ${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-10}s; the unit entered failed state during startup, so inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
   fi
   die "gitlab-runner.service did not become active for ${context_user} within ${GITLAB_RUNNER_SERVICE_START_WAIT_SECONDS:-10}s; inspect systemctl --user status gitlab-runner.service and journalctl --user -xeu gitlab-runner.service"
 }

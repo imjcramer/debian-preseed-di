@@ -35,6 +35,8 @@ state stays under `/run/user/<uid>/run`, `/run/user/<uid>/libpod/tmp`, and
 - `/data/config/runners/glab-user/.runner_system_id`
 - `/data/config/runners/glab-bazel/config.toml`
 - `/data/config/runners/glab-bazel/.runner_system_id`
+- `/data/services/usr/glab-bazel/.bazelrc`
+- `/data/services/usr/glab-bazel/.config/buildbuddy/auth.bazelrc`
 - `/data/config/runners/glab-bazel/home/.bazelrc`
 - `/data/config/runners/glab-bazel/home/.config/buildbuddy/auth.bazelrc`
 - `/pool/aptly/.aptly.conf`
@@ -56,6 +58,11 @@ Use `gitlab-runner-managed` through `glab-helper`. The `refresh` and `once`
 control-plane paths are intended to run with `sudo` so the rendered control
 files stay root-managed, while the runner service itself still executes as the
 managed user.
+
+The rendered control files inside `/data/config/runners/<user>/` stay
+root-owned but use the managed runner account's primary group so the service
+can read its own `config.toml` and managed user unit without depending on a
+supplementary `devops` group refresh in the user manager.
 
 Supported subcommands:
 
@@ -87,11 +94,19 @@ sudo glab-helper --user glab-bazel gitlab-runner-managed refresh --require-activ
   `ensure-images`, and finally starts or restarts the user service so updated
   unit settings and rendered config take effect immediately
 
-The Bazel runner additionally renders a managed BuildBuddy auth include at
+The Bazel runner additionally renders managed BuildBuddy auth includes into the
+`glab-bazel` service home under `/data/services/usr/glab-bazel/.config/buildbuddy/auth.bazelrc`
+and the runner job home under
 `/data/config/runners/glab-bazel/home/.config/buildbuddy/auth.bazelrc`,
-installs a matching `~/.bazelrc` try-import, and bind-mounts the host
-`bazelisk` binary into both `/usr/local/bin/bazel` and
+installs matching `~/.bazelrc` try-import files in both homes, and bind-mounts
+the host `bazelisk` binary into both `/usr/local/bin/bazel` and
 `/usr/local/bin/bazelisk` inside Bazel CI containers.
+
+The staged `gitlab-runner` nftables service overlay keeps those Bazel jobs
+usable under hardened policy by enabling host DNS/NTP/HTTP(S) egress plus
+Podman bridge forwarding and masquerade. That preserves outbound access to the
+BuildBuddy GRPCS endpoint and invocation results URL from inside runner job
+containers.
 
 ## GitLab CI targeting
 
@@ -127,6 +142,7 @@ Use `aptly-managed` for the persistent Aptly state:
 sudo glab-helper --user glab-aptly aptly-managed render-config
 sudo glab-helper --user glab-aptly aptly-managed --channel stable publish snapshot repo-name
 sudo glab-helper --user glab-aptly aptly-managed --channel testing publish switch testing repo-name-20260617
+sudo glab-helper --user glab-aptly aptly-managed --channel unstable publish switch unstable repo-name-20260617
 ```
 
 Direct `aptly publish ...` inside the runner container is now bridged into a
@@ -134,14 +150,17 @@ host-side queue instead of signing in-container. The `.aptly.conf` file is
 owned by `glab-aptly:glab-aptly` with mode `0600`, and the state under
 `/pool/aptly/.aptly` stays on that same managed runner account.
 
-Set `APTLY_CHANNEL=stable` or `APTLY_CHANNEL=testing` inside CI before calling
-`aptly publish ...`. The bridge now accepts `publish repo`, `publish snapshot`,
-and `publish switch`, and the host helper applies channel policy after the new
-publication is confirmed live:
+Set `APTLY_CHANNEL=stable`, `APTLY_CHANNEL=testing`, or
+`APTLY_CHANNEL=unstable` inside CI before calling `aptly publish ...`. The
+bridge now accepts `publish repo`, `publish snapshot`, and `publish switch`,
+and the host helper applies channel policy after the new publication is
+confirmed live:
 
 - `stable`: keep the live snapshot plus one older snapshot, with no age expiry
 - `testing`: keep up to three snapshots total and retire older testing snapshots
   once their Aptly `CreatedAt` age exceeds `14` days
+- `unstable`: keep up to four snapshots total and retire older unstable
+  snapshots once their Aptly `CreatedAt` age exceeds `21` days
 
 Retention state is tracked under `/pool/aptly/.managed/channels`.
 
@@ -149,6 +168,12 @@ The installed bridge units are:
 
 - `aptly-bridge.path`
 - `aptly-bridge.service`
+
+The staged `/etc/tmpfiles.d/80-gitlab-runner-storage.conf` policy also
+recreates the dedicated `/pool/build/...`, `/pool/cache/...`, `/pool/aptly/...`,
+and `/pool/podman/...` service-account directories for `glab-aptly`,
+`glab-user`, and `glab-bazel` on boot so runner preflight can recover cleanly
+after manual cleanup.
 
 ## Shell-profile note
 
